@@ -205,6 +205,7 @@ export default function TraceViewerPage() {
 
   const [scrollToken, setScrollToken] = useState(0);
   const [tab, setTab] = useState(0);
+  const [apiPythonMode, setApiPythonMode] = useState(false);
   const [focus, setFocus] = useState<RangeFocus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [playbackEventId, setPlaybackEventId] = useState<string | null>(null);
@@ -275,6 +276,13 @@ export default function TraceViewerPage() {
     setPlaybackEventId(selectionEventId(node));
     setFocus(null);
     if(openDetail)setTab(replayTab(node));
+  }, [setParams]);
+  const onPlaybackClear = useCallback(() => {
+    setReplaySeek(null);
+    setLive(false);
+    setParams({event: null});
+    setPlaybackEventId(null);
+    setFocus(null);
   }, [setParams]);
   const onReplayInteract = useCallback(()=>setLive(false),[]);
 
@@ -445,7 +453,7 @@ export default function TraceViewerPage() {
               </div>
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
-                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} seekRequest={replaySeek}
+                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonModeChange={setApiPythonMode}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
                 model={model}
                 ep={ep}
@@ -471,6 +479,7 @@ export default function TraceViewerPage() {
           <div data-replay-pane="details" className="replay-details flex-1 min-w-0 flex flex-col">
             <div className="flex-1 min-h-0">
               <DetailTabs
+                apiPythonMode={apiPythonMode}
                 revealPrompt={playbackEventId !== null && playbackEventId === selection?.eventId}
                 model={model}
                 ep={ep}

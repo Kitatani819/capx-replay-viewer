@@ -8,6 +8,10 @@
 .replay-io-text pre code { font-size: 14px; }
 .replay-io-text .font-mono { font-size: 14px; line-height: 1.65; }
 .replay-io-text-folded { max-height: 300px; overflow: hidden; }
+[data-api-turn-model] > header { margin-bottom: 18px; }
+[data-api-turn-model] > header .replay-io-title { font-size: 20px; margin-bottom: 6px; }
+[data-api-turn-model] > header .replay-io-muted { font-size: 12px; margin: 4px 0; }
+[data-api-turn-model] [data-api-model-input] .replay-io-text-folded { max-height: 200px; }
 .replay-io-muted { color: #68766e; font-size: 14px; line-height: 1.65; margin: 10px 0 20px; overflow-wrap: anywhere; }
 .replay-io-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .replay-io-images figure { margin: 0; min-width: 0; }

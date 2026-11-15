@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from playwright.sync_api import expect, sync_playwright
+from check_api_python import check_api_python
 
 
 def check(base_url: str, root: Path, output: Path):
@@ -343,6 +344,8 @@ def check(base_url: str, root: Path, output: Path):
             page.unroute('**' + episode_api)
             page.unroute('**' + episode_api + '/events?*')
             passed.append('Simulated running trace: polls new events without video overriding Live; playback or external URL enters Browse; re-enabling Live pauses video and follows appended events')
+
+            passed.extend(check_api_python(page, url, recorded_events, output))
 
             legacy = manifest["legacy"]
             page.goto(base_url + "/traces?" + urlencode({"view": "details", "legacy_run": legacy["run"],

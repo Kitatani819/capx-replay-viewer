@@ -1,0 +1,42 @@
+.api-python-panel { display: grid; grid-template-columns: minmax(156px, .37fr) minmax(0, 1fr); flex: 1; min-height: 0; border: 1px solid #dce3da; border-radius: 6px; background: #fff; overflow: hidden; }
+.api-python-list-section, .api-python-code-section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.api-python-list-section { border-right: 1px solid #dce3da; background: #f7f9f5; }
+.api-python-list-heading { display: flex; gap: 12px; padding: 9px 10px; color: #637466; font-size: 11px; border-bottom: 1px solid #e3e8df; flex-shrink: 0; }
+.api-python-list-heading span:first-child { width: 48px; flex-shrink: 0; }
+.api-python-list { min-height: 0; overflow: auto; }
+.api-python-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; text-align: left; background: transparent; border: 0; border-bottom: 1px solid #e3e8df; }
+.api-python-row:hover { background: #edf2e9; }
+.api-python-row[data-api-selected="true"] { background: #e0ebdf; box-shadow: inset 3px 0 #467e5c; font-weight: 600; animation: replay-a-focus 450ms ease-out; }
+.api-python-time { width: 48px; flex-shrink: 0; color: #637466; font-size: 12px; font-variant-numeric: tabular-nums; padding-top: 1px; }
+.api-python-name { min-width: 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.api-python-name small { display: block; margin-top: 2px; color: #69796c; font-size: 10px; font-weight: normal; }
+.api-python-code-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; border-bottom: 1px solid #e3e8df; flex-shrink: 0; font-size: 12px; }
+.api-python-code-heading nav { display: flex; gap: 10px; }
+.api-python-code-heading button { padding: 0 2px; color: #356b4e; white-space: nowrap; }
+.api-python-code-heading button:disabled { color: #a1aba2; cursor: default; }
+.api-python-selected-description { flex-shrink: 0; padding: 8px 12px; background: #f5f8f1; font-size: 12px; line-height: 1.55; }
+.api-python-selected-description strong { display: block; font-size: 13px; }
+.api-python-selected-description p { margin: 2px 0 0; }
+.api-python-code-scroll { min-height: 0; overflow: auto; padding: 8px 10px 10px; }
+.api-python-code-provenance { margin: 0 0 7px; font-size: 10px; color: #6a796d; }
+.replay-workspace .api-python-code .font-mono { font-size: 12px; line-height: 1.65; }
+.api-python-missing { color: #875a12; font-size: 12px; margin: 0 0 8px; }
+.api-python-empty { padding: 10px; font-size: 12px; color: #647568; }
+.api-python-details { margin: 0 0 8px; font-size: 12px; }
+.api-python-details > summary { cursor: pointer; color: #356b4e; padding: 3px 0; width: fit-content; }
+.api-python-details-body { border-top: 1px solid #dce3da; padding-top: 10px; overflow-wrap: anywhere; }
+.api-python-details-body section + section { border-top: 1px solid #dce3da; margin-top: 14px; padding-top: 12px; }
+.api-python-details-body h4 { font-size: 12px; font-weight: 600; margin: 10px 0 5px; }
+.api-python-details-body h4:first-child { margin-top: 0; }
+.api-python-details-body p { margin: 4px 0; }
+.api-python-details-body pre { white-space: pre-wrap; font-size: 11px; margin: 6px 0; }
+.api-python-details-body dl { margin: 8px 0; }
+.api-python-details-body dt { color: #647568; font-size: 11px; }
+.api-python-details-body dd { margin: 0 0 5px; font-size: 11px; }
+.api-python-details-body a { color: #2e687c; text-decoration: underline; }
+.api-python-muted { color: #647568; font-size: 11px; }
+.api-python-tooltip { position: fixed; z-index: 70; max-width: min(350px, calc(100vw - 24px)); padding: 9px 12px; background: #243e30; color: #fff; border-radius: 5px; box-shadow: 0 4px 16px #24332b26; font-size: 13px; line-height: 1.65; pointer-events: none; }
+.api-python-tooltip small { display: block; margin-top: 3px; color: #d4e4d8; font-size: 10px; }
+@media (max-width: 1100px) and (min-width: 901px) { .api-python-panel { grid-template-columns: minmax(125px, .42fr) minmax(0, 1fr); } .api-python-row { flex-wrap: wrap; gap: 2px; } .api-python-name { flex-basis: 100%; } }
+@media (max-width: 600px) { .api-python-panel { grid-template-columns: minmax(120px, .4fr) minmax(0, 1fr); } .api-python-row { flex-wrap: wrap; gap: 2px; } .api-python-name { flex-basis: 100%; } .api-python-code-heading { padding: 7px 8px; } .api-python-selected-description { padding: 7px 8px; } }
+@media (prefers-reduced-motion: reduce) { .api-python-row[data-api-selected="true"] { animation: none; } }

@@ -26,6 +26,7 @@ import { DataAssetInline, NO_ASSET_STATES } from './DataAssetState';
 import { ErrorBoundary } from './ErrorBoundary';
 import { InputOutputTab } from './tabs/InputOutputTab';
 import { EnsembleTab } from './tabs/EnsembleTab';
+import { ApiTurnModelTab } from './tabs/ApiTurnModelTab';
 import type { EpisodeRef } from './ValueView';
 
 export interface RangeFocus {
@@ -54,6 +55,7 @@ export interface TabProps {
 }
 
 interface DetailTabsProps extends Omit<TabProps, 'selection'> {
+  apiPythonMode?: boolean;
   revealPrompt?: boolean;
   selection: Selection | null;
   tab: number;
@@ -132,17 +134,17 @@ export function DataAssetNotice({
   return rows.length ? <div className="space-y-1 mb-2">{rows}</div> : null;
 }
 
-export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
+export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, revealPrompt = false, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
   // A new tab or a new event starts at the top. (Runs before the children's passive
   // effects, so a range focus or a marked line can still scroll itself into view.)
   const panelRef = useRef<HTMLDivElement>(null);
   const eventId = selection?.eventId ?? null;
   useLayoutEffect(() => {
     if (panelRef.current) panelRef.current.scrollTop = 0;
-  }, [tab, eventId]);
+  }, [tab, eventId, apiPythonMode]);
   useLayoutEffect(() => {
     const panel = panelRef.current;
-    if (!panel || !revealPrompt || tab !== 0) return;
+    if (!panel || !revealPrompt || tab !== 0 || apiPythonMode) return;
     const reveal = () => {
       const target = panel.querySelector<HTMLElement>('[data-playback-input]');
       if (!target) return false;
@@ -153,13 +155,13 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
     const observer = new MutationObserver(() => { if (reveal()) observer.disconnect(); });
     observer.observe(panel, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [tab, eventId, revealPrompt]);
+  }, [tab, eventId, revealPrompt, apiPythonMode]);
   let body: ReactNode;
   if (!selection) {
     body = (
       <div className="p-4 text-xs text-text-tertiary space-y-1">
         {missingEventId && <div className="text-amber-300">URL で指定されたイベント {missingEventId} は、このエピソードの記録にありません。</div>}
-        <div>左のタイムラインでイベントを選択してください。</div>
+        <div>{apiPythonMode ? 'この位置ではAPIは選択されていません。左のAPI一覧から選択できます。' : '左のタイムラインでイベントを選択してください。'}</div>
       </div>
     );
   } else {
@@ -173,7 +175,8 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
         body = <EnsembleTab {...props} mode="synthesis" onTurnSelect={rest.onSelect} />;
         break;
       default:
-        body = <InputOutputTab {...props} />;
+        body = apiPythonMode && ['api_call','code_block'].includes(selection.node.kind)
+          ? <ApiTurnModelTab {...props} /> : <InputOutputTab {...props} />;
         break;
     }
   }

@@ -48,9 +48,11 @@ interface MediaPaneProps {
   seekRequest?: ReplaySeek | null;
   videos?: TrialVideo[];
   onPlaybackSelect?: (node: TNode, openDetail?: boolean) => void;
+  onPlaybackClear?: () => void;
   replayLive?: boolean;
   allowReplayInitialSelection?: boolean;
   onReplayInteract?: () => void;
+  onApiPythonModeChange?: (active: boolean) => void;
   model: EpisodeModel;
   ep: EpisodeRef;
   selection: Selection | null;
@@ -59,7 +61,7 @@ interface MediaPaneProps {
   follow: boolean;
 }
 
-export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract }: MediaPaneProps) {
+export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonModeChange }: MediaPaneProps) {
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -106,7 +108,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
       </div>
       {tab === 'video' ? (
         <div className="flex-1 min-h-0">
-          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel}
+          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} ep={ep} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} onClearSelection={onPlaybackClear} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} onApiPythonModeChange={onApiPythonModeChange}
             liveMode={replayLive} allowInitialSelection={allowReplayInitialSelection} onInteract={onReplayInteract}/>
         </div>
       ) : tab === 'live' && live3d.available ? (

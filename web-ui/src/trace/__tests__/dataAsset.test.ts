@@ -96,6 +96,28 @@ test('targets: the selected node, its block, the later requests, and episode_sta
   assert.deepEqual(dataAssetTargets(m, null).map((e) => e.event_id), [start.event_id]);
 });
 
+test('targets: an API call_site in a different block loads that block and its producing model input/output', () => {
+  const r = new Rec();
+  const sourceRequest = r.request('code_generator', 'defined-earlier', 1, { turn_index: 1 });
+  const sourceResponse = r.response(sourceRequest, 200, 'def move():\n    goto_pose(position)');
+  const definitionBlock = r.blockStart(sourceResponse, 'def move():\n    goto_pose(position)');
+  const definitionEnd = r.blockEnd(definitionBlock, 0, 0);
+  const parentResponse = r.response(r.request('code_generator', 'executed-later', 1, { turn_index: 2 }), 200, 'move()');
+  const parentBlock = r.blockStart(parentResponse, 'move()');
+  const api = r.apiStart(parentBlock, 'goto_pose', {}, null, {
+    call_site: { code_block_id: definitionBlock.event_id, line: 2 },
+  });
+  const unrelated = r.request('vdm', 'unrelated', 1, { turn_index: 3 });
+  const expected = [sourceRequest, sourceResponse, definitionBlock, definitionEnd];
+  for (const event of [...expected, unrelated]) {
+    event.data = { ...(event.data as object), oversize: true, data_asset: `assets/data/${event.event_id}.json.gz`, data_asset_written: true };
+  }
+  const model = buildEpisodeModel(r.events);
+  assert.equal(model.nodeOfEvent.get(api.event_id)?.parent?.primary.event_id, parentBlock.event_id);
+  const targets = dataAssetTargets(model, resolveSelection(model, api.event_id));
+  assert.deepEqual(targets.map((event) => event.event_id).sort(), expected.map((event) => event.event_id).sort());
+});
+
 test('(a): nested service events whose data moved to an asset are targets of the API and block selections, bounded', () => {
   const r = new Rec();
   r.episodeStart();

@@ -25,7 +25,7 @@
 import { laterAttempts } from './laterInput';
 import { turnOf } from './replay';
 import { descendants, enclosingBlock, mainAttempt, previousSameFamily, strOrNull, type EpisodeModel, type Selection } from './model';
-import type { DataAssetMarkers, TraceEvent } from './types';
+import { dataOf, type DataAssetMarkers, type TraceEvent } from './types';
 
 export interface DataAssetRef {
   /** Asset path relative to the episode dir, or null when none was recorded. */
@@ -196,6 +196,14 @@ export function dataAssetTargets(model: EpisodeModel, selection: Selection | nul
     }
   }
   const block = node.kind === 'model_call' ? null : enclosingBlock(model, node);
+  // API/Python review follows the recorded call_site even when it differs
+  // from the nesting parent (for example a function defined in another block).
+  const callSiteId = node.kind === 'api_call' ? dataOf(node.primary, 'api_call_start').call_site?.code_block_id : null;
+  const callSiteBlock = callSiteId ? model.blockById.get(callSiteId) : null;
+  if (callSiteBlock && callSiteBlock !== block) {
+    for (const ev of callSiteBlock.events) add(ev);
+    for (const ev of callSiteBlock.sourceCall?.node.events ?? []) add(ev);
+  }
   if (block) {
     for (const ev of block.sourceCall?.node.events ?? []) add(ev);
     for (const ev of block.events) add(ev);

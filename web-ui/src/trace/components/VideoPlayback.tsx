@@ -4,9 +4,15 @@ import { enclosingBlock, nodeTitle, type EpisodeModel, type TNode } from '../mod
 import { cameraVideos, chooseExecutionVideo, cueAt, groupCues, playbackMap, primaryPlaybackCues, type TrialVideo, type PlaybackCue } from '../playback';
 import { processLabel, processTitle, recordedTurns, turnOf } from '../replay';
 import { SmallButton } from './common';
+import { ApiPythonPanel } from './ApiPythonPanel';
+import type { EpisodeRef } from './ValueView';
 
 export interface ReplaySeek { key: string; token: number }
-export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract}: {
+export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRequest, initialKey, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract, ep, onApiPythonModeChange}: {
+  ep?: EpisodeRef;
+  onApiPythonModeChange?: (active: boolean) => void;
+  /** A followed frame before the first API has no API selection in any pane. */
+  onClearSelection?: () => void;
   logPanel?: ReactNode;
   /** The parent owns selection; only an archived trial without an event URL may initialize it. */
   allowInitialSelection?: boolean;
@@ -26,7 +32,7 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
   const [time,setTime]=useState(0);
   const [follow,setFollow]=useState(false);
   const [mediaError,setMediaError]=useState(false);
-  const [mode,setMode]=useState<'main'|'all'|'prompts'|'actions'>('main');
+  const [mode,setMode]=useState<'main'|'all'|'prompts'|'actions'|'api-python'>('main');
   const [playing,setPlaying]=useState(false);
   const [playError,setPlayError]=useState(false);
   const [showLogs,setShowLogs]=useState(false);
@@ -44,7 +50,11 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
   const map=useMemo(()=>playbackMap(model,chosen?.name??'',duration),[model,chosen?.name,duration]);
   const turns=useMemo(()=>recordedTurns(model),[model]);
   const mainCues=useMemo(()=>primaryPlaybackCues(map.all),[map]);
-  const cues=mode==='main' ? mainCues : map[mode];
+  const apiCues=useMemo(()=>map.all.filter(c=>c.node.kind==='api_call'),[map]);
+  const apiMode=mode==='api-python';
+  const cues=apiMode ? apiCues : mode==='main' ? mainCues : map[mode];
+  useEffect(()=>{onApiPythonModeChange?.(apiMode && !showLogs);},[apiMode,showLogs,onApiPythonModeChange]);
+  useEffect(()=>()=>onApiPythonModeChange?.(false),[onApiPythonModeChange]);
   // A paused player must never invent a selected row from its initial time=0.
   // The same parent selection drives both the row and the right-hand inspector.
   const current=map.all.find(c=>c.node.key===initialKey) ?? null;
@@ -58,7 +68,7 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
   const seek=(cue:PlaybackCue, alignTurn=turn!==null)=>{
     initialized.current=true;
     if(alignTurn)setTurn(turnOf(cue.node));
-    if(!cues.some(c=>c.node.key===cue.node.key))setMode('all');
+    if(!apiMode && !cues.some(c=>c.node.key===cue.node.key))setMode('all');
     selected.current=cue.node.key;
     following.current=false;
     setFollow(false);setTime(cue.time);
@@ -96,20 +106,48 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
     const cue=cueAt(mainCues,time) ?? mainCues[0];seek(cue);onSelect(cue.node,true);
   },[allowInitialSelection,liveMode,initialKey,map,time]);
   useEffect(()=>{
-    if (liveMode || !following.current || !follow || !playbackCurrent || selected.current===playbackCurrent.node.key) return;
+    if (liveMode || !following.current || !follow) return;
+    if (!playbackCurrent) {
+      // Only playback/seeking owns this reset. A manually selected unmapped API
+      // is still inspectable while paused, and an unknown video map is not proof
+      // that no API occurred. Accepting this null selection must not pause playback.
+      if(apiMode && !map.reason && initialKey && onClearSelection) {
+        selected.current=null;
+        onClearSelection();
+      }
+      return;
+    }
+    if(selected.current===playbackCurrent.node.key)return;
     selected.current=playbackCurrent.node.key;
     if(turn!==null)setTurn(turnOf(playbackCurrent.node));
     onSelect(playbackCurrent.node);
-  },[playbackCurrent,follow,onSelect,turn,liveMode]);
+  },[playbackCurrent,follow,onSelect,turn,liveMode,apiMode,map.reason,initialKey,onClearSelection]);
   useEffect(()=>{
     const row=list.current?.querySelector<HTMLElement>('[data-current="true"]');
     if(row && list.current) list.current.scrollTop=row.offsetTop-list.current.clientHeight/2+row.clientHeight/2;
   },[current?.node.key]);
   const jump=(cue:PlaybackCue, alignTurn=turn!==null)=>{seek(cue,alignTurn);onSelect(cue.node,true);};
+  const selectApiOrBlock=(node:TNode)=>{
+    const cue=map.all.find(c=>c.node.key===node.key);
+    if(cue){jump(cue);return;}
+    video.current?.pause();following.current=false;setFollow(false);
+    selected.current=node.key;onSelect(node,true);
+  };
+  const changeMode=(next:typeof mode)=>{
+    setMode(next);
+    if(next!=='api-python')return;
+    const cue=apiCues.find(c=>c.node.key===initialKey) ?? cueAt(apiCues,time);
+    // A display change selects the recorded API at this position without
+    // rewinding or pausing an already-playing recording.
+    if(cue){
+      if(turn!==null)setTurn(turnOf(cue.node));
+      selected.current=cue.node.key;onSelect(cue.node,true);
+    }
+  };
   const resumeFollow=()=>{onInteract?.();initialized.current=true;programmaticSeek.current=null;selected.current=null;following.current=true;setFollow(true);};
   if(!chosen)return <div className="p-3 text-xs text-text-tertiary">この試行の動画は見つかりません。「記録フレーム」から保存画像を確認できます。</div>;
   const clock=(seconds:number)=>Number.isFinite(seconds)?`${Math.floor(seconds/60)}:${(seconds%60).toFixed(2).padStart(5,'0')}`:'0:00';
-  return <div className="replay-player h-full min-h-0 flex flex-col">
+  return <div className={`replay-player h-full min-h-0 flex flex-col${apiMode ? ' replay-api-python' : ''}`}>
     {(map.reason || mediaError) && <div role="status" className="replay-sync-warning">同期情報なし · {mediaError?'動画を読み込めません。':map.reason}</div>}
     <video key={chosen.url} ref={video} src={chosen.url} controls={simple} preload="metadata" aria-label="試行の録画" className={`replay-film ${simple ? 'h-full' : ''}`}
       onLoadedMetadata={e=>{setDuration(e.currentTarget.duration);e.currentTarget.playbackRate=0.5;}}
@@ -146,7 +184,8 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
           }}><option value="all">すべて</option>{turns.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
         </div>
         <div hidden={!showLogs} className="flex-1 min-h-0">{logPanel}</div>
-        <div ref={list} hidden={showLogs} className="replay-event-list relative flex-1 min-w-0 overflow-y-auto" aria-label="動画に対応するイベント">
+        {apiMode && ep && !showLogs && <ApiPythonPanel model={model} ep={ep} apiCues={apiCues} selectedKey={initialKey??null} onSelect={selectApiOrBlock} turn={turn}/>}
+        <div ref={list} hidden={showLogs || apiMode} className="replay-event-list relative flex-1 min-w-0 overflow-y-auto" aria-label="動画に対応するイベント">
           {groups.map(g=><section key={g.time} data-replay-time={g.time}>
             {g.cues.map(c=><button key={c.node.key} data-current={current?.node.key===c.node.key} data-replay-key={c.node.key} data-replay-event={c.node.primary.event_id} aria-pressed={current?.node.key===c.node.key} onClick={()=>jump(c)} className="replay-event-row" title={`${nodeTitle(c.node)} · 記録順 #${c.node.seq}${c.positionSource==='turn_synthesis'?' · 同じターンの統合位置を参照':''}`}>
               <span className="replay-event-time">{c.time.toFixed(2)}</span>
@@ -159,8 +198,9 @@ export function VideoPlayback({model, videos, onSelect, seekRequest, initialKey,
         </div>
         <div className="replay-log-footer">
           {logPanel && <button className="replay-text-button" onClick={()=>setShowLogs(!showLogs)}>{showLogs?'処理タイムライン':'詳細ログ'}</button>}
-          {!showLogs && <select aria-label="表示する処理" value={mode} onChange={e=>setMode(e.target.value as typeof mode)}>
+          {!showLogs && <select aria-label="表示する処理" value={mode} onChange={e=>changeMode(e.target.value as typeof mode)}>
             <option value="main">主要な処理</option><option value="all">すべての処理</option><option value="prompts">モデル呼び出し</option><option value="actions">コード・API</option>
+            {ep && <option value="api-python">APIとPython</option>}
           </select>}
           <details className="replay-playback-options"><summary>再生設定</summary><div>
             <SmallButton onClick={()=>{if(video.current){resumeFollow();video.current.pause();video.current.currentTime=Math.max(0,time-2);setTime(video.current.currentTime);}}}>2秒巻き戻す</SmallButton>

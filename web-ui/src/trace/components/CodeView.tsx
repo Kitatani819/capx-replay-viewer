@@ -63,7 +63,7 @@ export function CodeView({
             const n = from + i + 1;
             const marked = markLine === n;
             return (
-              <div key={n} ref={marked ? markRef : undefined} className={`flex ${marked ? 'bg-accent/15 border-l-2 border-accent' : 'border-l-2 border-transparent'}`}>
+              <div key={n} ref={marked ? markRef : undefined} data-code-line={n} data-code-highlighted={marked} aria-current={marked ? 'location' : undefined} className={`flex ${marked ? 'bg-accent/15 border-l-2 border-accent' : 'border-l-2 border-transparent'}`}>
                 <span className="w-10 flex-shrink-0 pr-2 text-right text-text-muted select-none">{n}</span>
                 <span className="pr-4 whitespace-pre text-sand-200" dangerouslySetInnerHTML={{ __html: line || ' ' }} />
               </div>
