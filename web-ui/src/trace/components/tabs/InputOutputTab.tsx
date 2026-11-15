@@ -185,6 +185,23 @@ function ExecutionIO(props: TabProps & { block: TNode }) {
   </>;
 }
 
+/** Keep useful event facts visible without mounting a second diagnostic view. */
+function EventSummary(props: TabProps) {
+  const node = props.selection.node;
+  if (node.kind === 'warning') {
+    const warning = dataOf(node.primary, 'trace_warning');
+    return <Notice tone="amber"><RecordedText ep={props.ep} value={warning.message} empty="警告の説明は未記録です"/>{warning.message_redacted && <p>秘密情報はマスクされています。</p>}<p className="replay-io-muted">出典: レコーダーの警告</p></Notice>;
+  }
+  if (node.kind === 'evaluator') {
+    const result = dataOf(node.primary, 'evaluator_result');
+    return <Section title="取得できた評価結果"><p>reward: {result.reward ?? '未記録'} ／ task_completed: {result.task_completed == null ? '未記録' : String(result.task_completed)}</p><p className="replay-io-muted">出典: evaluator_result（ハーネスの評価）{result.source ? ` · ${result.source}` : ''}</p></Section>;
+  }
+  return <>
+    {node.failed && <Notice tone="red">このイベントにはエラーが記録されています。「記録の詳細」で内容を確認できます。</Notice>}
+    {node.primary.event_type === 'trial_videos' ? <p className="replay-io-muted">録画の保存記録です。読み込める動画は左側で再生できます。</p> : <p className="replay-io-muted">このイベントの記録は「記録の詳細」で確認できます。</p>}
+  </>;
+}
+
 export function InputOutputTab(props: TabProps) {
   const node = props.selection.node;
   const call = node.kind === 'model_call' ? node.call : null;
@@ -196,7 +213,7 @@ export function InputOutputTab(props: TabProps) {
     {node.orphan && <Notice tone="amber">{node.orphan}</Notice>}
     {arrayBudgetOf(node) > 0 && <Notice tone="amber">配列の記録上限に達したため、一部の画像・配列は保存されていません（array_budget）。</Notice>}
     {call && call.attempts.length > 1 && <label className="replay-io-select">HTTP試行 <select aria-label="入出力のHTTP試行" value={(props.selection.attempt ?? mainAttempt(call))?.request.event_id ?? ''} onChange={e => props.onSelect(node, e.target.value)}>{call.attempts.map((attempt, index) => <option key={attempt.request.event_id} value={attempt.request.event_id}>{index + 1} / {call.attempts.length}{attempt.errors.length > 0 ? ' · エラー' : attempt.responses.length > 0 ? ' · 応答あり' : ' · 応答未記録'}</option>)}</select></label>}
-    {call ? <><RecordedModelInput {...props}/><Section title={call.role === 'vdm' ? '返った差分の説明' : '返った回答'}><RecordedModelOutput {...props}/></Section></> : node.kind === 'service_call' ? <ServiceIO {...props}/> : block ? <ExecutionIO {...props} block={block}/> : node.kind === 'api_call' || ['stdout', 'stderr'].includes(node.kind) ? <ApiLogTab {...props}/> : <DebugTab {...props}/>}
-    <Disclosure title="記録の詳細">{call ? <><ModelInputTab {...props}/><ModelOutputTab {...props}/><InputDiffTab {...props}/></> : <ApiLogTab {...props}/>}<DebugTab {...props}/></Disclosure>
+    {call ? <><RecordedModelInput {...props}/><Section title={call.role === 'vdm' ? '返った差分の説明' : '返った回答'}><RecordedModelOutput {...props}/></Section></> : node.kind === 'service_call' ? <ServiceIO {...props}/> : block ? <ExecutionIO {...props} block={block}/> : node.kind === 'api_call' || ['stdout', 'stderr'].includes(node.kind) ? <ApiLogTab {...props}/> : <EventSummary {...props}/>}
+    <Disclosure title="記録の詳細">{call ? <><ModelInputTab {...props}/><ModelOutputTab {...props}/><InputDiffTab {...props}/></> : ['api_call', 'service_call', 'code_block', 'stdout', 'stderr'].includes(node.kind) ? <ApiLogTab {...props}/> : null}<DebugTab {...props}/></Disclosure>
   </div>;
 }

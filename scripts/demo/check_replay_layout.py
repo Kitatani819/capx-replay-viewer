@@ -3,7 +3,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from playwright.sync_api import expect, sync_playwright
 
@@ -19,7 +19,27 @@ def check(base_url: str, root: Path, output: Path):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.set_default_timeout(12000)
         try:
-            page.goto(url)
+            # Exercise the actual picker flow: a direct event URL cannot catch
+            # the initial-selection regression caused by default Live state.
+            page.goto(base_url + "/traces?view=details")
+            picker_details = page.locator('[data-picker-details="trace"]')
+            expect(picker_details).not_to_have_attribute("open", "")
+            expect(picker_details.get_by_text("viewer-only（記録の閲覧専用）", exact=True)).to_be_hidden()
+            picker_details.locator("summary").click()
+            expect(picker_details.get_by_text("viewer-only（記録の閲覧専用）", exact=True)).to_be_visible()
+            picker_details.locator("summary").click()
+            page.get_by_role("button", name="トレースなし（既存ログ）", exact=True).click()
+            expect(page.locator('[data-picker-details="legacy"]')).not_to_have_attribute("open", "")
+            page.get_by_role("button", name="トレースあり", exact=True).click()
+            page.get_by_role("button").filter(has=page.get_by_text(manifest["run"], exact=True)).click()
+            search = page.get_by_role("searchbox", name="試行を検索")
+            episode = page.get_by_role("button", name="episode " + manifest["episode"], exact=True)
+            search.fill("no-such-demo-trial")
+            expect(episode).to_have_count(0)
+            search.fill("cube_lifting")
+            expect(page.get_by_label("結果で絞り込み")).to_be_visible()
+            expect(episode).to_be_visible()
+            episode.click()
             video = page.get_by_label("試行の録画", exact=True)
             page.wait_for_function("document.querySelector('video[aria-label=\"試行の録画\"]')?.readyState >= 2")
             expect(page.get_by_text("同期情報なし", exact=False)).to_have_count(0)
@@ -44,6 +64,15 @@ def check(base_url: str, root: Path, output: Path):
                 page.get_by_role("tab", name=label, exact=True).click()
                 expect(page.get_by_role("tab", name=label, exact=True)).to_have_attribute("aria-selected", "true")
                 paused_same(before)
+
+            panel = page.get_by_role("tabpanel")
+            expect(cue("sam_0")).to_have_attribute("data-current", "true")
+            expect(panel).to_have_attribute("data-selected-event", manifest["events"]["sam_0"])
+            expect(panel).to_contain_text("red cube")
+            assert video.evaluate("v => v.paused && v.currentTime === 0")
+            page.wait_for_function("new URLSearchParams(location.search).get('event') === document.querySelector('[role=tabpanel]')?.dataset.selectedEvent")
+            page.screenshot(path=str(output / "initial-selection.png"), animations="disabled")
+            passed.append("Picker search/filter/mode controls stay visible; storage details fold away; before playback SAM3 highlight, URL and input/output select the same event")
 
             left = page.locator('[data-replay-pane="left"]').bounding_box()
             right = page.locator('[data-replay-pane="details"]').bounding_box()
@@ -84,6 +113,7 @@ def check(base_url: str, root: Path, output: Path):
             assert panel.locator('img').count() >= 2
             vdm_time = video.evaluate("v => v.currentTime")
             cue("candidate_1").click()
+            expect(cue("candidate_1").locator('.replay-event-kind')).to_have_text("候補生成（9件）")
             paused_same(vdm_time)
             expect(cue("candidate_1")).to_have_attribute("data-current", "true")
             cue("vdm_1").click()
@@ -146,6 +176,8 @@ def check(base_url: str, root: Path, output: Path):
             passed.append("Candidate tab: nine candidates/shared input/errors/truncation; synthesis tab: actual input, REGENERATE and executable Python link")
 
             all_turns()
+            page.get_by_label("表示する処理", exact=True).select_option("main")
+            expect(cue("candidate_2").locator('.replay-event-kind')).to_have_text("候補生成（3件）")
             cue("candidate_2").click()
             tab("候補")
             expect(page.locator('[data-candidate]')).to_have_count(3)
@@ -208,6 +240,105 @@ def check(base_url: str, root: Path, output: Path):
             passed.append("Reduced-motion setting suppresses emphasis animation; narrow viewport stacks panels without horizontal overflow")
 
             page.set_viewport_size({"width": 1600, "height": 1000})
+            episode_api = f'/api/traces/runs/{manifest["run"]}/episodes/{manifest["episode"]}'
+            snapshot = page.request.get(base_url + episode_api + '/events?after_offset=0').json()
+            recorded_events = snapshot['events']
+            video_event = next(event for event in recorded_events if event['event_type'] == 'trial_videos')
+            page.goto(url + '&event=' + manifest['events']['vdm_1'])
+            expect(cue('vdm_1')).to_have_attribute('data-current', 'true')
+            expect(panel).to_have_attribute('data-selected-event', manifest['events']['vdm_1'])
+            expect(panel).to_contain_text('below the target height')
+            page.wait_for_function("!document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 2) < .02")
+            assert video.evaluate('v => v.paused')
+            page.get_by_role('button', name='再生', exact=True).click()
+            page.wait_for_function("document.querySelector('video').currentTime > 2.2")
+            page.get_by_label('リプレイのターン', exact=True).select_option('1')
+            page.evaluate("url => { history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate')); }",
+                url + '&event=' + manifest['events']['sam_0'])
+            expect(cue('sam_0')).to_have_attribute('data-current', 'true')
+            expect(page.get_by_label('リプレイのターン', exact=True)).to_have_value('0')
+            expect(panel).to_have_attribute('data-selected-event', manifest['events']['sam_0'])
+            page.wait_for_function("document.querySelector('video').paused && !document.querySelector('video').seeking && document.querySelector('video').currentTime < .02")
+            page.get_by_role('button', name='再生', exact=True).click()
+            page.wait_for_function("document.querySelector('video').currentTime > .2")
+            before_unmapped = page.evaluate("url => { const time=document.querySelector('video').currentTime; history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate')); return time; }",
+                url + '&event=' + video_event['event_id'])
+            page.wait_for_function("document.querySelector('video').paused")
+            assert abs(video.evaluate('v => v.currentTime') - before_unmapped) < .15
+            expect(panel).to_have_attribute('data-selected-event', video_event['event_id'])
+            expect(page.locator('[data-current="true"]')).to_have_count(0)
+            expect(panel.locator('.replay-debug-banner')).to_have_count(0)
+            expect(panel.get_by_role('button', name=re.compile('イベントの生データを表示'))).to_have_count(0)
+            panel.get_by_text('記録の詳細', exact=True).click()
+            banner = panel.locator('.replay-debug-banner')
+            expect(banner).to_have_count(1)
+            expect(banner).to_be_visible()
+            expect(panel.get_by_role('button', name=re.compile('イベントの生データを表示'))).to_have_count(1)
+            colors = banner.evaluate("el => ({background:getComputedStyle(el).backgroundColor, text:getComputedStyle(el).color, icon:getComputedStyle(el.querySelector('svg')).stroke})")
+            assert colors == {'background': 'rgb(231, 241, 244)', 'text': 'rgb(35, 75, 90)', 'icon': 'rgb(35, 75, 90)'}, colors
+
+            def luminance(rgb):
+                components = [channel / 255 for channel in rgb]
+                linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in components]
+                return sum(c * weight for c, weight in zip(linear, (.2126, .7152, .0722)))
+
+            contrast = (luminance((231, 241, 244)) + .05) / (luminance((35, 75, 90)) + .05)
+            assert contrast > 8.2
+            observations['debug_banner'] = {**colors, 'contrast': contrast}
+            page.screenshot(path=str(output / 'debug-details.png'), animations='disabled')
+            panel.get_by_text('記録の詳細', exact=True).click()
+            expect(banner).to_have_count(0)
+            passed.append('Explicit URLs retain mapped VDM; URL changes during playback pause and seek mapped SAM3 or retain the position for unmapped trial_videos; debug disclosure has one banner/raw record with requested colors and >8.2:1 contrast')
+
+            # Exercise real browser polling and player effects against an explicitly
+            # simulated running response; this does not claim a real robot is Live.
+            running_summary = page.request.get(base_url + episode_api).json()
+            running_summary['status'] = 'running'
+            live_events = list(recorded_events)
+
+            def serve_live_events(route):
+                offset = int(parse_qs(urlparse(route.request.url).query).get('after_offset', ['0'])[0])
+                route.fulfill(json={'events': live_events[offset:], 'next_offset': len(live_events),
+                    'eof': True, 'generation': 'browser-live-regression'})
+
+            page.route('**' + episode_api, lambda route: route.fulfill(json=running_summary))
+            page.route('**' + episode_api + '/events?*', serve_live_events)
+            page.goto(url)
+            page.wait_for_function("document.querySelector('video')?.readyState >= 2")
+            expect(panel).to_have_attribute('data-selected-event', video_event['event_id'])
+            page.get_by_role('button', name='試行の詳細', exact=True).click()
+            live_switch = page.get_by_role('checkbox', name='新しい記録に追従')
+            expect(live_switch).to_be_checked()
+            expect(page.locator('[data-current="true"]')).to_have_count(0)
+            new_event = {**video_event, 'event_id': 'browser_live_warning_1', 'seq': video_event['seq'] + 1,
+                'event_type': 'trace_warning', 'status': 'warning', 'artifacts': [], 'data': {'message': 'browser Live regression event'}}
+            live_events.append(new_event)
+            expect(panel).to_have_attribute('data-selected-event', new_event['event_id'])
+            expect(live_switch).to_be_checked()
+            expect(page.locator('[data-current="true"]')).to_have_count(0)
+            page.get_by_role('button', name='再生', exact=True).click()
+            expect(live_switch).not_to_be_checked()
+            page.wait_for_function("document.querySelector('video').currentTime > .2")
+            page.wait_for_function("document.querySelector('[data-current=true]')?.dataset.replayEvent === document.querySelector('[role=tabpanel]')?.dataset.selectedEvent")
+            live_switch.check()
+            expect(live_switch).to_be_checked()
+            expect(panel).to_have_attribute('data-selected-event', new_event['event_id'])
+            assert video.evaluate('v => v.paused')
+            new_event2 = {**new_event, 'event_id': 'browser_live_warning_2', 'seq': new_event['seq'] + 1}
+            live_events.append(new_event2)
+            expect(panel).to_have_attribute('data-selected-event', new_event2['event_id'])
+            expect(live_switch).to_be_checked()
+            expect(page.locator('[data-current="true"]')).to_have_count(0)
+            page.evaluate("url => { history.pushState({}, '', url); dispatchEvent(new PopStateEvent('popstate')); }",
+                url + '&event=' + manifest['events']['vdm_1'])
+            expect(live_switch).not_to_be_checked()
+            expect(panel).to_have_attribute('data-selected-event', manifest['events']['vdm_1'])
+            expect(cue('vdm_1')).to_have_attribute('data-current', 'true')
+            page.wait_for_function("document.querySelector('video').paused && !document.querySelector('video').seeking && Math.abs(document.querySelector('video').currentTime - 2) < .02")
+            page.unroute('**' + episode_api)
+            page.unroute('**' + episode_api + '/events?*')
+            passed.append('Simulated running trace: polls new events without video overriding Live; playback or external URL enters Browse; re-enabling Live pauses video and follows appended events')
+
             legacy = manifest["legacy"]
             page.goto(base_url + "/traces?" + urlencode({"view": "details", "legacy_run": legacy["run"],
                 "legacy_trial": "/".join([legacy["task"], legacy["condition"], legacy["trial"]]), "legacy_root": "0"}))

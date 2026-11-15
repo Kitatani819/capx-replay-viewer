@@ -29,7 +29,7 @@ function addTimer(fn: () => void, ms: unknown, repeat: boolean): number {
   return id;
 }
 
-const listeners = new Map<string, (e: unknown) => void>();
+const listeners = new Map<string, Set<(e: unknown) => void>>();
 const location = { pathname: '/traces', search: '', hash: '' };
 const storage = new Map<string, string>();
 
@@ -46,8 +46,10 @@ const fakeWindow = {
     pushState: (_s: unknown, _t: unknown, url: string) => setUrl(url),
     replaceState: (_s: unknown, _t: unknown, url: string) => setUrl(url),
   },
-  addEventListener: (type: string, fn: (e: unknown) => void) => listeners.set(type, fn),
-  removeEventListener: (type: string) => listeners.delete(type),
+  addEventListener: (type: string, fn: (e: unknown) => void) => {
+    const group=listeners.get(type) ?? new Set();group.add(fn);listeners.set(type,group);
+  },
+  removeEventListener: (type: string, fn: (e: unknown) => void) => listeners.get(type)?.delete(fn),
   setTimeout: (fn: () => void, ms?: number) => addTimer(fn, ms, false),
   setInterval: (fn: () => void, ms?: number) => addTimer(fn, ms, true),
   clearTimeout: (id: number) => clock.timers.delete(id),
@@ -79,7 +81,7 @@ export function currentParams(): URLSearchParams {
 /** Fires the popstate listener (the back button). */
 export function popState(url: string): void {
   setUrl(url);
-  listeners.get('popstate')?.({});
+  for(const listener of listeners.get('popstate') ?? [])listener({});
 }
 
 async function flush(): Promise<void> {

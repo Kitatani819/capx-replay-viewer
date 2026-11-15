@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { buildEpisodeModel, resolveSelection } from '../model';
 import { EnsembleTab } from '../components/tabs/EnsembleTab';
 import { InputOutputTab, RecordedModelOutput } from '../components/tabs/InputOutputTab';
+import { DebugTab } from '../components/tabs/DebugTab';
 import type { TabProps } from '../components/DetailTabs';
 import { Rec } from './fixtures';
 
@@ -92,4 +93,31 @@ test('focused model output labels interrupted stream content as partial', () => 
   const html = renderToStaticMarkup(<RecordedModelOutput {...props(r,request.event_id)}/>);
   assert.match(html,/中断までに受信した回答（部分出力）/);
   assert.match(html,/PARTIAL_RESPONSE/);
+});
+
+test('generic events keep diagnostic banners and raw data inside the record disclosure', () => {
+  const r = new Rec(); r.episodeStart();
+  const event = r.add('trial_videos',{videos:[],private_debug_value:'RAW_RECORD_ONLY'});
+  const p = props(r,event.event_id);
+  const focused = renderToStaticMarkup(<InputOutputTab {...p}/>);
+  assert.match(focused,/録画の保存記録/);
+  assert.match(focused,/記録の詳細/);
+  assert.doesNotMatch(focused,/replay-debug-banner|イベントの生データ|RAW_RECORD_ONLY/);
+  const diagnostic = renderToStaticMarkup(<DebugTab {...p}/>);
+  assert.equal((diagnostic.match(/replay-debug-banner/g)??[]).length,1);
+  assert.equal((diagnostic.match(/イベントの生データを表示/g)??[]).length,1);
+});
+
+test('warning messages and evaluator provenance remain visible outside diagnostic details', () => {
+  const r = new Rec(); r.episodeStart();
+  const warning = r.add('trace_warning',{code:'queue_full',message:'WARNING_STILL_VISIBLE',message_redacted:true});
+  const evaluator = r.add('evaluator_result',{scope:'episode',reward:0.5,task_completed:false,source:'RECORDED_EVALUATOR'});
+  const warningHtml = renderToStaticMarkup(<InputOutputTab {...props(r,warning.event_id)}/>);
+  assert.match(warningHtml,/WARNING_STILL_VISIBLE/);
+  assert.match(warningHtml,/秘密情報はマスク/);
+  const resultHtml = renderToStaticMarkup(<InputOutputTab {...props(r,evaluator.event_id)}/>);
+  assert.match(resultHtml,/reward: 0.5/);
+  assert.match(resultHtml,/task_completed: false/);
+  assert.match(resultHtml,/evaluator_result（ハーネスの評価）/);
+  assert.match(resultHtml,/RECORDED_EVALUATOR/);
 });

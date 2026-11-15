@@ -38,6 +38,7 @@
 .replay-workspace :is(.text-sky-200,.text-sky-300) { color: #286780; }
 .replay-workspace :is(.text-violet-200,.text-violet-300) { color: #785295; }
 .replay-workspace :is(.text-nv-green,.text-nv-green-light) { color: #3e702c; }
+.replay-workspace .replay-debug-banner { background-color: #E7F1F4; color: #234B5A; }
 .replay-header { flex-shrink: 0; padding: 0 42px; max-height: 40vh; overflow: auto; }
 .replay-header-main { min-height: 84px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #dce3da; }
 .replay-header h1 { font-size: 21px; font-weight: 600; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

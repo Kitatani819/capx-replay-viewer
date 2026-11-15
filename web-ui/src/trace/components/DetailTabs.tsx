@@ -195,7 +195,7 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
           </button>
         ))}
       </div>
-      <div ref={panelRef} role="tabpanel" className="replay-detail-body flex-1 min-h-0 overflow-y-auto">
+      <div ref={panelRef} role="tabpanel" data-selected-event={eventId ?? undefined} className="replay-detail-body flex-1 min-h-0 overflow-y-auto">
         {selection && <DataAssetNotice events={selection.node.events} related={assetEvents} states={assetStates} onRetry={onRetryAsset} />}
         <ErrorBoundary key={`${tab}|${eventId ?? ''}`} label={`「${LABELS.replayTabs[tab] ?? ''}」タブ`}>
           {body}

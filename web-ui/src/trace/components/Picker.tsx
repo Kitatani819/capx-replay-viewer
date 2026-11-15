@@ -58,19 +58,26 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface">
-      <div className="flex-shrink-0 flex items-center gap-2 px-4 py-2 border-b border-surface-border bg-surface-raised">
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-surface-border bg-surface-raised">
         <SmallButton active={mode === 'traced'} onClick={() => setMode('traced')}>
           トレースあり
         </SmallButton>
         <SmallButton active={mode === 'legacy'} onClick={() => setMode('legacy')}>
           {LABELS.legacySection}
         </SmallButton>
-        <span className="text-[11px] text-text-tertiary font-mono truncate">
-          trace root: {config?.trace_root ?? '—'}
-          {config && config.exists === false ? '（存在しません）' : ''}
-          {config?.viewer_only ? ' · viewer-only' : ''}
-        </span>
-        {configError && <ErrorText>{configError}</ErrorText>}
+        <details data-picker-details="trace" className="min-w-0 text-xs text-text-secondary open:order-last open:basis-full">
+          <summary className="cursor-pointer px-2 py-1">一覧の詳細</summary>
+          <dl className="mt-2 space-y-2 px-2 pb-2">
+            <div><dt className="text-text-tertiary">トレースの保存先</dt>
+              <dd className="font-mono break-all">{config?.trace_root ?? '—'}{config?.exists === false ? '（存在しません）' : ''}</dd>
+            </div>
+            <div><dt className="text-text-tertiary">動作モード</dt>
+              <dd>{config?.viewer_only === true ? 'viewer-only（記録の閲覧専用）' : config?.viewer_only === false ? '通常モード' : '未取得'}</dd>
+            </div>
+          </dl>
+        </details>
+        {mode === 'traced' && config?.exists === false && <span role="status" className="text-xs text-text-secondary">トレースの保存先が見つかりません</span>}
+        {configError && <div role="alert"><ErrorText>{configError}</ErrorText></div>}
         <div className="ml-auto flex gap-2">
           <SmallButton onClick={runs.reload}>一覧を更新</SmallButton>
           {onClose && <SmallButton onClick={onClose}>閉じる</SmallButton>}
@@ -124,6 +131,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
               <input
                 type="search"
                 name="trace-episode-filter"
+                aria-label="試行を検索"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="絞り込み（task / condition / seed / id）"
@@ -314,8 +322,11 @@ function LegacyPicker({ onPickLegacy }: { config: TraceConfigResponse | null; on
     <div className="flex-1 min-h-0 flex">
       <div className="w-80 flex-shrink-0 border-r border-surface-border overflow-y-auto">
         <div className="px-3 py-2 text-[11px] text-text-tertiary">
-          {LABELS.legacySection}: 記録器が無かった頃の runner 出力です。モデル入力は{LABELS.notRecorded}です。
-          <div className="font-mono mt-1 space-y-0.5">
+          保存されている録画とログを表示します。
+          {roots.some(r => !r.exists) && <p role="status" className="mt-1">見つからない保存先があります。</p>}
+          <details data-picker-details="legacy" className="mt-2">
+          <summary className="cursor-pointer py-1">保存先の詳細</summary>
+          <div className="font-mono mt-1 space-y-2 break-all">
             {roots.map((r) => (
               <div key={r.index}>
                 root {r.index}: {r.path}
@@ -323,6 +334,7 @@ function LegacyPicker({ onPickLegacy }: { config: TraceConfigResponse | null; on
               </div>
             ))}
           </div>
+          </details>
         </div>
         {runs.loading && !runs.data && (
           <div className="px-3">
@@ -355,6 +367,7 @@ function LegacyPicker({ onPickLegacy }: { config: TraceConfigResponse | null; on
           <input
             type="search"
             name="trace-legacy-filter"
+            aria-label="試行を検索"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="絞り込み（task / condition / trial）"

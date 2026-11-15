@@ -47,6 +47,7 @@ import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type
 import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
 import type { ReplaySeek } from './components/VideoPlayback';
+import { replayTab } from './replay';
 import { headerVerdict } from './outcome';
 import { dataOf } from './types';
 import { DetailTabs, type RangeFocus } from './components/DetailTabs';
@@ -208,6 +209,16 @@ export default function TraceViewerPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [playbackEventId, setPlaybackEventId] = useState<string | null>(null);
   const [replaySeek, setReplaySeek] = useState<ReplaySeek | null>(null);
+  useEffect(()=>{
+    const navigate=()=>{
+      // replaceState/pushState from playback do not fire popstate. A history
+      // navigation to an explicit event is a user selection, even during Live.
+      if(new URLSearchParams(window.location.search).get('event'))setLive(false);
+      setReplaySeek(null);setPlaybackEventId(null);
+    };
+    window.addEventListener('popstate',navigate);
+    return ()=>window.removeEventListener('popstate',navigate);
+  },[]);
   const videos = useMemo(() => {
     if (!runId || !ep) return [];
     const match = runnerRecords?.length ? runnerRecordFor(runnerRecords,
@@ -215,15 +226,16 @@ export default function TraceViewerPage() {
     return videosForEpisode(ep, model, match, config.data?.runner_roots ?? []);
   }, [runId, ep, runnerRecords, model, summary.data, startWall, config.data]);
 
-  // Live mode: follow the newest event.
+  // Only a running trial owns a live tail. An archived replay with no event URL
+  // waits for the player's verified frame map to choose its first visible cue.
   useEffect(() => {
     if (!live || !runId || !episodeId) return;
-    const t = detailed ? liveTarget(model) : !eventParam && model.blocks.length ? {eventId: selectionEventId(model.blocks[0])} : null;
+    const t = detailed ? running ? liveTarget(model) : null : !eventParam && model.blocks.length ? {eventId: selectionEventId(model.blocks[0])} : null;
     if (t && t.eventId !== eventParam) {
       setParams({ event: t.eventId });
       setScrollToken((x) => x + 1);
     }
-  }, [live, detailed, model, eventParam, runId, episodeId, setParams]);
+  }, [live, running, detailed, model, eventParam, runId, episodeId, setParams]);
 
   // When the URL names an event that is loaded, bring it into view once.
   const scrolledFor = useRef<string | null>(null);
@@ -255,14 +267,16 @@ export default function TraceViewerPage() {
     [setParams],
   );
 
-  const onPlaybackSelect = useCallback((node: TNode) => {
+  const onPlaybackSelect = useCallback((node: TNode, openDetail = false) => {
     setReplaySeek(null);
     setLive(false);
     setParams({event: selectionEventId(node)});
     setScrollToken(x => x+1);
     setPlaybackEventId(selectionEventId(node));
     setFocus(null);
+    if(openDetail)setTab(replayTab(node));
   }, [setParams]);
+  const onReplayInteract = useCallback(()=>setLive(false),[]);
 
   // A range focus applies only to the call it was made for.
   useEffect(() => {
@@ -315,6 +329,8 @@ export default function TraceViewerPage() {
     setPickerOpen(false);
     setLive(true);
     setFocus(null);
+    setReplaySeek(null);
+    setPlaybackEventId(null);
     setParams({ run: r, episode: e, event: null, legacy_run: null, legacy_trial: null, legacy_root: null }, true);
   };
   const pickLegacy = (r: string, t: LegacyTrialRef) => {
@@ -429,7 +445,8 @@ export default function TraceViewerPage() {
               </div>
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
-                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} seekRequest={replaySeek} logPanel={<Timeline
+                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} seekRequest={replaySeek}
+                  replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
                 model={model}
                 ep={ep}
                 running={running}

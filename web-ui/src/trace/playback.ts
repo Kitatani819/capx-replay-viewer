@@ -74,7 +74,7 @@ export function videosForEpisode(ep: EpisodeRef, model: EpisodeModel, match: Run
 // the runner that wrote the trace encodes combined videos at 30 fps.
 // Do not use wall-clock duration: inference delays are absent from the MP4.
 export const RECORDED_VIDEO_FPS = 30;
-export interface PlaybackCue { time: number; node: TNode; positionSource?: 'sim_step' | 'turn_synthesis' }
+export interface PlaybackCue { time: number; node: TNode; positionSource?: 'sim_step' | 'turn_synthesis'; candidateCount?: number }
 export interface PlaybackGroup { time: number; cues: PlaybackCue[] }
 export interface PlaybackMap { reason: string | null; prompts: PlaybackCue[]; actions: PlaybackCue[]; all: PlaybackCue[]; timeForStep?: (step: number) => number }
 export function groupCues(cues: PlaybackCue[]): PlaybackGroup[] {
@@ -85,6 +85,25 @@ export function groupCues(cues: PlaybackCue[]): PlaybackGroup[] {
     else groups.push({time: cue.time, cues: [cue]});
   }
   return groups;
+}
+/** One row per recorded candidate group in the main view. Logical call nodes
+ * already contain HTTP retries; those retries never increase the candidate count.
+ * Unknown turns are left separate because co-location alone is not identity. */
+export function primaryPlaybackCues(cues: PlaybackCue[]): PlaybackCue[] {
+  return groupCues(cues).flatMap(group => {
+    const seen = new Set<number>();
+    return group.cues.flatMap(cue => {
+      if(cue.node.call?.callKind === 'ensemble_member') {
+        const turn = turnOf(cue.node);
+        if(turn === null)return [{...cue,candidateCount:1}];
+        if(seen.has(turn))return [];
+        seen.add(turn);
+        const members=group.cues.filter(c=>c.node.call?.callKind==='ensemble_member' && turnOf(c.node)===turn);
+        return [{...cue,candidateCount:new Set(members.map(c=>c.node.call!.id)).size}];
+      }
+      return ['model_call','code_block','service_call','evaluator'].includes(cue.node.kind) ? [cue] : [];
+    });
+  });
 }
 export function playbackMap(model: EpisodeModel, name: string, duration: number): PlaybackMap {
   const fail = (reason: string): PlaybackMap => ({reason, prompts: [], actions: [], all: []});

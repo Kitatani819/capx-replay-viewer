@@ -63,7 +63,7 @@ export function DebugFrameChip() {
 /** Fixed banner of the debug tab: 「モデル入力とは別（デバッグ用）」. */
 export function DebugBanner() {
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-2 mb-3 rounded-md border border-sky-500/40 bg-sky-950/80 backdrop-blur text-sky-200 text-sm font-medium">
+    <div className="replay-debug-banner sticky top-0 z-10 flex items-center gap-2 px-3 py-2 mb-3 rounded-md border border-sky-500/40 bg-sky-950/80 backdrop-blur text-sky-200 text-sm font-medium">
       <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
