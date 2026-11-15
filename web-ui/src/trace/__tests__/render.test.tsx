@@ -23,13 +23,14 @@ import type { ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildEpisodeModel, resolveSelection, type EpisodeModel, type Selection } from '../model';
 import type { TabProps } from '../components/DetailTabs';
-import { DataAssetNotice, DetailTabs } from '../components/DetailTabs';
+import { DataAssetNotice } from '../components/DetailTabs';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { MediaPane } from '../components/MediaPane';
 import { Timeline } from '../components/Timeline';
 import { TopBar } from '../components/TopBar';
 import { arraySource, valueFor } from '../components/ValueView';
 import { ApiLogTab } from '../components/tabs/ApiLogTab';
+import { DebugTab } from '../components/tabs/DebugTab';
 import { InputDiffTab } from '../components/tabs/InputDiffTab';
 import { ModelInputTab } from '../components/tabs/ModelInputTab';
 import { ModelOutputTab } from '../components/tabs/ModelOutputTab';
@@ -480,46 +481,33 @@ function laterOversize(apiPrints: boolean, written = true) {
   return { r, api, next, full };
 }
 
-function detail(r: Rec, selected: TraceEvent, tab: number, states: Map<string, DataAssetState>): string {
+// Diagnostic bodies now mount only when the replay's record disclosure is opened.
+// Test those bodies directly, alongside the always-visible data-loading notice.
+function detail(r: Rec, selected: TraceEvent, pane: 'input' | 'debug' | 'diff', states: Map<string, DataAssetState>): string {
   const m = buildEpisodeModel(applyDataAssets(r.events, states));
   const s = sel(m, selected);
-  return text(
-    <DetailTabs
-      model={m}
-      ep={EP}
-      summary={null}
-      selection={s}
-      running={false}
-      onSelect={() => {}}
-      onFocusRange={() => {}}
-      focus={null}
-      tab={tab}
-      onTab={() => {}}
-      assetStates={states}
-      onRetryAsset={() => {}}
-      assetEvents={dataAssetTargets(m, s)}
-    />,
-  );
+  const p = props(m,s,{assetStates:states,onRetryAsset:()=>{}});
+  return text(<><DataAssetNotice events={s.node.events} related={dataAssetTargets(m,s).filter(e=>!s.node.events.includes(e))} states={states} onRetry={()=>{}}/>{pane==='input'?<ModelInputTab {...p}/>:pane==='debug'?<DebugTab {...p}/>:<InputDiffTab {...p}/>}</>);
 }
 
 test('a later request whose input summary is in an asset is loading or failed (with a retry), not 未記録', () => {
   for (const prints of [true, false]) {
     const { r, api, next, full } = laterOversize(prints);
-    const loading = detail(r, api, 0, new Map([[next.event_id, { status: 'loading' }]]));
+    const loading = detail(r, api, 'input', new Map([[next.event_id, { status: 'loading' }]]));
     assert.ok(!loading.includes('未記録（input_summary なし）'), `loading (prints=${prints})`);
     assert.match(loading, prints ? /入力の内訳: 読み込み中…/ : /次のコード生成入力の内訳: 読み込み中…/);
     assert.match(loading, /この選択で参照する別のイベントの data/);
-    const failed = detail(r, api, 0, new Map([[next.event_id, { status: 'failed', error: 'HTTP 500: boom' }]]));
+    const failed = detail(r, api, 'input', new Map([[next.event_id, { status: 'failed', error: 'HTTP 500: boom' }]]));
     assert.ok(!failed.includes('未記録（input_summary なし）'), `failed (prints=${prints})`);
     assert.match(failed, /読み込めません（data は 256 KB を超えたため別ファイル assets\/ab\/next\.json\.gz にあります: HTTP 500: boom）/);
     assert.match(failed, /再読み込み/);
-    const loaded = detail(r, api, 0, new Map([[next.event_id, { status: 'loaded', data: full }]]));
+    const loaded = detail(r, api, 'input', new Map([[next.event_id, { status: 'loaded', data: full }]]));
     assert.match(loaded, /含まれています/);
     assert.ok(!loaded.includes('この選択で参照する別のイベントの data'), 'nothing pending once loaded');
   }
   // the asset was never written: that is 未記録, with the reason
   const lost = laterOversize(true, false);
-  const t = detail(lost.r, lost.api, 0, new Map());
+  const t = detail(lost.r, lost.api, 'input', new Map());
   assert.match(t, /入力の内訳: 未記録（data は 256 KB を超えたため別ファイルに移されましたが、そのファイルは書かれていません: disk_low）/);
 });
 
@@ -534,12 +522,12 @@ test('the recorded statistics of a nested service call whose data is in an asset
   end.artifacts = [...(end.artifacts ?? []), { path: 'assets/bb/out.npz', label: 'perception_output', kind: 'arrays', written: true }];
   r.apiEnd(api);
   r.blockEnd(block, 0, 0);
-  const loading = detail(r, api, 0, new Map([[end.event_id, { status: 'loading' }]]));
+  const loading = detail(r, api, 'debug', new Map([[end.event_id, { status: 'loading' }]]));
   assert.match(loading, new RegExp(`記録時の統計（#${end.seq} service_call_end）: 読み込み中…`));
-  const failed = detail(r, api, 0, new Map([[end.event_id, { status: 'failed', error: 'HTTP 404' }]]));
+  const failed = detail(r, api, 'debug', new Map([[end.event_id, { status: 'failed', error: 'HTTP 404' }]]));
   assert.match(failed, /記録時の統計（#\d+ service_call_end）: 読み込めません/);
   assert.match(failed, /再読み込み/);
-  const loaded = detail(r, api, 0, new Map([[end.event_id, { status: 'loaded', data: { service: 'sam3', function: 'sam3_seg_fn', response_summary: {} } }]]));
+  const loaded = detail(r, api, 'debug', new Map([[end.event_id, { status: 'loaded', data: { service: 'sam3', function: 'sam3_seg_fn', response_summary: {} } }]]));
   assert.ok(!loaded.includes('記録時の統計（#'), 'nothing to say once loaded');
 });
 
@@ -550,11 +538,11 @@ test('the input diff says the previous request\'s data failed to load (with a re
   makeOversize(prev, 'assets/pp/prev.json.gz');
   const cur = r.request('vdm', 'lc_cur', 1, { n_images: 1, images: [{ path: 'messages[1].content[1].image_url.url', order: 0, kind: 'image', sha256: 'bb' }] });
   r.response(cur);
-  const failed = detail(r, cur, 0, new Map([[prev.event_id, { status: 'failed', error: 'HTTP 500' }]]));
+  const failed = detail(r, cur, 'diff', new Map([[prev.event_id, { status: 'failed', error: 'HTTP 500' }]]));
   assert.match(failed, /前回の要求の data は 256 KB を超えたため別ファイルにあり、読み込めません（HTTP 500）。追加・削除は判定できません/);
   assert.match(failed, /再読み込み/);
   assert.ok(!/未記録前回の要求/.test(failed), 'not labelled 未記録');
-  const loading = detail(r, cur, 0, new Map([[prev.event_id, { status: 'loading' }]]));
+  const loading = detail(r, cur, 'diff', new Map([[prev.event_id, { status: 'loading' }]]));
   assert.match(loading, /前回の要求の data は 256 KB を超えたため別ファイルにあり、まだ読み込まれていません/);
 });
 
@@ -607,23 +595,7 @@ test('a nested service call beyond the loading bound says 未読み込み with a
   const targets = dataAssetTargets(m, s);
   // what the page passes: the targets it requests count as loading
   const shown = withTargetsLoading(new Map(), targets);
-  const t = text(
-    <DetailTabs
-      model={m}
-      ep={EP}
-      summary={null}
-      selection={s}
-      running={false}
-      onSelect={() => {}}
-      onFocusRange={() => {}}
-      focus={null}
-      tab={0}
-      onTab={() => {}}
-      assetStates={shown}
-      onRetryAsset={() => {}}
-      assetEvents={targets}
-    />,
-  );
+  const t = text(<DebugTab {...props(m,s,{assetStates:shown,onRetryAsset:()=>{}})}/>);
   const last = ends[ends.length - 1];
   assert.match(t, new RegExp(`記録時の統計（#${ends[0].seq} service_call_end）: 読み込み中…`));
   assert.match(t, new RegExp(`記録時の統計（#${last.seq} service_call_end）: 未読み込み（data は 256 KB を超えたため別ファイル assets/s${MAX_NESTED_ASSET_TARGETS}/svc\\.json\\.gz にあります。この選択では自動で読み込みません）読み込む`));

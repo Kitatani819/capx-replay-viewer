@@ -1171,7 +1171,8 @@ exists there.
 
 #### Default replay view
 
-The default page uses the approved recording-focused layout: MP4 on the left,
+The default page uses approved design A (2026-11-15), with a pale background,
+white inspector and collapsed trial/event metadata: MP4 on the left,
 processing timeline and logs below the video, and `入出力`, `候補`, `統合結果`
 on the right. The left `詳細ログ` switch opens the existing causal timeline in
 the same lower panel. Selected rows briefly highlight (450 ms); reduced-motion
@@ -1183,7 +1184,8 @@ The panes stack on screens narrower than 900 px.
 `入出力` reuses the recorded request/response, service artifact, executed Python
 and stream components described below. Debug state and input differences remain
 available as expandable sections. `候補` shows the recorded candidates and
-their shared or distinct saved inputs. `統合結果` shows the same turn's recorded
+their shared or distinct saved inputs, with one chosen answer in view. Candidate
+selection lists temperature and incomplete/error status; inputs remain expandable. `統合結果` shows the same turn's recorded
 synthesis input/output and links to its executed code. Neither tab fabricates
 missing records or a fixed candidate count.
 
@@ -1225,13 +1227,16 @@ the two per-execution panels.
 
 #### Diagnostic view: in-page video playback
 
-The media pane opens `動画＋処理タイムライン` when an MP4 is available.
-Native video controls support playback and seeking; the default speed is 0.5×.
+The media pane opens the video when an MP4 is available. A play/pause button
+and labelled seek slider control the existing HTML video; the default speed is 0.5×.
+`再生設定` contains speed, camera, rewind and follow options. `表示` switches to
+recorded frames. The major-process filter shows the first candidate per turn/time;
+`すべての処理` exposes every recorded event, including each parallel candidate.
 Entering replay preserves the selected execution/event at its recorded position.
 Playing or manually seeking enables `再生位置に追従`: it selects the current process,
 scrolls the event list, and updates its detail contents without changing the selected tab. `すべて` includes
 model calls, Python/API/service calls, streams, feedback and evaluator results.
-`プロンプト` and `コード・API` filter this list; the turn picker uses recorded turn ids.
+`モデル呼び出し` and `コード・API` filter this list; the turn picker uses recorded turn ids.
 Events sharing a video position are grouped in file (`seq`) order and remain individually
 selectable. Clicking either a cue or the existing causal timeline pauses and seeks
 the video; manual selection remains until playback or a native seek resumes following.

@@ -5,6 +5,19 @@
 @tailwind utilities;
 
 :root {
+  --replay-surface: 10 10 10;
+  --replay-raised: 20 20 20;
+  --replay-overlay: 26 26 26;
+  --replay-sunken: 5 5 5;
+  --replay-border: 38 38 38;
+  --replay-border-light: 51 51 51;
+  --replay-accent: 212 160 23;
+  --replay-accent-light: 240 192 64;
+  --replay-accent-dark: 184 134 11;
+  --replay-text-primary: 232 232 232;
+  --replay-text-secondary: 136 136 136;
+  --replay-text-tertiary: 115 115 115;
+  --replay-text-muted: 100 100 100;
   font-family: 'Inter', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;

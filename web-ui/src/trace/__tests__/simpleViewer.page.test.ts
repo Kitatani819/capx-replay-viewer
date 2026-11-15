@@ -25,7 +25,8 @@ test('simple view hides diagnostics; details switch preserves episode and is rev
   click('リプレイを見る');await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,0);
   assert.equal(findAll(page.output,TopBar)[0].props.episodeId,'e1');
-  click('実行回ごとの表示');await advance(0);
+  // The secondary view switch now lives in the top bar's collapsed trial details.
+  (findAll(page.output,TopBar)[0].props.onSimpleView as ()=>void)();await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,1);page.unmount();
 });
 test('default opens replay picker; existing details links retain replay view',async()=>{

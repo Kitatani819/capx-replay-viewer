@@ -34,3 +34,18 @@ export function processLabel(node: TNode): string {
   if (node.kind === 'evaluator') return '評価器';
   return node.kind === 'stdout' ? '標準出力' : node.kind === 'stderr' ? '標準エラー' : '';
 }
+
+/** Plain descriptions of recorded process types, never an inferred task outcome. */
+export function processTitle(node: TNode): string {
+  if (node.kind === 'service_call') return processLabel(node) === 'SAM3' ? '対象物を検出する' : 'カメラの観測を処理する';
+  if (node.call?.callKind === 'ensemble_member') return '動かし方の候補を生成する';
+  if (node.call?.callKind === 'ensemble_synthesis') return '候補をまとめて、次の動きを決める';
+  if (node.call?.role === 'vdm') return '動作前後の変化を確認する';
+  if (node.call?.role === 'code_generator') return 'ロボットを動かすコードを生成する';
+  if (node.kind === 'code_block') return 'Pythonを実行する';
+  if (node.kind === 'evaluator') return '実行の評価を確認する';
+  if (node.kind === 'stdout') return 'コードの標準出力を読む';
+  if (node.kind === 'stderr') return 'コードの標準エラーを読む';
+  if (node.kind === 'api_call') return 'ロボットのAPIを呼び出す';
+  return processLabel(node) || '記録を確認する';
+}

@@ -18,7 +18,7 @@ import { fetchText, traceApi } from '../api';
 import { fmtBytes, fmtNum, fmtWall } from '../format';
 import { useAsync } from '../hooks';
 import { LABELS } from '../labels';
-import { Badge, DebugBanner, ErrorText, KV, Notice, NotRecorded, SectionTitle, Spinner } from './common';
+import { ErrorText, KV, Notice, NotRecorded, Spinner } from './common';
 import { CodeView } from './CodeView';
 import { TextView } from './TextView';
 import { TraceImage } from './TraceImage';
@@ -26,6 +26,7 @@ import { LegacyEnsemble } from './LegacyEnsemble';
 import { legacyEnsembleTurn } from '../legacyEnsemble';
 import { RawJson } from './tabs/ModelInputTab';
 import { LegacyResponses } from './LegacyResponses';
+import './LegacyReplay.css';
 
 export interface LegacyTrialRef {
   root: number | null;
@@ -113,10 +114,10 @@ function filesOf(v: unknown): FileRef[] {
 
 export function LegacyPromptNotice({ modelInputRecorded }: { modelInputRecorded: boolean }) {
   return (
-    <Notice tone="amber">
+    <p className="replay-legacy-note">
       以下はハーネスが保存した文字列です。送信した payload とは区別してください。
       {modelInputRecorded && '送信した payload は上の messages.json に記録されています。'}
-    </Notice>
+    </p>
   );
 }
 
@@ -133,20 +134,8 @@ export function LegacyTrialView({ runId, trial }: { runId: string; trial: Legacy
   const [selectedFeedback, setSelectedFeedback] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  if (res.loading && !res.data) {
-    return (
-      <div className="p-6">
-        <Spinner label="読み込み中" />
-      </div>
-    );
-  }
-  if (res.error) {
-    return (
-      <div className="p-6">
-        <ErrorText>{res.error}</ErrorText>
-      </div>
-    );
-  }
+  if (res.loading && !res.data) return <div className="p-6"><Spinner label="読み込み中" /></div>;
+  if (res.error) return <div className="p-6"><ErrorText>{res.error}</ErrorText></div>;
   const data = isObj(res.data) ? res.data : null;
   if (!data) return null;
 
@@ -167,6 +156,9 @@ export function LegacyTrialView({ runId, trial }: { runId: string; trial: Legacy
     const turn = legacyEnsembleTurn(f.path);
     return turn === null ? [] : [turn];
   }).sort((a, b) => a - b);
+  const hasInputRecords = data.model_input_recorded === true || images.length > 0 || prompts.length > 0 || !!responses;
+  const hasCodeRecords = !!responses || typeof code?.text === 'string';
+  const hasAnyRecords = hasInputRecords || hasCodeRecords || !!summary || feedback.length > 0 || ensembleTurns.length > 0;
   const selectRecord = (section: number, feedbackPath: string | null = null) => {
     videoRef.current?.pause();
     setTab(0); setIoSection(section); setSelectedFeedback(feedbackPath);
@@ -175,194 +167,154 @@ export function LegacyTrialView({ runId, trial }: { runId: string; trial: Legacy
     videoRef.current?.pause();
     setEnsembleIndex(turn); setTab(nextTab);
   };
+  const feedbackIndex = feedback.findIndex(f => f.path === selectedFeedback);
+  const activeRecord = tab === 0 ? selectedFeedback ?? `section-${ioSection}` : `ensemble-${ensembleIndex}`;
+  const recordButton = (id: string, name: string, kind: string, onClick: () => void, file?: string) => (
+    <button type="button" key={id} data-legacy-log-file={file} data-legacy-log-record={id}
+      className="replay-legacy-row" aria-pressed={activeRecord === id} onClick={onClick}>
+      <span className="replay-legacy-row-name">{name}</span><span className="replay-legacy-row-kind">{kind}</span>
+    </button>
+  );
 
   let body: ReactNode = null;
   if (tab === 0 && ioSection === 0) {
-    body = (
-      <div className="space-y-3">
-        {data.model_input_recorded === true ? (
-          <>
-            <SectionTitle>送信したメッセージと STATE</SectionTitle>
-            {stateFiles.map((p) => <LazyText key={p.path} title={`${p.path}（${fmtBytes(p.bytes)}）`} url={url(p.path)} />)}
-          </>
-        ) : <NotRecorded reason="この trial に送信 payload を確認できるトレースはありません。" />}
-        <SectionTitle>{LABELS.legacyHarnessPrompts}</SectionTitle>
-        <LegacyPromptNotice modelInputRecorded={data.model_input_recorded === true} />
-        {responses && <Notice>all_responses.json 内の保存プロンプトは「回答・Pythonコード・VDM」の各応答から開けます。実際の送信payloadとは区別しています。</Notice>}
-        {prompts.length === 0 && !responses && <div className="text-xs text-text-tertiary">保存されたプロンプト文字列はありません</div>}
-        {prompts.map((p) => (
-          <LazyText key={p.path} title={`${p.path}（${fmtBytes(p.bytes)}）`} url={url(p.path)} />
-        ))}
-        <SectionTitle right={<Badge tone="amber">{LABELS.legacyHarnessImage}</Badge>}>visual_feedback 画像</SectionTitle>
-        <div className="grid grid-cols-2 gap-2">
-          {images.map(im => <div key={im.path}>
-            <TraceImage src={url(im.path)} alt={im.path} provenance="legacy_harness" className="h-32 w-full" />
-            <div className="text-[10px] font-mono text-text-tertiary break-all">{im.path}</div>
-          </div>)}
-        </div>
-        {images.length === 0 && <div className="text-xs text-text-tertiary">保存画像なし</div>}
-      </div>
-    );
-  } else if (tab === 0 && ioSection === 1) {
-    body = <div className="space-y-4">
-      {responses && !selectedFeedback && <LegacyResponses url={url(responses.path)} index={responseIndex} onIndex={setResponseIndex} />}
-      {feedback.length > 0 && <section className="space-y-2">
-        <SectionTitle>VDMの説明（出典: differencing_feedback）</SectionTitle>
-        <Notice>保存された差分の説明です。比較に使った画像・送信payloadの有無は別途確認が必要です。</Notice>
-        {feedback.filter(f => !selectedFeedback || f.path === selectedFeedback).map(f => <details key={`${f.path}-${selectedFeedback ?? 'all'}`} open={selectedFeedback === f.path}><summary className="cursor-pointer text-sm">{f.path}</summary><LazyText title="VDMの見立て（評価結果とは別）" url={url(f.path)} /></details>)}
+    body = <div className="replay-legacy-content">
+      <p className="replay-legacy-eyebrow">モデル入力</p><h2>入力と保存画像</h2>
+      {data.model_input_recorded === true ? <section>
+        <h3>送信したメッセージと STATE</h3>
+        {stateFiles.map(p => <details className="replay-legacy-fold" key={p.path}>
+          <summary>{p.path}</summary><LazyText title="記録された入力" url={url(p.path)} />
+        </details>)}
+      </section> : <NotRecorded reason="この trial に送信 payload を確認できるトレースはありません。" />}
+      {images.length > 0 && <section>
+        <h3>保存されたカメラ画像</h3>
+        <p className="replay-legacy-source">{LABELS.legacyHarnessImage}</p>
+        <div className="replay-legacy-images">{images.map((im, i) => <figure key={im.path}>
+          <TraceImage src={url(im.path)} alt={im.path} provenance="legacy_harness" compact className="replay-legacy-image" />
+          <figcaption>保存画像 {i + 1}</figcaption>
+        </figure>)}</div>
       </section>}
-      {!selectedFeedback && (code && typeof code.text === 'string' ? responses ? (
-        <details><summary className="cursor-pointer text-sm">code.py（全ブロック）{code.truncated ? '（先頭のみ）' : ''}</summary><CodeView code={code.text} /></details>
-      ) : (
-      <div className="space-y-1">
-        <div className="text-[11px] font-mono text-text-tertiary">code.py{code.truncated ? '（先頭のみ）' : ''}</div>
-        <CodeView code={code.text} />
-      </div>
-    ) : (
-      <NotRecorded reason="code.py がありません" />
-    ))}</div>;
+      <section><h3>保存されたプロンプト</h3>
+        <LegacyPromptNotice modelInputRecorded={data.model_input_recorded === true} />
+        {responses && <button type="button" className="replay-legacy-link" onClick={() => selectRecord(1)}>各回答のプロンプトを開く →</button>}
+        {prompts.length === 0 && !responses && <p className="replay-legacy-note">保存されたプロンプト文字列はありません。</p>}
+        {prompts.map(p => <details className="replay-legacy-fold" key={p.path}>
+          <summary>{p.path}</summary><LazyText title="ハーネス保存プロンプト" url={url(p.path)} />
+        </details>)}
+      </section>
+    </div>;
+  } else if (tab === 0 && ioSection === 1) {
+    body = selectedFeedback ? <div className="replay-legacy-content">
+      <p className="replay-legacy-eyebrow">VDM · 記録 {feedbackIndex + 1}</p><h2>動作後の変化を確認する</h2>
+      <p className="replay-legacy-note">比較に使った画像と実際の送信入力は、この差分ログからは確認できません。</p>
+      {feedback.filter(f => f.path === selectedFeedback).map(f => <section key={f.path} data-legacy-vdm={f.path}>
+        <h3>返った説明</h3><LazyText title="VDMの見立て（評価結果とは別）" url={url(f.path)} mono={false} />
+        <p className="replay-legacy-source">出典: {f.path}</p>
+      </section>)}
+    </div> : <div className="replay-legacy-content">
+      <p className="replay-legacy-eyebrow">Python・モデル応答</p><h2>回答と実行されたコード</h2>
+      {responses && <LegacyResponses url={url(responses.path)} index={responseIndex} onIndex={setResponseIndex} />}
+      {code && typeof code.text === 'string' ? responses ? (
+        <details className="replay-legacy-fold"><summary>実行コードの全体を見る{code.truncated ? '（先頭のみ）' : ''}</summary>
+          <p className="replay-legacy-source">出典: code.py</p><CodeView code={code.text} />
+        </details>
+      ) : <section><h3>実行コード{code.truncated ? '（先頭のみ）' : ''}</h3><CodeView code={code.text} /><p className="replay-legacy-source">出典: code.py</p></section>
+      : !responses && <NotRecorded reason="code.py がありません" />}
+      {summary && <button type="button" className="replay-legacy-link" onClick={() => selectRecord(2)}>標準出力・標準エラーを見る →</button>}
+    </div>;
   } else if (tab === 0 && ioSection === 2) {
-    body = (
-      <div className="space-y-3">
-        <div className="text-[11px] text-text-tertiary">
-          summary.txt から読み取った値です（最後のブロックの stdout と、ターンをまたいで連結された stderr）。ブロックごとの記録ではありません。
-        </div>
-        {!summary && <NotRecorded reason="summary.txt がありません" />}
-        {summary && !summary.parsed && (
-          <>
-            <Notice tone="amber">summary.txt の形式を読み取れませんでした。全文をそのまま表示します。</Notice>
-            {typeof summary.raw === 'string' && <TextView text={summary.raw} />}
-          </>
-        )}
-        {summary && summary.parsed === true && (
-          <>
-            <SectionTitle>評価・ハーネスの記録（出典: summary.txt）</SectionTitle>
-            <KV
-              rows={[
-                ['sandbox_rc', String(summary.sandbox_rc ?? '—')],
-                ['reward', fmtNum(summary.reward)],
-                ['task_completed', String(summary.task_completed ?? '—')],
-                ['terminated / truncated', `${String(summary.terminated ?? '—')} / ${String(summary.truncated ?? '—')}`],
-                ['code blocks / regenerations / finishes', `${String(summary.num_code_blocks ?? '—')} / ${String(summary.num_regenerations ?? '—')} / ${String(summary.num_finishes ?? '—')}`],
-              ]}
-            />
-            {summary.ambiguous_split === true && <Notice tone="amber">stdout と stderr の境目が一意に決まりません（stdout に区切りの文字列が含まれています）。</Notice>}
-            <SectionTitle>stdout（実行コードの申告）</SectionTitle>
-            {typeof summary.stdout === 'string' ? <TextView text={summary.stdout || '（空）'} /> : <div className="text-xs text-text-tertiary">なし</div>}
-            <SectionTitle>stderr</SectionTitle>
-            {typeof summary.stderr === 'string' ? <TextView text={summary.stderr || '（空）'} tone="stderr" /> : <div className="text-xs text-text-tertiary">なし</div>}
-          </>
-        )}
-      </div>
-    );
-  } else if (tab === 0 && ioSection === 3) {
-    body = (
-      <div className="space-y-3">
-        <DebugBanner />
-        <SectionTitle>trial_record.json</SectionTitle>
-        {data.trial_record !== undefined && data.trial_record !== null ? <RawJson value={data.trial_record} /> : <NotRecorded />}
-        {other.length > 0 && (
-          <>
-            <SectionTitle>その他のファイル</SectionTitle>
-            <div className="space-y-0.5 text-xs font-mono">
-              {other.map((f) => (
-                <div key={f.path}>
-                  <a href={url(f.path)} target="_blank" rel="noreferrer" className="text-accent underline underline-offset-2">
-                    {f.path}
-                  </a>{' '}
-                  <span className="text-text-tertiary">{fmtBytes(f.bytes)}</span>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    );
+    body = <div className="replay-legacy-content">
+      <p className="replay-legacy-eyebrow">Python実行・評価</p><h2>実行の出力を確認する</h2>
+      <p className="replay-legacy-note">最後のブロックの標準出力と、全ターンの標準エラーです。ブロックごとの記録ではありません。</p>
+      {!summary && <NotRecorded reason="summary.txt がありません" />}
+      {summary && !summary.parsed && <>
+        <Notice tone="amber">summary.txt の形式を読み取れませんでした。全文をそのまま表示します。</Notice>
+        {typeof summary.raw === 'string' && <TextView text={summary.raw} />}
+      </>}
+      {summary?.parsed === true && <>
+        {summary.ambiguous_split === true && <Notice tone="amber">stdout と stderr の境目が一意に決まりません（stdout に区切りの文字列が含まれています）。</Notice>}
+        <section><h3>標準出力</h3><p className="replay-legacy-source">実行コードの申告 · summary.txt</p>
+          {typeof summary.stdout === 'string' ? <TextView text={summary.stdout || '（空）'} /> : <NotRecorded reason="標準出力なし" />}
+        </section>
+        <section><h3>標準エラー</h3><p className="replay-legacy-source">Python実行の記録 · summary.txt</p>
+          {typeof summary.stderr === 'string' ? <TextView text={summary.stderr || '（空）'} tone="stderr" /> : <NotRecorded reason="標準エラーなし" />}
+        </section>
+        <section><h3>試行全体の評価</h3><p className="replay-legacy-source">評価・ハーネスの記録 · summary.txt</p>
+          <KV rows={[
+            ['タスク完了', String(summary.task_completed ?? '未記録')], ['reward', fmtNum(summary.reward)],
+            ['terminated / truncated', `${String(summary.terminated ?? '—')} / ${String(summary.truncated ?? '—')}`],
+          ]} />
+        </section>
+      </>}
+    </div>;
   } else if (tab === 1 || tab === 2) {
-    body = other.some(f => legacyEnsembleTurn(f.path) !== null)
+    body = ensembleTurns.length > 0
       ? <LegacyEnsemble paths={other.map(f => f.path)} url={url} responsesUrl={responses ? url(responses.path) : undefined}
           index={ensembleIndex} onIndex={setEnsembleIndex} mode={tab === 1 ? 'candidates' : 'synthesis'}
           onCode={index => { setResponseIndex(index); selectRecord(1); }} />
       : responses
       ? <LegacyResponses url={url(responses.path)} index={responseIndex} onIndex={setResponseIndex} ensemble candidatesOnly={tab === 1} />
       : <NotRecorded reason="アンサンブルの候補と統合を対応付けるトレースがありません" />;
-  } else {
-    body = <NotRecorded reason="トレースが無いため、入力の差分は計算できません" />;
   }
 
-  return (
-    <div data-legacy-replay className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
-      <div data-legacy-media className="lg:w-[60%] min-w-0 lg:h-full flex-shrink-0 lg:flex-shrink flex flex-col border-r border-surface-border">
-        <div className="flex-shrink-0 p-3 space-y-2">
-        <div className="flex flex-wrap gap-2 items-center">
-          <SectionTitle>ロボットの録画</SectionTitle>
-          {videos.length > 1 && <select aria-label="録画ファイル" value={chosenVideo.path} onChange={e => setVideoPath(e.target.value)} className="text-xs bg-surface-sunken border border-surface-border rounded p-1">
-            {videos.map(v => <option key={v.path} value={v.path}>{v.path}</option>)}
+  return <div data-legacy-replay className="replay-legacy-layout">
+    <div data-legacy-media className="replay-legacy-left">
+      <div className="replay-legacy-media">
+        <div className="replay-legacy-media-heading">
+          <span>ロボットの録画</span>
+          {videos.length > 1 && <select aria-label="録画ファイル" value={chosenVideo?.path ?? ''} onChange={e => { videoRef.current?.pause(); setVideoPath(e.target.value); }}>
+            {videos.map(v => <option key={v.path} value={v.path}>{v.path === 'video_combined.mp4' ? '試行全体' : v.path.replace(/^video_turn_(\d+)\.mp4$/, 'ターン $1')}</option>)}
           </select>}
         </div>
-        <Notice>同期情報なし · {videos.length ? '対応するフレーム・実行ログがないため、録画のみ再生します。' : '録画とフレーム対応表が見つかりません。'}</Notice>
-        {videos.length === 0 && <div className="text-xs text-text-tertiary">{LABELS.notCaptured}</div>}
-        {chosenVideo && <video key={chosenVideo.path} ref={videoRef} src={url(chosenVideo.path)} aria-label="試行の録画" controls preload="metadata" className="w-full h-[38vh] min-h-[200px] max-h-[420px] object-contain border border-surface-border bg-black" />}
-        </div>
-        <section data-legacy-log aria-label="保存された処理ログ" className="flex-1 min-h-[220px] lg:min-h-0 overflow-y-auto p-3 border-t border-surface-border space-y-2">
-          <SectionTitle>処理ログ</SectionTitle>
-          <p className="text-xs text-text-tertiary">記録を選ぶと録画を止め、右欄を切り替えます。動画上の位置は未確認です。</p>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <button type="button" onClick={() => selectRecord(0)} className="border border-surface-border rounded p-2 hover:text-accent">入力・保存画像</button>
-            <button type="button" onClick={() => selectRecord(1)} className="border border-surface-border rounded p-2 hover:text-accent">Python実行・回答</button>
-            <button type="button" onClick={() => selectRecord(2)} className="border border-surface-border rounded p-2 hover:text-accent">stdout / stderr・評価</button>
-          </div>
-          {feedback.map((f, i) => <button key={f.path} type="button" data-legacy-log-file={f.path} onClick={() => selectRecord(1, f.path)} className="block w-full text-left text-xs border border-surface-border rounded p-2 hover:text-accent">
-            VDM {i + 1} <span className="text-text-tertiary">· {f.path}</span>
-          </button>)}
-          {ensembleTurns.map(turn => <div key={turn} className="flex flex-wrap items-center gap-3 text-xs border border-surface-border rounded p-2">
-            <span>アンサンブル · {turn === 0 ? '初回' : `修正 ${turn}`}</span>
-            <button type="button" onClick={() => selectEnsemble(turn, 1)} className="text-accent underline">候補を開く</button>
-            <button type="button" onClick={() => selectEnsemble(turn, 2)} className="text-accent underline">統合結果を開く</button>
-          </div>)}
-          {typeof provenance?.notice === 'string' && <Notice tone="amber">{provenance.notice}</Notice>}
-          <details><summary className="cursor-pointer text-xs text-text-tertiary">試行の記録情報</summary><KV rows={[
-            ['run', runId], ['task', trial.task], ['condition', trial.condition], ['trial', trial.trialDir],
-            ['ディレクトリ名から', `sandbox_rc=${String(data.sandbox_rc ?? '—')} · reward=${fmtNum(data.reward)} · task_completed=${String(data.task_completed ?? '—')}`],
-          ]} /></details>
-        </section>
+        {chosenVideo ? <video key={chosenVideo.path} ref={videoRef} src={url(chosenVideo.path)} aria-label="試行の録画" controls preload="metadata" className="replay-legacy-video" />
+          : <div className="replay-legacy-video-missing">録画は保存されていません</div>}
+        <p className="replay-legacy-sync"><strong>同期情報なし</strong><span>{videos.length ? '対応するフレーム情報がないため、録画と記録を個別に確認できます。' : '録画とフレーム対応表が見つかりません。'}</span></p>
+        {typeof provenance?.notice === 'string' && <p className="replay-legacy-provenance">{provenance.notice}</p>}
       </div>
-      <div data-legacy-details className="flex-1 min-w-0 min-h-[500px] lg:min-h-0 flex flex-col">
-        <div className="flex-shrink-0 flex items-end gap-0.5 px-2 pt-1.5 border-b border-surface-border bg-surface-raised">
-          {['入出力', '候補', '統合結果'].map((label, i) => (
-            <button
-              key={label}
-              type="button"
-              role="tab"
-              aria-selected={tab === i}
-              onClick={() => setTab(i)}
-              className={`px-3 py-1.5 text-xs font-display whitespace-nowrap rounded-t-md border-b-2 ${
-                tab === i ? 'text-accent border-accent bg-surface' : 'text-text-tertiary border-transparent hover:text-text-primary'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+      <section data-legacy-log aria-label="保存された処理ログ" className="replay-legacy-log">
+        <div className="replay-legacy-log-heading"><h2>保存された記録</h2><span>選ぶと録画を停止</span></div>
+        <div className="replay-legacy-rows">
+          {hasInputRecords && recordButton('section-0', '入力とカメラ画像を見る', '入力', () => selectRecord(0))}
+          {hasCodeRecords && recordButton('section-1', '回答と実行コードを見る', 'Python', () => selectRecord(1))}
+          {summary && recordButton('section-2', '実行の出力と評価を確認する', '実行ログ', () => selectRecord(2))}
+          {feedback.map((f, i) => recordButton(f.path, `動作後の変化を確認する · ${i + 1}`, 'VDM', () => selectRecord(1, f.path), f.path))}
+          {ensembleTurns.map(turn => recordButton(`ensemble-${turn}`, `${turn === 0 ? '初回' : `修正 ${turn}`}の候補と統合を読む`, 'アンサンブル', () => selectEnsemble(turn, 1)))}
+          {!hasAnyRecords && <p className="replay-legacy-note">この試行に処理ログは保存されていません。</p>}
         </div>
-        <div role="tabpanel" className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
-          {tab === 0 && <label className="block text-xs">表示する記録 <select aria-label="入出力の記録" value={ioSection} onChange={e => { setIoSection(Number(e.target.value)); setSelectedFeedback(null); }} className="bg-surface-sunken border border-surface-border rounded ml-2 p-1">
-            {['送信入力・保存プロンプト', '回答・Pythonコード・VDM', '標準出力・標準エラー・評価', '記録情報・元ファイル'].map((label, i) => <option key={i} value={i}>{label}</option>)}
-          </select></label>}
-          {body}
-        </div>
+      </section>
+    </div>
+    <div data-legacy-details className="replay-legacy-details">
+      <div role="tablist" aria-label="処理の詳細" className="replay-legacy-tabs">
+        {['入出力', '候補', '統合結果'].map((label, i) => <button key={label} type="button" role="tab"
+          aria-selected={tab === i} onClick={() => setTab(i)}>{label}</button>)}
+      </div>
+      <div role="tabpanel" className="replay-legacy-detail-body" key={`${tab}-${ioSection}-${selectedFeedback ?? ''}`}>
+        {body}
+        <details className="replay-legacy-metadata"><summary>記録の詳細</summary>
+          <KV rows={[
+            ['run', runId], ['task', trial.task], ['condition', trial.condition], ['trial', trial.trialDir],
+            ['ディレクトリ名の値', `sandbox_rc=${String(data.sandbox_rc ?? '—')} · reward=${fmtNum(data.reward)} · task_completed=${String(data.task_completed ?? '—')}`],
+          ]} />
+          <p className="replay-legacy-note">以下は記録情報です。モデルに渡した入力とは区別しています。</p>
+          {data.trial_record != null && <details className="replay-legacy-fold"><summary>trial_record.json</summary><RawJson value={data.trial_record} /></details>}
+          {summary?.parsed === true && <details className="replay-legacy-fold"><summary>評価の補足</summary><KV rows={[
+            ['sandbox_rc', String(summary.sandbox_rc ?? '—')],
+            ['code blocks / regenerations / finishes', `${String(summary.num_code_blocks ?? '—')} / ${String(summary.num_regenerations ?? '—')} / ${String(summary.num_finishes ?? '—')}`],
+          ]} /></details>}
+          {other.length > 0 && <details className="replay-legacy-fold"><summary>元ファイルを開く</summary><ul className="replay-legacy-files">{other.map(f => <li key={f.path}>
+            <a href={url(f.path)} target="_blank" rel="noreferrer">{f.path}</a><span>{fmtBytes(f.bytes)}</span>
+          </li>)}</ul></details>}
+        </details>
       </div>
     </div>
-  );
+  </div>;
 }
 
-function LazyText({ title, url }: { title: string; url: string }) {
+function LazyText({ title, url, mono = true }: { title: string; url: string; mono?: boolean }) {
   const res = useAsync(() => fetchText(url), [url]);
-  return (
-    <div>
-      <div className="text-[11px] font-mono text-text-tertiary mb-1">{title}</div>
-      {res.loading && <Spinner />}
-      {res.error && <ErrorText>{res.error}</ErrorText>}
-      {res.data !== null && <TextView text={res.data} />}
-    </div>
-  );
+  return <div>
+    <p className="replay-legacy-source">{title}</p>
+    {res.loading && <Spinner />}{res.error && <ErrorText>{res.error}</ErrorText>}
+    {res.data !== null && <TextView text={res.data} mono={mono} />}
+  </div>;
 }

@@ -1,0 +1,44 @@
+.replay-workspace .ensemble-detail {
+  min-width: 0;
+}
+
+.replay-workspace .ensemble-heading h2 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.45;
+  font-weight: 600;
+}
+
+.replay-workspace .ensemble-candidate-picker {
+  padding: 14px 16px;
+}
+
+.replay-workspace .ensemble-candidate-picker select {
+  width: 100%;
+  border: 1px solid var(--color-surface-border, #dce3da);
+  padding: 9px 10px;
+}
+
+.replay-workspace .ensemble-common > summary,
+.replay-workspace .ensemble-membership > summary,
+.replay-workspace .ensemble-record > summary {
+  padding-block: 5px;
+  line-height: 1.6;
+}
+
+.replay-workspace .ensemble-response {
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.replay-workspace .ensemble-record {
+  margin-top: 26px;
+  padding-top: 15px;
+}
+
+.replay-workspace .ensemble-synthesis + .ensemble-synthesis {
+  border-top: 1px solid var(--color-surface-border, #dce3da);
+  padding-top: 24px;
+  margin-top: 28px;
+}

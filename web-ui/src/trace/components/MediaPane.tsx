@@ -75,26 +75,14 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
   }, [live3d.available, tab]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface-raised">
-      <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-surface-border">
-        <div className="flex gap-1">
-          <SmallButton active={tab === 'video'} onClick={() => setTab('video')}>
-            動画＋処理タイムライン
-          </SmallButton>
-          <SmallButton active={tab === 'recorded'} onClick={() => setTab('recorded')}>
-            記録フレーム
-          </SmallButton>
-          {live3d.available && (
-            <SmallButton active={tab === 'live'} onClick={() => setTab('live')}>
-              {LABELS.live3dTab}
-            </SmallButton>
-          )}
-        </div>
-        {!live3d.available && (
-          <span className="text-[11px] text-text-tertiary" title={live3d.reason}>
-            {LABELS.past3dUnsupported}
-          </span>
-        )}
+    <div className="replay-media flex flex-col h-full min-h-0">
+      <div className="replay-media-tools">
+        <label>表示 <select aria-label="動画・記録フレーム" value={tab} onChange={e=>setTab(e.target.value as 'video'|'recorded'|'live')}>
+          {videos.length>0 && <option value="video">動画</option>}
+          <option value="recorded">記録フレーム</option>
+          {live3d.available && <option value="live">{LABELS.live3dTab}</option>}
+        </select></label>
+        {tab === 'recorded' && !live3d.available && <span title={live3d.reason}>{LABELS.past3dUnsupported}</span>}
         {tab === 'recorded' && allCameras.length > 0 && (
           <label className="ml-auto flex items-center gap-1 text-[11px] text-text-tertiary">
             カメラ

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { buildEpisodeModel, resolveSelection } from '../model';
 import { EnsembleTab } from '../components/tabs/EnsembleTab';
-import { InputOutputTab } from '../components/tabs/InputOutputTab';
+import { InputOutputTab, RecordedModelOutput } from '../components/tabs/InputOutputTab';
 import type { TabProps } from '../components/DetailTabs';
 import { Rec } from './fixtures';
 
@@ -41,6 +41,7 @@ test('recorded service I/O and Python execution use their own artifacts and stre
   r.serviceEnd(service,{response_summary:{masks:{path:'assets/mask.npz'}}});
   r.apiEnd(api);
   r.stream(block,'stdout','EXECUTED_STDOUT');
+  r.stream(block,'stdout','SECOND_STDOUT_RECORD');
   r.stream(block,'stderr','EXECUTED_STDERR');
   r.blockEnd(block,0,0);
   const perception = renderToStaticMarkup(<InputOutputTab {...props(r,service.event_id)}/>);
@@ -50,6 +51,45 @@ test('recorded service I/O and Python execution use their own artifacts and stre
   assert.match(perception,/assets\/mask.npz/);
   assert.match(execution,/EXECUTED_CODE/);
   assert.match(execution,/EXECUTED_STDOUT/);
+  assert.match(execution,/SECOND_STDOUT_RECORD/);
   assert.match(execution,/EXECUTED_STDERR/);
   assert.match(execution,/成功メッセージはコード自身の申告/);
+});
+
+test('the focused service view deduplicates image references and honors failed artifact writes', () => {
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null); const api = r.apiStart(block,'perceive');
+  const service = r.serviceStart(api,'sam3','segment');
+  service.data = {...service.data as Record<string,unknown>, request_summary:{text_prompt:'red cube', image:{image:{path:'assets/input.png',written:true}}}};
+  service.artifacts = [{path:'assets/input.png',label:'perception_input',written:true}];
+  const end = r.serviceEnd(service,{response_summary:{mask:{path:'assets/mask.png',written:true}}});
+  end.artifacts = [{path:'assets/mask.png',label:'perception_output',written:false,reason:'disk_full'}];
+  const html = renderToStaticMarkup(<InputOutputTab {...props(r,service.event_id)}/>);
+  assert.equal((html.match(/<img /g) ?? []).length,1);
+  assert.match(html,/SAM3の入出力/);
+  assert.match(html,/disk_full/);
+  assert.doesNotMatch(html,/<img[^>]*mask.png/);
+  assert.doesNotMatch(html,/shape=|リクエストの要約|HTTP 試行/);
+});
+
+test('focused model output stays with the selected attempt and does not link another attempt execution', () => {
+  const r = new Rec(); r.episodeStart();
+  const failed = r.request('code_generator','retry',1); r.attemptError(failed,503,'RETRY_FAILED');
+  const retry = r.request('code_generator','retry',2); const response = r.response(retry,200,'FINAL_REPLY');
+  r.blockStart(response,'EXECUTED_AFTER_RETRY');
+  const first = renderToStaticMarkup(<RecordedModelOutput {...props(r,failed.event_id)}/>);
+  assert.match(first,/RETRY_FAILED/);
+  assert.doesNotMatch(first,/FINAL_REPLY|実行されたPythonへ/);
+  const second = renderToStaticMarkup(<RecordedModelOutput {...props(r,retry.event_id)}/>);
+  assert.match(second,/FINAL_REPLY/);
+  assert.match(second,/実行されたPythonへ/);
+});
+
+test('focused model output labels interrupted stream content as partial', () => {
+  const r = new Rec(); r.episodeStart();
+  const request = r.request('code_generator','stream',1,{stream:true});
+  r.logicalError(request,'GeneratorExit','stopped',{streamed:true,partial_content:'PARTIAL_RESPONSE'});
+  const html = renderToStaticMarkup(<RecordedModelOutput {...props(r,request.event_id)}/>);
+  assert.match(html,/中断までに受信した回答（部分出力）/);
+  assert.match(html,/PARTIAL_RESPONSE/);
 });

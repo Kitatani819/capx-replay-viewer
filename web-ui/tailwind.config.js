@@ -13,12 +13,12 @@ export default {
       },
       colors: {
         surface: {
-          DEFAULT: '#0a0a0a',
-          raised: '#141414',
-          overlay: '#1a1a1a',
-          sunken: '#050505',
-          border: '#262626',
-          'border-light': '#333333',
+          DEFAULT: 'rgb(var(--replay-surface) / <alpha-value>)',
+          raised: 'rgb(var(--replay-raised) / <alpha-value>)',
+          overlay: 'rgb(var(--replay-overlay) / <alpha-value>)',
+          sunken: 'rgb(var(--replay-sunken) / <alpha-value>)',
+          border: 'rgb(var(--replay-border) / <alpha-value>)',
+          'border-light': 'rgb(var(--replay-border-light) / <alpha-value>)',
         },
         sand: {
           50: '#fafafa',
@@ -33,19 +33,19 @@ export default {
           900: '#0a0a0a',
         },
         accent: {
-          DEFAULT: '#D4A017',
-          light: '#F0C040',
-          dark: '#B8860B',
+          DEFAULT: 'rgb(var(--replay-accent) / <alpha-value>)',
+          light: 'rgb(var(--replay-accent-light) / <alpha-value>)',
+          dark: 'rgb(var(--replay-accent-dark) / <alpha-value>)',
         },
         nv: {
           green: '#76b900',
           'green-light': '#8ecf10',
         },
         text: {
-          primary: '#E8E8E8',
-          secondary: '#888888',
-          tertiary: '#737373',
-          muted: '#404040',
+          primary: 'rgb(var(--replay-text-primary) / <alpha-value>)',
+          secondary: 'rgb(var(--replay-text-secondary) / <alpha-value>)',
+          tertiary: 'rgb(var(--replay-text-tertiary) / <alpha-value>)',
+          muted: 'rgb(var(--replay-text-muted) / <alpha-value>)',
         },
       },
       fontSize: {

@@ -21,7 +21,6 @@ import { dataAssetRef, pendingAsset, type DataAssetState } from '../dataAsset';
 import { LABELS } from '../labels';
 import type { EpisodeModel, Selection, TNode } from '../model';
 import type { EpisodeSummary, TraceEvent } from '../types';
-import { nodeTitle } from '../model';
 import { Notice } from './common';
 import { DataAssetInline, NO_ASSET_STATES } from './DataAssetState';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -179,8 +178,8 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
     }
   }
   return (
-    <div className="flex flex-col h-full min-h-0 bg-surface">
-      <div role="tablist" aria-label="処理の詳細" className="flex-shrink-0 flex items-end gap-0.5 px-2 pt-1.5 border-b border-surface-border bg-surface-raised overflow-x-auto">
+    <div className="replay-inspector flex flex-col h-full min-h-0 bg-surface-raised">
+      <div role="tablist" aria-label="処理の詳細" className="replay-tabs flex-shrink-0 flex items-end border-b border-surface-border overflow-x-auto">
         {LABELS.replayTabs.map((label, i) => (
           <button
             key={label}
@@ -195,13 +194,8 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
             {label}
           </button>
         ))}
-        {selection && (
-          <span className="ml-auto mb-1.5 pl-3 text-[11px] text-text-tertiary truncate font-mono" title={selection.eventId}>
-            {nodeTitle(selection.node)} · {selection.eventId}
-          </span>
-        )}
       </div>
-      <div ref={panelRef} role="tabpanel" className="flex-1 min-h-0 overflow-y-auto p-3">
+      <div ref={panelRef} role="tabpanel" className="replay-detail-body flex-1 min-h-0 overflow-y-auto">
         {selection && <DataAssetNotice events={selection.node.events} related={assetEvents} states={assetStates} onRetry={onRetryAsset} />}
         <ErrorBoundary key={`${tab}|${eventId ?? ''}`} label={`「${LABELS.replayTabs[tab] ?? ''}」タブ`}>
           {body}

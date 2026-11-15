@@ -1,0 +1,24 @@
+.replay-io { font-size: 15px; line-height: 1.65; }
+.replay-io-title { font-size: 24px; font-weight: 650; line-height: 1.4; margin: 0 0 26px; }
+.replay-io-section { margin: 0 0 24px; min-width: 0; }
+.replay-io-section > h3 { font-size: 15px; font-weight: 650; margin: 0 0 10px; }
+.replay-io-section p { margin: 6px 0; }
+.replay-io-text { min-width: 0; }
+.replay-io-text pre, .replay-io-raw { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: 15px; line-height: 1.7; font-family: inherit; }
+.replay-io-text pre code { font-size: 14px; }
+.replay-io-text .font-mono { font-size: 14px; line-height: 1.65; }
+.replay-io-text-folded { max-height: 300px; overflow: hidden; }
+.replay-io-muted { color: #68766e; font-size: 14px; line-height: 1.65; margin: 10px 0 20px; overflow-wrap: anywhere; }
+.replay-io-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.replay-io-images figure { margin: 0; min-width: 0; }
+.replay-io-images figcaption { font-size: 14px; margin-bottom: 8px; }
+.replay-io-image { width: 100%; height: 210px; margin: 0 0 8px; }
+.replay-io-image img { border-radius: 8px; background: #edf0ec; }
+.replay-io-link { color: rgb(var(--replay-accent, 44 90 72)); text-decoration: underline; text-underline-offset: 4px; font-size: 14px; margin: 8px 10px 8px 0; }
+.replay-io-disclosure { border-top: 1px solid rgb(var(--replay-border, 223 229 222)); padding-top: 18px; margin-top: 28px; }
+.replay-io-disclosure > summary { cursor: pointer; font-size: 15px; color: #68766e; }
+.replay-io-disclosure-body { padding-top: 20px; overflow-wrap: anywhere; }
+.replay-io-model-input > .replay-io-disclosure { border-top: 0; padding-top: 0; margin: 0 0 22px; }
+.replay-io-select { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 10px; font-size: 14px; }
+.replay-io-select select { max-width: 100%; padding: 4px 8px; border: 1px solid rgb(var(--replay-border, 223 229 222)); border-radius: 5px; background: white; color: #25352d; }
+@media (max-width: 800px) { .replay-io-images { grid-template-columns: minmax(0, 1fr); } }

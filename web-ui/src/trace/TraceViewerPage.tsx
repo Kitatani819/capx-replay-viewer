@@ -35,6 +35,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import './replay.css';
 import { traceApi } from './api';
 import { applyDataAssets, dataAssetTargets, withTargetsLoading } from './dataAsset';
 import { nextFocusToken } from './focus';
@@ -303,7 +304,7 @@ export default function TraceViewerPage() {
   }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data]);
 
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
-  const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-left-width', Math.round(window.innerWidth * .6));
+  const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-a-left-width', Math.round((window.innerWidth - 112) * .6));
   const mainRef = useRef<HTMLDivElement>(null);
   const clampLeft = (w: number) => {
     const total = mainRef.current?.getBoundingClientRect().width ?? 1400;
@@ -332,7 +333,7 @@ export default function TraceViewerPage() {
       currentEpisode={episodeId}
       onPick={pick}
       onPickLegacy={pickLegacy}
-      onClose={runId && episodeId ? () => setPickerOpen(false) : undefined}
+      onClose={(runId && episodeId) || (legacyRun && legacyTrial) ? () => setPickerOpen(false) : undefined}
     />
   );
 
@@ -346,8 +347,8 @@ export default function TraceViewerPage() {
   // Font ligatures are off: the viewer shows recorded text as it was sent ("->" must not
   // turn into an arrow, "!=" into "≠").
   return (
-    <div className="h-full flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]">
-      <header className="flex-shrink-0 flex flex-wrap items-center gap-3 px-5 py-3 border-b border-surface-border bg-surface-raised">
+    <div className={`${!simple ? 'replay-workspace ' : ''}h-full flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]`}>
+      {simple && <header className="flex-shrink-0 flex flex-wrap items-center gap-3 px-5 py-3 border-b border-surface-border bg-surface-raised">
         <span className="font-semibold">{simple ? '実験を見る' : '実験の詳細'}</span>
         {simple && ep && <><span className="text-sm text-text-secondary">{summary.data?.task ?? ''} · {summary.data?.condition ?? ''}</span><span className="text-sm text-accent">試行全体の最終結果：{simpleOutcome}</span></>}
         {simple && summary.data?.trace_complete === false && <span className="text-sm text-amber-200">記録に欠落があります</span>}
@@ -356,13 +357,14 @@ export default function TraceViewerPage() {
           <SmallButton onClick={() => setPickerOpen(true)}>試行を選ぶ</SmallButton>
           <SmallButton onClick={() => setParams({view: detailed ? 'simple' : 'details'})}>{detailed ? '実行回ごとの表示' : 'リプレイを見る'}</SmallButton>
         </div>
-      </header>
+      </header>}
       {!simple && <ErrorBoundary
         label="上部バー"
         resetKey={`${runId ?? ''}|${episodeId ?? ''}`}
         fallbackExtra={<SmallButton onClick={() => setPickerOpen(true)}>run / episode を選ぶ</SmallButton>}
       >
         <TopBar
+          onSimpleView={showLegacy ? undefined : () => setParams({view: 'simple'})}
           runLabel={showLegacy ? legacyRun : runId}
           episodeLabel={showLegacy ? `${legacyTrial.task}/${legacyTrial.condition}/${legacyTrial.trialDir}` : episodeId}
           episodeId={ep ? episodeId : null}
@@ -397,7 +399,7 @@ export default function TraceViewerPage() {
       </ErrorBoundary>}
       {pickerOpen && (
         <div className="fixed inset-0 z-40 bg-black/60 flex items-start justify-center pt-14" onClick={() => setPickerOpen(false)}>
-          <div className="w-[min(1200px,94vw)] h-[80vh] rounded-lg border border-surface-border-light shadow-2xl overflow-hidden animate-scale-in" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="試行を選ぶ" className="w-[min(1200px,94vw)] h-[80vh] rounded-lg border border-surface-border-light shadow-2xl overflow-hidden animate-scale-in" onClick={(e) => e.stopPropagation()}>
             {picker}
           </div>
         </div>
@@ -412,7 +414,7 @@ export default function TraceViewerPage() {
         </ErrorBoundary>
       ) : (
         <main ref={mainRef} className="replay-layout flex-1 min-h-0 flex">
-          <div data-replay-pane="left" className="replay-left flex-shrink-0 min-w-0 border-r border-surface-border bg-surface" style={{ width: leftWidth }}>
+          <div data-replay-pane="left" className="replay-left flex-shrink-0 min-w-0" style={{ width: leftWidth }}>
             {summary.error && !summary.data ? (
               <div className="p-4">
                 <ErrorText>エピソードを開けません: {summary.error}</ErrorText>

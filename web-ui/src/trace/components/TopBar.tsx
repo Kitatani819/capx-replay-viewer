@@ -42,6 +42,7 @@ export interface PollStatus {
 }
 
 interface TopBarProps {
+  onSimpleView?: () => void;
   /** Labels of the run/episode picker button. */
   runLabel: string | null;
   episodeLabel: string | null;
@@ -256,6 +257,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 }
 
 export function TopBar({
+  onSimpleView,
   runLabel,
   episodeLabel,
   episodeId,
@@ -276,7 +278,7 @@ export function TopBar({
   assetStates = NO_ASSET_STATES,
   onRetryAsset,
 }: TopBarProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const start = model?.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null;
   const end = model?.episodeEnd ? dataOf(model.episodeEnd, 'episode_end') : null;
   const task = start?.task ?? summary?.task ?? null;
@@ -344,81 +346,36 @@ export function TopBar({
   const statusToneValue: Tone = status === 'ended' && readerGaps ? 'amber' : episodeStatusTone(status);
 
   return (
-    <header className="flex-shrink-0 bg-surface-raised border-b border-surface-border header-glow">
-      <div className="flex flex-wrap items-center gap-3 min-h-12 px-4 py-2">
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <img src="/capx_logo.svg" alt="CaP-X" className="w-6 h-6" />
-          <h1 className="text-sm font-bold font-display tracking-widest uppercase text-text-primary">CaP-X Trace</h1>
-        </div>
-        <div className="h-6 w-px bg-surface-border" />
-        <button
-          type="button"
-          onClick={onOpenPicker}
-          className="flex items-center gap-2 px-2.5 py-1 rounded-md border border-surface-border bg-surface-sunken hover:border-accent/40 min-w-0 max-w-[48vw]"
-          title="run / episode を選ぶ"
-        >
-          <span className="text-[10px] uppercase tracking-widest font-display text-text-muted">run</span>
-          <span className="text-xs font-mono text-text-primary truncate">{runLabel ?? '—'}</span>
-          <span className="text-[10px] uppercase tracking-widest font-display text-text-muted">episode</span>
-          <span className="text-xs font-mono text-text-primary truncate">{episodeLabel ?? '—'}</span>
-          <svg className="w-3 h-3 text-text-tertiary flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
-        </button>
-        {legacy}
-        {episodeId && (
-          <>
-            <Badge tone={statusToneValue} title={summary?.status_detail ?? undefined}>
-              {statusText}
-            </Badge>
-            <Badge tone={poll.tone} title={lastFetch ? `最終取得 ${fmtClock(lastFetch)}` : undefined}>
-              {poll.text}
-            </Badge>
-            {gapParts.length > 0 ? (
-              <Badge tone="amber" title={[...gapParts, ...gapDetails].join('\n')}>
-                記録の欠落: {gapParts.slice(0, 3).join(', ')}
-                {gapParts.length > 3 ? ' …' : ''}
-              </Badge>
-            ) : status === 'ended' ? (
-              <Badge tone="neutral">記録の欠落: 報告なし</Badge>
-            ) : null}
-          </>
-        )}
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {episodeId && (
-            <>
-              <div className="flex rounded-md border border-surface-border overflow-hidden" role="group" aria-label="Live / Browse">
-                <button
-                  type="button"
-                  onClick={() => onLive(true)}
-                  className={`px-2.5 py-1 text-xs font-display ${live ? 'bg-accent text-black' : 'text-text-secondary hover:text-text-primary'}`}
-                >
-                  Live
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onLive(false)}
-                  className={`px-2.5 py-1 text-xs font-display ${!live ? 'bg-surface-overlay text-text-primary' : 'text-text-secondary hover:text-text-primary'}`}
-                >
-                  Browse
-                </button>
-              </div>
-              <SmallButton onClick={onRefresh} title="新しいイベントを 1 回取得">
-                更新
-              </SmallButton>
-              <SmallButton onClick={() => setExpanded(!expanded)} title="詳細行の表示切替">
-                {expanded ? '▲' : '▼'}
-              </SmallButton>
-            </>
-          )}
+    <header className="replay-header">
+      <div className="replay-header-main">
+        <h1 title={task ?? undefined}>{task ?? (episodeLabel?.split('/')[0] || '試行のリプレイ')}</h1>
+        <div className="replay-header-actions">
+          {episodeId && status === 'running' && <span className="text-sm text-accent">記録中</span>}
+          {episodeId && gapParts.length > 0 && <span className="replay-warning" title={[...gapParts, ...gapDetails].join('\n')}>記録に欠落があります</span>}
+          {episodeId && reader.error && reader.count > 0 && <span role="status" className="replay-warning" title={reader.error}>記録の更新に失敗しています</span>}
+          <button className="replay-trial-button" onClick={onOpenPicker} title={episodeLabel ?? undefined}>
+            {seed !== null ? `試行 ${seed} を変更` : '試行を選ぶ'} <span aria-hidden>⌄</span>
+          </button>
+          <button className="replay-text-button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>試行の詳細</button>
         </div>
       </div>
-      {episodeId && expanded && unscoped && (
+      <div hidden={!expanded}>
+      <div className="replay-trial-meta">
+        <div className="flex flex-wrap gap-3 items-center">
+          <span className="break-all">run: {runLabel ?? '—'} / episode: {episodeLabel ?? '—'}</span>{legacy}
+          {episodeId && <><Badge tone={statusToneValue}>{statusText}</Badge><span title={lastFetch ? `最終取得 ${fmtClock(lastFetch)}` : undefined}>{poll.text}</span>
+            <label><input type="checkbox" checked={live} onChange={e => onLive(e.target.checked)} /> 新しい記録に追従</label>
+            <SmallButton onClick={onRefresh}>更新</SmallButton></>}
+          {onSimpleView && <SmallButton onClick={onSimpleView}>実行回ごとの表示</SmallButton>}
+        </div>
+        {gapParts.length > 0 && <p className="replay-warning">記録の欠落: {gapParts.join('、')}</p>}
+      </div>
+      {episodeId && unscoped && (
         <div className="px-4 pb-2 text-[11px] text-text-secondary">
           run の unscoped ログです（pid {String(summary?.pid ?? '?')}）。runner の preflight 要求や、所属するエピソードを決められなかったイベントが入ります。エピソードではないため、task・評価器・runner の判定はありません。
         </div>
       )}
-      {episodeId && expanded && !unscoped && (
+      {episodeId && !unscoped && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-4 pb-2">
           <Field label="task">{task ?? '—'}</Field>
           <Field label="seed">{seed ?? '—'}</Field>
@@ -495,6 +452,7 @@ export function TopBar({
           </span>
         </div>
       )}
+      </div>
     </header>
   );
 }
