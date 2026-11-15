@@ -128,14 +128,16 @@ cd ..
 .venv/bin/python scripts/demo/check_replay_layout.py --base-url http://127.0.0.1:8390
 ```
 
-GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエンドのテストとビルド、合成デモのブラウザ操作を実行します。[2026-11-15の検証結果](https://github.com/Kitatani819/capx-replay-viewer/actions/runs/43708787579)は両OSとも成功です。
+GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエンドのテストとビルド、合成デモのブラウザ操作を実行します。[2026-11-16のAPI/Python試作の検証結果](https://github.com/Kitatani819/capx-replay-viewer/actions/runs/43729932868)は両OSとも成功です。
 
 | 環境 | Pythonテスト | フロントテスト / ビルド | ブラウザ操作 |
 |---|---|---|---|
-| Ubuntu（GitHub Actions、x86_64） | 1,491成功・24スキップ | 184成功 / 成功 | 12項目成功・例外0 |
-| macOS 26（GitHub Actions、Apple Silicon） | 1,444成功・71スキップ | 184成功 / 成功 | 12項目成功・例外0 |
+| Ubuntu（GitHub Actions、x86_64） | 1,491成功・24スキップ | 214成功 / 成功 | 16項目成功・例外0 |
+| macOS 26（GitHub Actions、Apple Silicon） | 1,444成功・71スキップ | 214成功 / 成功 | 16項目成功・例外0 |
 
-手元のWSL/UbuntuでもPythonテスト1,491件、Linuxブラウザ操作12項目、初回Python環境作成（通常のvenvとuv）からの起動を確認しました。Windowsで未対応理由を案内するテストも成功しています。Intel Macと、このPCをデュアルブートのUbuntuで起動した状態の実機確認は未実施です。
+手元のWSL/Ubuntuでは、今回Linuxブラウザ操作16項目が成功しました。前回のPythonテスト1,491件、初回Python環境作成（通常のvenvとuv）からの起動、Windowsで未対応理由を案内するテストも成功しています。Intel Macと、このPCをデュアルブートのUbuntuで起動した状態の実機確認は未実施です。
+
+ビルドは成功しますが、ブラウザ互換性データの更新案内と、gzip圧縮前のJavaScriptが500 kBを超える警告が残っています（約503 kB、gzip後約166 kB）。
 
 確認した内容:
 
