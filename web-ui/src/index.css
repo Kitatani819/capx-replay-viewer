@@ -120,6 +120,24 @@ details[open] summary::before {
 /* ============================================
    Reduced motion: respect user preferences
    ============================================ */
+@keyframes replay-focus {
+  from { box-shadow: inset 3px 0 0 rgba(212, 160, 23, 0.95); background-color: rgba(212, 160, 23, 0.20); }
+  to { box-shadow: inset 3px 0 0 rgba(212, 160, 23, 0.45); }
+}
+.replay-layout > .replay-left {
+  /* A saved desktop width must not collapse details after the window shrinks. */
+  max-width: calc(100% - 424px);
+}
+@media (max-width: 900px) {
+  .replay-layout { flex-direction: column; overflow-y: auto; }
+  .replay-layout > [role="separator"] { display: none; }
+  .replay-left { width: 100% !important; max-width: none !important; height: 640px; flex-shrink: 0; }
+  .replay-details { min-height: 580px; flex-shrink: 0; }
+}
+[data-replay-event][data-current="true"],
+[data-timeline-event][aria-pressed="true"] {
+  animation: replay-focus 450ms ease-out;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

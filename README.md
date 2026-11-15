@@ -1,134 +1,116 @@
-# CaP-X Trace Recorder and Viewer
+# CaP-X Replay Viewer
 
-A trace recorder and web viewer for [CaP-X](https://github.com/capgym/cap-x). CaP-X asks a language model to write Python code that controls a simulated robot. The recorder captures model requests and replies, generated code, API and perception-service calls, console output, evaluator results, and simulator video. The viewer opens those traces in a browser. `scripts/make_demo_trace.py` also writes a synthetic trace that anyone can open.
+CaP-Xの録画を見ながら、その場面の観測、モデルの入力・回答、実行されたPythonをブラウザで確認するviewerです。
+[nawta/capx-trace-viewer](https://github.com/nawta/capx-trace-viewer) の `35ce4bb` をベースに、既存の動画再生・フレーム同期・ログ表示を拡張しています。
 
-The distribution contains the `capx_trace_recorder` package, a FastAPI viewer server, and a React frontend. The recorder works with an unmodified upstream CaP-X checkout.
+## できること
 
-## Demo
+- **左にMP4、動画の下に処理タイムラインと詳細ログ、右に「入出力」「候補」「統合結果」の3タブ**を表示します。
+- 再生・シークに対応する処理を強調します。同じ動画位置の処理も個別に選べ、停止したまま右の詳細を切り替えられます。
+- SAM3の入力画像・対象指示・マスク、VDMの比較画像・説明、生成プロンプト・回答、実行Python・stdout/stderrを記録から表示します。
+- 並列候補と統合結果を分けます。候補数は記録に従い、共通入力、temperature、エラー・打ち切りを確認できます。
+- 同期情報が足りない場合は「同期情報なし」と表示し、MP4の再生を維持します。保存されていない入力やマスクは復元・推定しません。
 
-Both recordings show one trial of a small run recorded for this README (`viewer_demo`, two trials). The trial is condition M3 of CaP-Bench, Cube Stack with multiple model turns, using the distributed CaP-X configuration and the locally served model `qwen3.8-flash-next-iq3_s`; the robot must put the red cube on the green cube. The model needed three code executions: the first stopped with `NameError: name 'np' is not defined`, the second also raised an error, and the third stacked the cube. The red dot marks each click. The robot images are simulator renderings (robosuite), not photographs of a real robot, and the interface text is in Japanese. The MP4 files (1440 × 900, 30 fps) are in `docs/media` and attached to the [v0.1.0 release](https://github.com/nawta/capx-trace-viewer/releases/tag/v0.1.0).
+個人の接続設定・秘密鍵・GMOの実験ログは含めません。まず同梱スクリプトで作る**合成デモ**で操作を試せます。viewerは閲覧専用で、試行やモデル推論を開始しません。
 
-### Simple view (13 s)
+![合成デモのリプレイ画面](docs/media/replay-layout.png)
 
-![Simple view: choosing the experiment and a trial, playing the video of the first code execution, switching to the model output and the execution log, then moving to the third code execution and playing its video](docs/media/viewer_demo_simple.gif)
+## GMOで使う
 
-The recording chooses the experiment and opens the trial, then plays the video of its first code execution. It switches to the model output and to the execution log, which shows the `NameError`. It then moves to the third code execution, plays the part of the video where the robot stacks the cube, and returns to the prompt sent to the model. MP4: [docs/media/viewer_demo_simple.mp4](docs/media/viewer_demo_simple.mp4).
+**[GMOへの接続・計算ノードでのセットアップ・ブラウザ接続](docs/gmo.md)** を参照してください。
+ログインノードでインストールや長時間のviewer起動をせず、計算ノードで動かしてSSHで手元のブラウザへ転送します。録画の閲覧にGPUは不要です。
 
-### Detailed view (12 s)
+GMOから取得済みの記録はローカル環境で表示確認していますが、**GMOの計算ノード上でのviewer起動と、そのノードへのSSH転送は未確認**です。ノードの接続制限は利用環境の案内に従ってください。
 
-![Detailed view: selecting an API call and a service call in the timeline, picking a model request that moves the video to its time, then searching the timeline](docs/media/viewer_demo_details.gif)
+## Linuxでデモを起動する
 
-The recording opens the detailed timeline of the same trial and selects a `get_object_pose` API call, whose arguments and return values appear on the right. It then selects the SAM3 segmentation service call made inside it. Next it picks the image-difference model request at 0.58 s: the video moves to that time and the right panel shows the exact model input. Last, it searches the timeline for `goto_pose`. MP4: [docs/media/viewer_demo_details.mp4](docs/media/viewer_demo_details.mp4).
+必要なものはGit、Python **3.10～3.12**、Node.jsとnpmです。開発時はPython 3.12、Node.js 24.19.0、npm 11.17.0で確認しています。WindowsではバックエンドをWSL/Ubuntuで動かしてください。録画済みの閲覧・合成デモにCaP-X本体やGPUは必要ありません。
 
-To record the demos again against a running server, see [Recording the demo videos](#recording-the-demo-videos).
+非公開リポジトリのため、このリポジトリを読めるGitHubアカウントのSSH認証を用意します。
 
-## Screens
-
-| Screen | What it shows |
-|---|---|
-| ![Experiment selection](docs/media/01_select_run.png) | **Choose an experiment.** The start page lists the runs found under the trace root, with the number of trials in each. |
-| ![Trial list](docs/media/02_trial_list.png) | **Choose a trial.** Each trial shows task, condition, seed and the final result (success, failure, undetermined, running), with counts and a result filter. |
-| ![Trial detail](docs/media/03_trial_detail.png) | **Follow one code execution.** Left: the part of the trial video that belongs to the selected code block, the task result, the run time and the error. Right: the exact prompt sent to the model, including the image it received. Multi-turn trials have a selector for each code execution. |
-| ![Model output](docs/media/04_model_output.png) | **Model output.** The reply and the code that was executed for this block. |
-| ![Execution log](docs/media/05_execution_log.png) | **Execution log.** Console output and errors of the executed block. |
-| ![Detailed view](docs/media/06_details_view.png) | **Detailed timeline.** All recorded events (model calls, code blocks, API calls, perception-service calls, stdout/stderr, evaluator, feedback, recording warnings) with filters and search, the video synchronised to the selected event, and the details of that event. Here an API call is selected: its arguments, return values and the images given to the perception service. For a model call the same panel shows the normalised request with the origin of each part of the prompt. |
-
-The screenshots show the same `viewer_demo` run. The repository contains no other recorded experiments: only the screenshots and demo videos in `docs/media` and synthetic test fixtures.
-
-## Install and build
-
-```sh
-uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python -e '.[dev]'
-(cd web-ui && npm ci && npm run build)
-```
-
-The frontend source is committed, and esbuild is a declared development dependency. `web-ui/dist` is generated locally and ignored by Git. A non-editable wheel does not include the frontend; build it in a source checkout and pass its `dist` directory with `--frontend-dist`. The API works without the build.
-
-## Run
-
-```sh
+```bash
+git clone git@github.com:Kitatani819/capx-replay-viewer.git
+cd capx-replay-viewer
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+cd web-ui
+npm ci
+npm run test:trace
+npm run build
+cd ..
+.venv/bin/python scripts/make_replay_demo.py --out outputs/geniac_demo
 .venv/bin/python -m capx_trace_viewer.server --viewer-only \
-  --trace-root /path/to/traces --runner-root /path/to/runner/outputs \
-  --host 127.0.0.1 --port 8290
+  --host 127.0.0.1 --port 8390 \
+  --trace-root outputs/geniac_demo/traces \
+  --runner-root outputs/geniac_demo/runner
 ```
 
-Then open `http://127.0.0.1:8290/traces`. `capx-trace-viewer` is an equivalent installed command. Use `--frontend-dist /absolute/path/to/web-ui/dist` to serve an existing build, including with a wheel install.
+同じPCのブラウザで **http://127.0.0.1:8390/traces** を開きます。停止はサーバーの端末で `Ctrl+C`。
+デモ出力が既に存在する場合は、生成コマンドを省略するか別の `--out` を使います。既存出力は上書きしません。
 
-### Try it with the synthetic trace
+操作は **試行を選ぶ → 再生 → 気になる場面で停止 → 動画下のログを選ぶ → 右の入出力 → 候補 → 統合結果** です。[操作の詳細](docs/replay.md)も参照してください。
 
-```sh
-.venv/bin/python scripts/make_demo_trace.py --out outputs/traces_demo
-.venv/bin/python -m capx_trace_viewer.server --trace-root outputs/traces_demo
+## 自分の録画・ログを開く
+
+```bash
+.venv/bin/python -m capx_trace_viewer.server --viewer-only \
+  --host 127.0.0.1 --port 8390 \
+  --trace-root /absolute/path/to/traces \
+  --runner-root /absolute/path/to/runner
 ```
 
-Then open `http://127.0.0.1:8290/traces`.
+指定するのは各試行の親となるルートディレクトリです。`--trace-root` は `<run>/<episode>/events.jsonl` を含む親、`--runner-root` は `<run>/run.json` と `<run>/<task>/<condition>/trial_*/` を含む親です。詳しい配置は[データの置き方](docs/replay.md#データの置き方)を参照してください。
 
-| Flag | Meaning |
-|---|---|
-| `--trace-root` | Directory that holds the trace runs (`<run_id>/<episode_id>/events.jsonl`, assets, frames). Defaults to `CAPX_TRACE_DIR`, then `outputs/traces` relative to the working directory. |
-| `--runner-root` | One or more directories with the runner's trial outputs (`trials.jsonl`, trial directories with videos). Defaults to `outputs/runner`. |
-| `--host`, `--port` | Address to listen on. |
-| `--expose-traces` | Allow trace API access from non-loopback clients. Without it, trace routes answer only loopback requests. The option does not add authentication. |
-| `--frontend-dist` | Built frontend directory; defaults to this source checkout's `web-ui/dist`. A missing `index.html` returns 503. |
-| `--viewer-only` | Accepted and ignored; the viewer always runs in viewer-only mode. |
+MP4だけの記録もrunner形式で表示できますが、処理ログがなければ同期や入出力表示はできません。同じ試行の動画・ログ・画像をまとめて指定してください。
 
-The viewer serves `/traces` and `/api/traces`; `/` redirects to `/traces`. Relative paths on the command line are resolved against the working directory. See the [trace format specification](docs/trace-format.md) for storage, events and API behavior.
+## Windows / WSL
 
-### Security
+WSLのUbuntuと、その中で利用できる [uv](https://docs.astral.sh/uv/getting-started/installation/) が必要です。リポジトリを取得後、PowerShellで実行します。
 
-The viewer has no authentication. Use `--expose-traces` only on a trusted network or behind an authenticating reverse proxy. Anyone who can reach the trace API port can read every file under the trace root. An exposed viewer also shows absolute paths and host names recorded in traces. Review prompts, host names, absolute paths and fallback run ids before sharing a trace. Keep secrets out of traces.
-
-### Frontend development
-
-Start the viewer on port 8290 using the command above. In another terminal, run `cd web-ui && npm ci && npm run dev`. Open `http://127.0.0.1:5173/traces`; Vite forwards `/api` requests to the viewer on port 8290.
-
-## Recording traces
-
-Install this repository into the Python environment that runs CaP-X. Then install the startup hook (a `.pth` file that Python runs at startup) with that environment's interpreter, and run CaP-X as usual:
-
-```sh
-uv pip install --python .venv/bin/python /path/to/capx-trace-viewer
-.venv/bin/python -m capx_trace_recorder install-pth
-export CAPX_TRACE_DIR=./traces
-uv run --no-sync --active capx/envs/launch.py --config-path /path/to/config.yaml
+```powershell
+cd web-ui
+npm ci
+npm run test:trace
+npm run build
+cd ..
+.\Start-Replay.ps1
 ```
 
-The startup hook watches for the first CaP-X import in each Python process, including spawned workers. `.venv/bin/python -m capx_trace_recorder status` checks the hook installation. Run `uninstall-pth` before removing the package. After `uv sync`, reinstall the distribution and the hook. To trace a single process, use `python -m capx_trace_recorder run -m module [args...]` or `python -m capx_trace_recorder run script.py [args...]`. Spawned workers need the startup hook. Open recorded runs with `capx-trace-viewer --trace-root ./traces`. See [the trace format](docs/trace-format.md#3-enable-recording) for settings and hook coverage.
+このランチャーはWSL内のキャッシュにPython環境を作り、必要なら合成デモを生成します。初回はPythonと依存パッケージを取得します。
 
-If the package is removed but its `.pth` file remains, Python starts silently while tracing is off. With `CAPX_TRACE_DIR` set, each start prints one short `ModuleNotFoundError` line to stderr. To fix this, remove the leftover `.pth` file, or reinstall the package and run `uninstall-pth`.
+```powershell
+.\Start-Replay.ps1 -Port 8391 -TraceRoot 'C:\data\traces' -RunnerRoot 'C:\data\runner'
+```
 
-The recorder has been tested on Linux. On Windows it skips video copying and writes one `unsupported_platform` warning per episode.
+Linux向けの安全なファイル読み出しを利用するため、WindowsネイティブのPythonでサーバーを動かす構成はサポートしていません。
 
-If the imported CaP-X package has a `capx/tracing` directory (its own bundled recorder), the public recorder stays inactive and leaves the bundled recorder untouched. A CaP-X package without bundled tracing uses the public recorder. The recorder makes this check at the first CaP-X import, or at activation if CaP-X is already imported.
+## 検証
 
-For an upstream `launch.py` run, the recorder copies trial videos when video recording is on, the trial completes without an exception or timeout, and the trial summary has a `code_path`. Episodes from an experiment runner that supplies its own artifacts use those artifacts. The recorder writes the `trial_videos` event after `episode_end`. Each copy is subject to a per-file size cap and a low-disk check, and the writer queue budget does not apply to it. The warnings `video_missing`, `video_skipped` (with reasons such as `stale`, `turn_index_out_of_range`, and `not_regular`), and `video_size_limit` explain why a video was not copied.
-
-The viewer's simple view matches each turn video to the code block with the same index and plays it at 0.5× speed. When a turn video is missing, it plays the combined video. If it cannot identify the turn's clip in the combined video, it labels the playback as the whole-trial video. Once the run details have loaded and contain no runner records, the header of an upstream trial takes the final result from `task_completed`. The copied videos and results stay with the trace folder when you move it.
-
-In a pip-managed environment, run `python -m pip install /path/to/capx-trace-viewer` and `python -m capx_trace_recorder install-pth` with that environment's Python interpreter. The `run` launcher adds runpy frames to printed stack traces, so use the `.pth` hook when you compare model inputs.
-
-## Tests
-
-```sh
+```bash
+cd web-ui
+npm run test:trace
+npm run build
+cd ..
 .venv/bin/python -m pytest tests -q
-(cd web-ui && npm run test:trace)
-```
-
-In the viewer environment, tests that need CaP-X are reported as skipped. To run them against an upstream checkout, set `PYTHONPATH=/path/to/cap-x-upstream` and `CAPX_UPSTREAM_DIR=/path/to/cap-x-upstream`, then run `-m pytest tests/recorder -q` with the CaP-X environment's Python. If that interpreter differs from the one running the tests, set `CAPX_PYTHON` to it for the subprocess import test. Set `CAPX_PYTHON312` to a Python 3.12 interpreter for the optional cross-version checks. A few tests need Linux features such as `/proc`, FIFOs, or SIGALRM and skip on other platforms. In an editable install, reinstall this distribution after changing its package layout.
-
-## Recording the demo videos
-
-`scripts/demo/record_demo.py` drives a running viewer in headless Chromium with Playwright, records both scripted sessions and writes `viewer_demo_simple` and `viewer_demo_details` as MP4 and GIF. It needs ffmpeg and the `demo` extra:
-
-```sh
-uv pip install --python .venv/bin/python -e '.[demo]'
+.venv/bin/python -m pip install -e '.[dev,demo]'
 .venv/bin/python -m playwright install chromium
-.venv/bin/python scripts/demo/record_demo.py --base-url http://127.0.0.1:8290 --out-dir docs/media
+# デモサーバーを起動した状態で、別端末から実行
+.venv/bin/python scripts/demo/check_replay_layout.py --base-url http://127.0.0.1:8390
 ```
 
-The scenarios (`scripts/demo/scenario_*.js`) find buttons by their interface text. The default labels match the example run above. For another trace, pass `--run`, `--episode`, `--trial-label`, `--api-call`, `--service-call` and `--model-event` with values that appear in it.
+2026-11-15の公開前検証:
 
-## Origin and license
+- フロントエンドのテスト **165件成功**、ビルド成功。
+- Pythonテスト **1,480件成功・24件スキップ**。
+- ブラウザは合成デモ **9項目成功**、GMOから取得した記録のローカル表示 **8項目成功**。ブラウザ例外0件。
+- 画面を縮めた際に右欄が潰れる問題と、試行切り替え後に前のVDM選択が残る問題を修正。
 
-This project builds on [capgym/cap-x](https://github.com/capgym/cap-x) (MIT, Copyright (c) 2026 Max Fu). The recorder, reader, API, and viewer frontend are published here under MIT. `scripts/make_demo_trace.py` writes a synthetic trace. The interface text is Japanese; translations are welcome. Inline SVG icons come from [Heroicons](https://github.com/tailwindlabs/heroicons) (MIT). See [LICENSE](LICENSE).
+実際のGMO試行ではフレーム対応情報、SAM3マスク、VDMへの実送信画像、統合への実送信入力が不足していたため、それらの表示・同期は合成デモで確認しています。実データの検証用ファイルは同梱していません。
+
+## 記録形式とライセンス
+
+- [trace-format](docs/trace-format.md): イベント・payload・画像・フレーム・同期の仕様。
+- [元viewerのREADME](docs/upstream-readme.md): recorderの導入、元の画面、詳細な検証方法。
+- [MIT License](LICENSE): 上流のライセンスと著作権表記を保持しています。
+
+サーバーに認証機能はありません。既定の `127.0.0.1` のまま利用し、遠隔閲覧にはSSH転送を使ってください。GitHubリポジトリの非公開設定は、起動したHTTPサーバーへのアクセス制御にはなりません。

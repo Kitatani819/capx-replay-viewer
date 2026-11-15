@@ -14,7 +14,8 @@ import type { ModelErrorData, SegmentCategory } from './types';
 
 export const LABELS = {
   // 9.3 details tab names, in order.
-  tabs: ['実際のモデル入力', 'モデル出力/コード', 'API/実行ログ', 'デバッグ状態', '入力差分'] as const,
+  tabs: ['実際のモデル入力', 'モデル出力/コード', 'API/実行ログ', 'デバッグ状態', '入力差分', 'アンサンブル'] as const,
+  replayTabs: ['入出力', '候補', '統合結果'] as const,
 
   // 9.3 fixed labels (verbatim).
   notRecorded: '未記録',

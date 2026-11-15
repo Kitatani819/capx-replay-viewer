@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import TraceViewerPage from '../TraceViewerPage';
 import { SimplePicker, SimpleViewer } from '../components/SimpleViewer';
 import { TopBar } from '../components/TopBar';
+import { Picker } from '../components/Picker';
 import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
 import { SmallButton } from '../components/common';
 import { advance, findAll, net, resetBrowser, setLocation } from './harness/browser';
@@ -16,21 +17,21 @@ function setup() {
   ]);serve(run);
 }
 test('simple view hides diagnostics; details switch preserves episode and is reversible',async()=>{
-  setup();setLocation('/traces?run=r1&episode=e1&event=e1_1');
+  setup();setLocation('/traces?view=simple&run=r1&episode=e1&event=e1_1');
   const page=mount(TraceViewerPage,{});await advance(1000);
   assert.equal(findAll(page.output,SimpleViewer).length,1);
   assert.equal(findAll(page.output,TopBar).length,0);
   const click=(label:string)=>(findAll(page.output,SmallButton).find(e=>e.props.children===label)!.props.onClick as ()=>void)();
-  click('詳細を見る');await advance(0);
+  click('リプレイを見る');await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,0);
   assert.equal(findAll(page.output,TopBar)[0].props.episodeId,'e1');
-  click('シンプル表示に戻る');await advance(0);
+  click('実行回ごとの表示');await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,1);page.unmount();
 });
-test('no run opens simple picker; explicit details links retain diagnostic view',async()=>{
+test('default opens replay picker; existing details links retain replay view',async()=>{
   setup();setLocation('/traces');const first=mount(TraceViewerPage,{});await advance(1000);
-  assert.equal(findAll(first.output,SimplePicker).length,1);
-  assert.equal(findAll(first.output,TopBar).length,0);first.unmount();
+  assert.equal(findAll(first.output,Picker).length,1);
+  assert.equal(findAll(first.output,TopBar).length,1);first.unmount();
   setLocation('/traces?view=details&run=r1&episode=e1');
   const second=mount(TraceViewerPage,{});await advance(1000);
   assert.equal(findAll(second.output,TopBar).length,1);

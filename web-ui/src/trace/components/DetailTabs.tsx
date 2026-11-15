@@ -1,6 +1,6 @@
 /**
- * Details part of the right pane: the five tabs of docs/trace-format.md 9.3
- * (実際のモデル入力, モデル出力/コード, API/実行ログ, デバッグ状態, 入力差分).
+ * Replay details: 入出力, 候補, 統合結果. Existing diagnostic renderers are
+ * reused inside these tabs; supplementary debug information stays available.
  * Tab contents fetch payload files lazily, only for the selected event. The
  * tab body is keyed by the selected event, so nothing a tab loaded for one
  * event (an array preview, a search) is shown for another; a render error in
@@ -25,11 +25,8 @@ import { nodeTitle } from '../model';
 import { Notice } from './common';
 import { DataAssetInline, NO_ASSET_STATES } from './DataAssetState';
 import { ErrorBoundary } from './ErrorBoundary';
-import { ApiLogTab } from './tabs/ApiLogTab';
-import { DebugTab } from './tabs/DebugTab';
-import { InputDiffTab } from './tabs/InputDiffTab';
-import { ModelInputTab } from './tabs/ModelInputTab';
-import { ModelOutputTab } from './tabs/ModelOutputTab';
+import { InputOutputTab } from './tabs/InputOutputTab';
+import { EnsembleTab } from './tabs/EnsembleTab';
 import type { EpisodeRef } from './ValueView';
 
 export interface RangeFocus {
@@ -167,29 +164,24 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
       </div>
     );
   } else {
-    const props: TabProps = { ...rest, selection, assetStates, onRetryAsset };
+    const props: TabProps = { ...rest, selection, assetStates, onRetryAsset,
+      onSelect: (node, eventId) => { onTab(0); rest.onSelect(node, eventId); } };
     switch (tab) {
-      case 0:
-        body = <ModelInputTab {...props} />;
-        break;
       case 1:
-        body = <ModelOutputTab {...props} />;
+        body = <EnsembleTab {...props} mode="candidates" onTurnSelect={rest.onSelect} />;
         break;
       case 2:
-        body = <ApiLogTab {...props} />;
-        break;
-      case 3:
-        body = <DebugTab {...props} />;
+        body = <EnsembleTab {...props} mode="synthesis" onTurnSelect={rest.onSelect} />;
         break;
       default:
-        body = <InputDiffTab {...props} />;
+        body = <InputOutputTab {...props} />;
         break;
     }
   }
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface">
-      <div className="flex-shrink-0 flex items-end gap-0.5 px-2 pt-1.5 border-b border-surface-border bg-surface-raised overflow-x-auto">
-        {LABELS.tabs.map((label, i) => (
+      <div role="tablist" aria-label="処理の詳細" className="flex-shrink-0 flex items-end gap-0.5 px-2 pt-1.5 border-b border-surface-border bg-surface-raised overflow-x-auto">
+        {LABELS.replayTabs.map((label, i) => (
           <button
             key={label}
             type="button"
@@ -211,7 +203,7 @@ export function DetailTabs({ tab, onTab, selection, revealPrompt = false, missin
       </div>
       <div ref={panelRef} role="tabpanel" className="flex-1 min-h-0 overflow-y-auto p-3">
         {selection && <DataAssetNotice events={selection.node.events} related={assetEvents} states={assetStates} onRetry={onRetryAsset} />}
-        <ErrorBoundary key={`${tab}|${eventId ?? ''}`} label={`「${LABELS.tabs[tab] ?? ''}」タブ`}>
+        <ErrorBoundary key={`${tab}|${eventId ?? ''}`} label={`「${LABELS.replayTabs[tab] ?? ''}」タブ`}>
           {body}
         </ErrorBoundary>
       </div>

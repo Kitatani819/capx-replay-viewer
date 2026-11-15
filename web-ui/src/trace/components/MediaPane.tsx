@@ -15,7 +15,7 @@
  * Related: model.ts (keyFramesOf, framesAround), TraceImage.tsx.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { episodeFileUrl } from '../api';
 import { fmtBytes, shortSha } from '../format';
 import { LABELS, frameOffsetLabel } from '../labels';
@@ -36,7 +36,7 @@ import {
 import { dataOf, type ImageInfo } from '../types';
 import { Badge, DebugFrameChip, SentToModelChip, SmallButton } from './common';
 import { TraceImage } from './TraceImage';
-import { VideoPlayback } from './VideoPlayback';
+import { VideoPlayback, type ReplaySeek } from './VideoPlayback';
 import type { TrialVideo } from '../playback';
 import type { TNode } from '../model';
 import type { EpisodeRef } from './ValueView';
@@ -44,6 +44,8 @@ import type { EpisodeRef } from './ValueView';
 export type { Live3dState } from '../live';
 
 interface MediaPaneProps {
+  logPanel?: ReactNode;
+  seekRequest?: ReplaySeek | null;
   videos?: TrialVideo[];
   onPlaybackSelect?: (node: TNode) => void;
   model: EpisodeModel;
@@ -54,7 +56,7 @@ interface MediaPaneProps {
   follow: boolean;
 }
 
-export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect }: MediaPaneProps) {
+export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, seekRequest, logPanel }: MediaPaneProps) {
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -77,7 +79,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-surface-border">
         <div className="flex gap-1">
           <SmallButton active={tab === 'video'} onClick={() => setTab('video')}>
-            動画＋プロンプト
+            動画＋処理タイムライン
           </SmallButton>
           <SmallButton active={tab === 'recorded'} onClick={() => setTab('recorded')}>
             記録フレーム
@@ -113,7 +115,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
       </div>
       {tab === 'video' ? (
         <div className="flex-1 min-h-0">
-          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} />
+          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} />
         </div>
       ) : tab === 'live' && live3d.available ? (
         <div className="flex-1 min-h-0 flex flex-col">
@@ -133,6 +135,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
           )}
         </div>
       )}
+      {tab !== 'video' && logPanel && <div className="h-[40%] min-h-0 border-t border-surface-border">{logPanel}</div>}
     </div>
   );
 }
@@ -174,7 +177,7 @@ export function imageMeta(im: ImageInfo, sourceText: string) {
   );
 }
 
-function ModelImages({ model, ep, selection }: { model: EpisodeModel; ep: EpisodeRef; selection: Selection }) {
+export function ModelImages({ model, ep, selection }: { model: EpisodeModel; ep: EpisodeRef; selection: Selection }) {
   const call = selection.node.call!;
   const attempt = selection.attempt ?? mainAttempt(call);
   const d = attempt ? dataOf(attempt.request, 'model_request') : null;

@@ -517,7 +517,7 @@ function NpzArtifact({ ep, path, recordedStats }: { ep: EpisodeRef; path: string
   return <ArrayPreviewList arrays={res.data.arrays ?? {}} ep={ep} path={path} recordedStats={recordedStats} />;
 }
 
-function Perception({
+export function Perception({
   ep,
   node,
   assetStates,
@@ -536,6 +536,11 @@ function Perception({
   return (
     <div>
       <SectionTitle>知覚サービスの入力と出力</SectionTitle>
+      {services.map(s=><div key={s.key} className="mb-3 space-y-1">
+        <Badge tone="violet">出典: {dataOf(s.primary,'service_call_start').service ?? '知覚サービス'} · {s.primary.event_id}</Badge>
+        <SectionTitle>渡した画像・対象物の指示（request_summary）</SectionTitle>
+        <ValueView ep={ep} value={dataOf(s.primary,'service_call_start').request_summary}/>
+      </div>)}
       {items.length === 0 && <div className="text-xs text-text-tertiary">保存された入出力はありません（{services.length} 件の呼び出し）</div>}
       <div className="space-y-2">
         {items.map(({ s, a }, i) => {

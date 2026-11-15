@@ -345,7 +345,7 @@ export function TopBar({
 
   return (
     <header className="flex-shrink-0 bg-surface-raised border-b border-surface-border header-glow">
-      <div className="flex items-center gap-3 h-12 px-4">
+      <div className="flex flex-wrap items-center gap-3 min-h-12 px-4 py-2">
         <div className="flex items-center gap-2 flex-shrink-0">
           <img src="/capx_logo.svg" alt="CaP-X" className="w-6 h-6" />
           <h1 className="text-sm font-bold font-display tracking-widest uppercase text-text-primary">CaP-X Trace</h1>

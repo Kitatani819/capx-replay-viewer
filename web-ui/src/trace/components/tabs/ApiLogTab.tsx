@@ -283,6 +283,7 @@ function TracebackView({ ep, value, redacted = false, cut = false }: { ep: Episo
 }
 
 function BlockLog({ ep, onSelect, block }: TabProps & { block: TNode }) {
+  const code = useFullText(ep, dataOf(block.primary,'code_block_start').code);
   const ed = block.end ? dataOf(block.end, 'code_block_end') : null;
   const out = block.children.find((c) => c.kind === 'stdout')?.primary ?? null;
   const err = block.children.find((c) => c.kind === 'stderr')?.primary ?? null;
@@ -290,6 +291,11 @@ function BlockLog({ ep, onSelect, block }: TabProps & { block: TNode }) {
   const budget = arrayBudgetOf(block);
   return (
     <div className="space-y-3">
+      <SectionTitle>実際に実行したPython（code_block_start）</SectionTitle>
+      {code.text !== null && <CodeView code={code.text}/>}
+      {code.partial && <Notice>コードの全文は{code.loading?'読み込み中':'未取得'}です。</Notice>}
+      <Badge tone="neutral">出典: 実行コードの標準出力・標準エラー。成功メッセージはコード自身の申告です。</Badge>
+      {ed && <p className="text-xs">出典: code_block_end（ハーネスの評価）· reward={String(ed.reward??'未記録')} · task_completed={String(ed.task_completed??'未記録')}</p>}
       {budget > 0 && <Notice tone="amber">step() の結果（result_summary）: {arrayBudgetLabel(budget)}</Notice>}
       {ed?.tracer_frame_visible && (
         <Notice tone="red">レコーダーのパスがこのブロックの stdout/stderr に現れています（tracer_frame_visible）。本来は起きないはずの状態です。</Notice>
@@ -392,6 +398,7 @@ function StreamLog({ ep, node }: { ep: EpisodeRef; node: TNode }) {
   const d = dataOf(node.primary, 'stdout');
   return (
     <div className="space-y-2">
+      <Badge tone="neutral">出典: 実行コードの {node.kind} · {node.primary.event_id}（成功メッセージはコード自身の申告）</Badge>
       <div className="text-[11px] text-text-tertiary">step() が返した {node.kind} そのもの（ブロック終了時に 1 回記録）</div>
       <StreamWithSlice ep={ep} value={d.text ?? null} slice={null} stream={node.kind === 'stderr' ? 'stderr' : 'stdout'} title={node.kind} />
     </div>

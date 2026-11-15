@@ -23,6 +23,7 @@
  */
 
 import { laterAttempts } from './laterInput';
+import { turnOf } from './replay';
 import { descendants, enclosingBlock, mainAttempt, previousSameFamily, strOrNull, type EpisodeModel, type Selection } from './model';
 import type { DataAssetMarkers, TraceEvent } from './types';
 
@@ -171,6 +172,14 @@ export function dataAssetTargets(model: EpisodeModel, selection: Selection | nul
   add(model.taskText);
   if (!selection) return Array.from(out.values());
   const node = selection.node;
+  // Ensemble panes compare every candidate and synthesis in the recorded turn,
+  // including events whose response/request was moved to a data asset.
+  const turn = turnOf(node);
+  if (turn !== null) for (const call of model.calls) {
+    if (call.turnIndex === turn && call.callKind.startsWith('ensemble_')) {
+      for (const event of call.node.events) add(event);
+    }
+  }
   for (const ev of node.events) add(ev);
   if (node.kind === 'model_call' && node.call) {
     const prev = previousSameFamily(model, node.call);

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEpisodeModel } from '../model';
-import { cameraVideos, canPlayExecutionVideo, chooseExecutionVideo, cueAt, episodeVideos, playbackMap, trialVideos, validClip, videosForEpisode } from '../playback';
+import { cameraVideos, canPlayExecutionVideo, chooseExecutionVideo, cueAt, episodeVideos, groupCues, playbackMap, trialVideos, validClip, videosForEpisode } from '../playback';
+import { turnOf } from '../replay';
 import type { RunnerMatch } from '../runner';
 import { Rec } from './fixtures';
 import { dataOf } from '../types';
@@ -21,6 +22,31 @@ test('maps simulator frames, not wall-clock inference waits; preserves prompts s
  assert.equal(cueAt(m.prompts,.5)?.node.call?.id,'first');
  assert.equal(cueAt(m.prompts,1)?.node.call?.id,'third');
  assert.equal(cueAt(m.prompts,.1)?.node.call?.id,'first','backward seek must restore earlier prompt');
+});
+
+test('groups service calls and turn-anchored worker candidates without dropping co-located events',()=>{
+ const {r,second}=recording();
+ const member=r.request('code_generator','member',1,{call_kind:'ensemble_member',turn_index:1});
+ const synthesis=r.request('code_generator','synthesis',1,{call_kind:'ensemble_synthesis',turn_index:1});
+ synthesis.sim_step=30;synthesis.sim_epoch=0;
+ const block=r.blockStart(null,'x=1',{turn_index:1});block.sim_step=30;block.sim_epoch=0;
+ const api=r.apiStart(block,'segment');api.sim_step=30;api.sim_epoch=0;
+ const service=r.serviceStart(api,'sam3','segment');service.sim_step=30;service.sim_epoch=0;
+ const m=playbackMap(buildEpisodeModel(r.events),'video_combined.mp4',2);
+ const group=groupCues(m.all).find(g=>g.time===1)!;
+ assert.ok(group.cues.some(c=>c.node.primary===second));
+ assert.ok(group.cues.some(c=>c.node.primary===service));
+ assert.equal(group.cues.find(c=>c.node.primary===member)?.positionSource,'turn_synthesis');
+ assert.deepEqual(group.cues.map(c=>c.node.seq),[...group.cues.map(c=>c.node.seq)].sort((a,b)=>a-b));
+ assert.equal(turnOf(group.cues.find(c=>c.node.primary===service)!.node),1);
+ r.request('code_generator','ambiguous-synthesis',1,{call_kind:'ensemble_synthesis',turn_index:1});
+ assert.ok(!playbackMap(buildEpisodeModel(r.events),'video_combined.mp4',2).all.some(c=>c.node.primary===member));
+});
+
+test('conflicting frame anchors and MP4-only traces never enable synchronization',()=>{
+ const {r}=recording();r.add('frame',{camera:'main',epoch:0,buffer_index:0,sim_step:20});
+ assert.ok(playbackMap(buildEpisodeModel(r.events),'video_combined.mp4',2).reason);
+ assert.ok(playbackMap(buildEpisodeModel([]),'video_combined.mp4',2).reason);
 });
 test('refuses synchronization for resets, mismatched length and unrecorded cameras',()=>{
  const {r}=recording();let m=buildEpisodeModel(r.events);

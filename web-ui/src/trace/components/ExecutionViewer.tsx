@@ -9,6 +9,7 @@ import { dataOf, type TextValue } from '../types';
 import { SmallButton } from './common';
 import { SimplePrompt } from './SimplePrompt';
 import { TraceImage } from './TraceImage';
+import { VideoPlayback } from './VideoPlayback';
 
 function RecordedText({ep, value}: {ep:EpisodeRef;value:TextValue|null|undefined}) {
   const text=useFullText(ep,value);
@@ -72,7 +73,7 @@ export function ExecutionViewer({model,ep,selection,videos,onSelect,error}:{mode
   const end=block?dataOf(block.end,'code_block_end'):{};
   const stdout=end.stdout_event_id?model.byId.get(end.stdout_event_id):undefined;
   const stderr=end.stderr_event_id?model.byId.get(end.stderr_event_id):undefined;
-  if(!block)return <main className="p-6"><p>コード実行はまだ記録されていません。モデル呼び出しは「詳細を見る」で確認できます。</p></main>;
+  if(!block)return <main className="flex-1 min-h-0 flex flex-col p-6"><p>コード実行はまだ記録されていません。モデル呼び出しは「詳細を見る」で確認できます。</p><VideoPlayback model={model} videos={videos} onSelect={onSelect} simple /></main>;
   return <main className="flex-1 min-h-0 overflow-auto p-4 md:p-6 flex flex-col gap-4">
     {error&&<p className="text-amber-200">記録を読み込めません。詳細表示で確認してください。</p>}
     <nav className="flex flex-wrap items-center gap-3" aria-label="コード実行を選ぶ">

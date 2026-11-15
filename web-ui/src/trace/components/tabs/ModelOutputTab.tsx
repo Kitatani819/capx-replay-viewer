@@ -35,6 +35,7 @@ import { Badge, EventLink, KV, Notice, NotRecorded, SectionTitle, Spinner, Error
 import { CodeView } from '../CodeView';
 import { TextView } from '../TextView';
 import { roleTone } from '../Timeline';
+import { ModelImages } from '../MediaPane';
 import type { TabProps } from '../DetailTabs';
 import type { EpisodeRef } from '../ValueView';
 import { RawJson } from './ModelInputTab';
@@ -101,6 +102,7 @@ function ModelCallOutput({ model, ep, selection, running, onSelect, call }: TabP
       )}
 
       <SectionTitle>応答本文（生）{call.attempts.length > 1 && attempt ? `: attempt ${attemptNo(attempt)}` : ''}</SectionTitle>
+      {call.role==='vdm' && <Badge tone="violet">出典: VDMの見立て（モデル応答）· {resp?.event_id ?? '応答未記録'}</Badge>}
       {!resp ? (
         <div className="space-y-2">
           {attempt && attempt.errors.length > 0 ? (
@@ -128,6 +130,7 @@ function ModelCallOutput({ model, ep, selection, running, onSelect, call }: TabP
           )}
         </>
       )}
+      {call.role==='vdm' && <ModelImages model={model} ep={ep} selection={selection}/>}
       {answerAttempt && answerAttempt !== attempt && (
         <Notice>
           同じ論理呼び出しの正常な応答は attempt {attemptNo(answerAttempt)} で受け取りました:{' '}

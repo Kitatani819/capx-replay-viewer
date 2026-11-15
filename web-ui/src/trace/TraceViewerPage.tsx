@@ -2,9 +2,9 @@
  * The /traces page of the web UI (docs/trace-format.md 9.1, 9.3).
  *
  * Chosen in the CaP-X web UI route selection, so opening /traces never starts a
- * trial. Layout: top bar; a resizable left pane (task text and the causal
- * event timeline); a right pane split between media and the five detail
- * tabs. The URL holds `run`, `episode` and `event` (and `legacy_run`,
+ * trial. Layout: top bar; left video with processing/causal logs underneath;
+ * right recorded I/O, candidate and synthesis tabs. The URL holds
+ * `run`, `episode` and `event` (and `legacy_run`,
  * `legacy_trial` for runs without a trace) so a view can be shared.
  *
  * Live mode keeps the newest event selected and polls about every second
@@ -45,6 +45,7 @@ import { GRACE_MAX_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runne
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
 import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
+import type { ReplaySeek } from './components/VideoPlayback';
 import { headerVerdict } from './outcome';
 import { dataOf } from './types';
 import { DetailTabs, type RangeFocus } from './components/DetailTabs';
@@ -72,7 +73,7 @@ export default function TraceViewerPage() {
   const episodeId = params.get('episode');
   const eventParam = params.get('event');
   const legacyRun = params.get('legacy_run');
-  const detailed = params.get('view') === 'details';
+  const detailed = params.get('view') !== 'simple';
   const legacyTrial = parseLegacyTrial(params.get('legacy_trial'), params.get('legacy_root'));
 
   useEffect(() => {
@@ -205,6 +206,7 @@ export default function TraceViewerPage() {
   const [focus, setFocus] = useState<RangeFocus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [playbackEventId, setPlaybackEventId] = useState<string | null>(null);
+  const [replaySeek, setReplaySeek] = useState<ReplaySeek | null>(null);
   const videos = useMemo(() => {
     if (!runId || !ep) return [];
     const match = runnerRecords?.length ? runnerRecordFor(runnerRecords,
@@ -233,6 +235,7 @@ export default function TraceViewerPage() {
   const onSelect = useCallback(
     (node: TNode, eventId?: string) => {
       setPlaybackEventId(null);
+      setReplaySeek({key: node.key, token: nextFocusToken()});
       setLive(false);
       setParams({ event: eventId ?? selectionEventId(node) });
       setScrollToken((x) => x + 1);
@@ -252,11 +255,13 @@ export default function TraceViewerPage() {
   );
 
   const onPlaybackSelect = useCallback((node: TNode) => {
-    onSelect(node);
+    setReplaySeek(null);
+    setLive(false);
+    setParams({event: selectionEventId(node)});
+    setScrollToken(x => x+1);
     setPlaybackEventId(selectionEventId(node));
-    setTab(node.kind === 'model_call' ? 0 : 2);
     setFocus(null);
-  }, [onSelect]);
+  }, [setParams]);
 
   // A range focus applies only to the call it was made for.
   useEffect(() => {
@@ -298,15 +303,12 @@ export default function TraceViewerPage() {
   }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data]);
 
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
-  const [leftWidth, setLeftWidth] = useStoredState<number>('capx-trace-left-width', 460);
-  const [mediaPct, setMediaPct] = useStoredState<number>('capx-trace-media-pct', 42);
+  const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-left-width', Math.round(window.innerWidth * .6));
   const mainRef = useRef<HTMLDivElement>(null);
-  const rightRef = useRef<HTMLDivElement>(null);
   const clampLeft = (w: number) => {
     const total = mainRef.current?.getBoundingClientRect().width ?? 1400;
     return Math.round(Math.max(280, Math.min(total - 420, w)));
   };
-  const clampPct = (p: number) => Math.max(12, Math.min(85, p));
 
   const pick = (r: string, e: string) => {
     setPickerOpen(false);
@@ -352,7 +354,7 @@ export default function TraceViewerPage() {
         {videoPending && <span className="text-sm text-amber-200">{videoCopyMessage(summary.data)}</span>}
         <div className="ml-auto flex gap-2">
           <SmallButton onClick={() => setPickerOpen(true)}>試行を選ぶ</SmallButton>
-          <SmallButton onClick={() => setParams({view: detailed ? null : 'details'})}>{detailed ? 'シンプル表示に戻る' : '詳細を見る'}</SmallButton>
+          <SmallButton onClick={() => setParams({view: detailed ? 'simple' : 'details'})}>{detailed ? '実行回ごとの表示' : 'リプレイを見る'}</SmallButton>
         </div>
       </header>
       {!simple && <ErrorBoundary
@@ -401,7 +403,7 @@ export default function TraceViewerPage() {
         </div>
       )}
       {showLegacy ? (
-        <LegacyTrialView runId={legacyRun} trial={legacyTrial} />
+        <LegacyTrialView key={JSON.stringify([legacyRun, legacyTrial.root, legacyTrial.task, legacyTrial.condition, legacyTrial.trialDir])} runId={legacyRun} trial={legacyTrial} />
       ) : !ep ? (
         <div className="flex-1 min-h-0">{picker}</div>
       ) : simple ? (
@@ -409,8 +411,8 @@ export default function TraceViewerPage() {
           <SimpleViewer model={model} ep={ep} selection={selection} videos={videos} onSelect={onPlaybackSelect} error={events.error ?? summary.error ?? config.error} />
         </ErrorBoundary>
       ) : (
-        <main ref={mainRef} className="flex-1 min-h-0 flex">
-          <div className="flex-shrink-0 min-w-0 border-r border-surface-border bg-surface" style={{ width: leftWidth }}>
+        <main ref={mainRef} className="replay-layout flex-1 min-h-0 flex">
+          <div data-replay-pane="left" className="replay-left flex-shrink-0 min-w-0 border-r border-surface-border bg-surface" style={{ width: leftWidth }}>
             {summary.error && !summary.data ? (
               <div className="p-4">
                 <ErrorText>エピソードを開けません: {summary.error}</ErrorText>
@@ -424,7 +426,8 @@ export default function TraceViewerPage() {
                 <ErrorText>イベントを読み込めません: {events.error}</ErrorText>
               </div>
             ) : (
-              <Timeline
+              <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
+                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} seekRequest={replaySeek} logPanel={<Timeline
                 model={model}
                 ep={ep}
                 running={running}
@@ -433,7 +436,8 @@ export default function TraceViewerPage() {
                 onSelect={onSelect}
                 scrollToken={scrollToken}
                 showTaskText={status !== 'unscoped'}
-              />
+                />} />
+              </ErrorBoundary>
             )}
           </div>
           <Splitter
@@ -445,25 +449,7 @@ export default function TraceViewerPage() {
             }}
             onKeyStep={(d) => setLeftWidth(clampLeft(leftWidth + d))}
           />
-          <div ref={rightRef} className="flex-1 min-w-0 flex flex-col">
-            <div className="min-h-0 overflow-hidden" style={{ height: `${mediaPct}%` }}>
-              <ErrorBoundary label="メディア" resetKey={selection?.eventId ?? null}>
-                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} />
-              </ErrorBoundary>
-            </div>
-            <Splitter
-              orientation="horizontal"
-              ariaLabel="メディアと詳細の境界"
-              onDrag={(y) => {
-                const r = rightRef.current?.getBoundingClientRect();
-                if (!r || r.height <= 0) return;
-                setMediaPct(clampPct(((y - r.top) / r.height) * 100));
-              }}
-              onKeyStep={(d) => {
-                const h = rightRef.current?.getBoundingClientRect().height ?? 800;
-                setMediaPct(clampPct(mediaPct + (d / h) * 100));
-              }}
-            />
+          <div data-replay-pane="details" className="replay-details flex-1 min-w-0 flex flex-col">
             <div className="flex-1 min-h-0">
               <DetailTabs
                 revealPrompt={playbackEventId !== null && playbackEventId === selection?.eventId}

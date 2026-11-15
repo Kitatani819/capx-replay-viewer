@@ -3,6 +3,7 @@ import { episodeFileUrl, traceApi, type EpisodeRef } from './api';
 import type { EpisodeModel, FrameRec, TNode } from './model';
 import { dataOf } from './types';
 import type { RunnerMatch } from './runner';
+import { turnOf } from './replay';
 
 export interface TrialVideo { url: string; name: string; turnIndex?: number; source?: 'episode' | 'runner' }
 const object = (x: unknown): Record<string, unknown> => x && typeof x === 'object' ? x as Record<string, unknown> : {};
@@ -73,19 +74,32 @@ export function videosForEpisode(ep: EpisodeRef, model: EpisodeModel, match: Run
 // the runner that wrote the trace encodes combined videos at 30 fps.
 // Do not use wall-clock duration: inference delays are absent from the MP4.
 export const RECORDED_VIDEO_FPS = 30;
-export interface PlaybackCue { time: number; node: TNode }
-export interface PlaybackMap { reason: string | null; prompts: PlaybackCue[]; actions: PlaybackCue[]; timeForStep?: (step: number) => number }
+export interface PlaybackCue { time: number; node: TNode; positionSource?: 'sim_step' | 'turn_synthesis' }
+export interface PlaybackGroup { time: number; cues: PlaybackCue[] }
+export interface PlaybackMap { reason: string | null; prompts: PlaybackCue[]; actions: PlaybackCue[]; all: PlaybackCue[]; timeForStep?: (step: number) => number }
+export function groupCues(cues: PlaybackCue[]): PlaybackGroup[] {
+  const groups: PlaybackGroup[] = [];
+  for (const cue of [...cues].sort((a,b) => a.time-b.time || a.node.seq-b.node.seq)) {
+    const last = groups.at(-1);
+    if (last && Math.abs(last.time-cue.time) < 0.000001) last.cues.push(cue);
+    else groups.push({time: cue.time, cues: [cue]});
+  }
+  return groups;
+}
 export function playbackMap(model: EpisodeModel, name: string, duration: number): PlaybackMap {
-  const fail = (reason: string): PlaybackMap => ({reason, prompts: [], actions: []});
+  const fail = (reason: string): PlaybackMap => ({reason, prompts: [], actions: [], all: []});
   if (name !== 'video_combined.mp4') return fail('このカメラの動画とイベントの対応は未記録です。');
   if (!Number.isFinite(duration) || duration <= 0) return fail('動画を読み込み中です。');
   if (model.events.some(e => e.event_type === 'env_reset')) return fail('環境リセットを含むため、自動同期はできません。');
   const cameras = [...model.framesByCamera.values()].filter(fs => fs.length > 0);
   if (cameras.length !== 1) return fail('動画と記録カメラを一意に対応付けられません。');
-  const frames = cameras[0].filter(f => f.simStep !== null && f.bufferIndex >= 0);
+  const frames = cameras[0].filter(f => f.simStep !== null && Number.isFinite(f.simStep) && Number.isInteger(f.bufferIndex) && f.bufferIndex >= 0);
   if (frames.length < 2 || frames.some(f => f.epoch !== 0)) return fail('動画との対応に必要なフレーム記録が不足しています。');
   const unique = new Map<number, FrameRec>();
-  for (const f of frames) unique.set(f.bufferIndex, f);
+  for (const f of frames) {
+    if (unique.has(f.bufferIndex) && unique.get(f.bufferIndex)!.simStep !== f.simStep) return fail('同じフレーム番号に異なるシミュレーション位置が記録されています。');
+    unique.set(f.bufferIndex, f);
+  }
   const anchors = [...unique.values()].sort((a,b) => a.bufferIndex-b.bufferIndex);
   if (anchors[0].bufferIndex !== 0 || Math.abs((anchors.at(-1)!.bufferIndex + 1) - duration * RECORDED_VIDEO_FPS) > 1.1 ||
       anchors.some((f,i) => i > 0 && f.simStep! < anchors[i-1].simStep!)) {
@@ -99,11 +113,27 @@ export function playbackMap(model: EpisodeModel, name: string, duration: number)
     const fraction = (step-lo.simStep!) / Math.max(1,up.simStep!-lo.simStep!);
     return (lo.bufferIndex + fraction*(up.bufferIndex-lo.bufferIndex))/RECORDED_VIDEO_FPS;
   };
-  const cues = (kind: 'model_call' | 'api_call' | 'code_block') => model.allNodes
-    .filter(n => n.kind === kind && typeof n.primary.sim_step === 'number' && n.primary.sim_epoch === 0)
-    .map(node => ({node, time: seconds(node.primary.sim_step!)}))
-    .sort((a,b) => a.time-b.time || a.node.seq-b.node.seq);
-  return {reason:null, timeForStep: seconds, prompts:cues('model_call'), actions:[...cues('code_block'),...cues('api_call')].sort((a,b)=>a.time-b.time||a.node.seq-b.node.seq)};
+  const kinds = new Set(['model_call','api_call','code_block','service_call','stdout','stderr','evaluator','feedback']);
+  const all: PlaybackCue[] = [];
+  for (const node of model.allNodes.filter(n => kinds.has(n.kind))) {
+    let anchor = node;
+    let positionSource: PlaybackCue['positionSource'] = 'sim_step';
+    // Worker threads do not carry simulator coordinates. A unique, recorded
+    // synthesis in the SAME turn can provide a turn position, explicitly labelled.
+    if (node.primary.sim_step == null && node.call?.callKind === 'ensemble_member' && turnOf(node) !== null) {
+      const syntheses = model.calls.filter(c => c.callKind === 'ensemble_synthesis' && c.turnIndex === turnOf(node));
+      if (syntheses.length !== 1) continue;
+      anchor = syntheses[0].node;
+      positionSource = 'turn_synthesis';
+    }
+    const step = anchor.primary.sim_step;
+    if (typeof step !== 'number' || !Number.isFinite(step) || anchor.primary.sim_epoch !== 0 ||
+        step < anchors[0].simStep! || step > anchors.at(-1)!.simStep!) continue;
+    all.push({node, time: seconds(step), positionSource});
+  }
+  all.sort((a,b) => a.time-b.time || a.node.seq-b.node.seq);
+  return {reason:null, timeForStep: seconds, all, prompts:all.filter(c => c.node.kind === 'model_call'),
+    actions:all.filter(c => c.node.kind !== 'model_call')};
 }
 export function cueAt(cues: PlaybackCue[], time: number): PlaybackCue | null {
   let last: PlaybackCue | null = null;

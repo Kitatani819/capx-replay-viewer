@@ -1169,7 +1169,29 @@ exists there.
 
 ### 9.3 Layout
 
-#### Default simple view
+#### Default replay view
+
+The default page uses the approved recording-focused layout: MP4 on the left,
+processing timeline and logs below the video, and `入出力`, `候補`, `統合結果`
+on the right. The left `詳細ログ` switch opens the existing causal timeline in
+the same lower panel. Selected rows briefly highlight (450 ms); reduced-motion
+preferences disable this effect. Event selection pauses and seeks; switching
+the three right tabs never seeks, plays, or replaces the video element.
+Playback and native seeks follow events while preserving the chosen detail tab.
+The panes stack on screens narrower than 900 px.
+
+`入出力` reuses the recorded request/response, service artifact, executed Python
+and stream components described below. Debug state and input differences remain
+available as expandable sections. `候補` shows the recorded candidates and
+their shared or distinct saved inputs. `統合結果` shows the same turn's recorded
+synthesis input/output and links to its executed code. Neither tab fabricates
+missing records or a fixed candidate count.
+
+The same layout and three tabs apply to legacy runner trials. Without frame
+anchors, selecting their saved logs pauses the video at its current position;
+it never invents a seek target. Their missing synchronization notice remains.
+
+#### Optional per-execution view (`view=simple`)
 
 The default view groups records by one code execution. Select `実行回`,
 `前の実行`, or `次の実行` to switch the video interval, generating prompt,
@@ -1196,19 +1218,23 @@ shows that block's stdout and stderr. Recorded input images remain labelled.
 External media URLs are never fetched. Missing payloads and loading errors
 remain visible. Other perception calls remain accessible in the detailed view.
 
-`詳細を見る` switches to the diagnostic layout below without changing the
-selected run, episode or event; `シンプル表示に戻る` switches back. `view=details`
-in the URL opens the diagnostic view directly. Metadata, API trees, hashes and
-provenance tabs remain available there. Narrow screens stack the two simple panels.
+`リプレイを見る` opens replay without changing the selected run, episode or event;
+`実行回ごとの表示` switches back. Existing `view=details` links still open replay.
+Metadata, API trees, hashes and provenance remain available. Narrow screens stack
+the two per-execution panels.
 
 #### Diagnostic view: in-page video playback
 
-The media pane now opens `動画＋プロンプト` when a combined MP4 is available.
+The media pane opens `動画＋処理タイムライン` when an MP4 is available.
 Native video controls support playback and seeking; the default speed is 0.5×.
-`再生位置に追従` selects the model call at the current video position, scrolls
-the event list, and reveals the actual request messages in the detail pane.
-`コード・API` follows execution events instead. Clicking a cue pauses and seeks
-the video and disables automatic following so the selected input stays visible.
+Entering replay preserves the selected execution/event at its recorded position.
+Playing or manually seeking enables `再生位置に追従`: it selects the current process,
+scrolls the event list, and updates its detail contents without changing the selected tab. `すべて` includes
+model calls, Python/API/service calls, streams, feedback and evaluator results.
+`プロンプト` and `コード・API` filter this list; the turn picker uses recorded turn ids.
+Events sharing a video position are grouped in file (`seq`) order and remain individually
+selectable. Clicking either a cue or the existing causal timeline pauses and seeks
+the video; manual selection remains until playback or a native seek resumes following.
 
 Video lookup uses the time-verified final attempt's recorded artifact paths and
 an exact match to a registered runner root. Earlier retry attempts never inherit
@@ -1224,6 +1250,12 @@ requires one recorded camera, epoch zero, an initial buffer index of zero, monot
 step anchors, and a last-frame index consistent with video duration within about
 one frame. Resets, other camera files and incomplete mappings disable following
 with an explanation while retaining video playback. No new recording is required.
+The explanation is headed 「同期情報なし」, also in MP4-only legacy trials.
+Worker-thread ensemble members without simulator coordinates may reference the
+position of a unique synthesis in the same recorded turn. These cues explicitly
+say 「同じターンの統合位置を参照」; their own physical time is not asserted. Missing or
+multiple syntheses do not provide an anchor. Conflicting buffer/step pairs disable
+synchronization. See [GENIAC replay operation and validation](replay.md).
 If no eligible MP4 is available, the recorded-frame view remains the default.
 
 For upstream episodes, the simple view matches `video_turn_NN` to the recorded
@@ -1287,7 +1319,7 @@ Runner directories without a trace are listed separately (section 9.4). The URL 
 `run`, `episode` and `event` (and `legacy_run`, `legacy_trial`, `legacy_root` for a
 runner trial without a trace), so a view can be shared.
 
-Left pane (resizable). The task text comes first (「タスク文」, from `task_text`), then the
+Detailed log below the left video (`詳細ログ`). The task text comes first (「タスク文」, from `task_text`), then the
 event timeline, grouped by cause from the ids of section 5: model call, parsed code, code
 block, API calls, stdout/stderr, evaluator, VDM call, feedback, next model call. Events are
 never linked by time proximity; an event whose parent id does not resolve is shown as an
@@ -1320,7 +1352,7 @@ card, the top bar, the media pane and each detail tab has an error boundary, so 
 of an unexpected shape replaces only that part with a notice; the top bar's fallback keeps
 the button that opens the picker.
 
-Right pane, media (resizable against the details):
+Left pane, media and recorded-frame alternative:
 
 - for model calls, the images and videos that were sent, in payload order, labelled
   「モデルに送信」 (sent to the model), with hash, size and source. The recorder's `source`
@@ -1342,7 +1374,8 @@ Right pane, media (resizable against the details):
   「過去3D未対応：記録済みフレームを表示しています」 (past 3D not supported; showing recorded
   frames).
 
-Right pane, details, five tabs:
+Right pane, recorded content reused in `入出力` (the former diagnostic tabs are
+described by their original names below; debug state and input diff are expandable):
 
 1. 実際のモデル入力 (actual model input): for model calls, the stored request in message
    order (role, full text with fold and unfold, search, copy), images inline with their
@@ -1393,6 +1426,16 @@ Right pane, details, five tabs:
    its body sha256 equals that of attempt 1. A request whose images were not recorded
    shows 「未記録」.
 
+6. 候補 / 統合結果 (separate tabs): candidates and syntheses for the recorded turn, grouped
+   by logical call rather than HTTP attempt. Candidate rows show model, temperature,
+   reply, errors, token-limit truncation and stopped-stream partial text. Equal saved
+   messages/input share one input panel; unknown or different inputs remain separate.
+   Synthesis has its own actual-input and output panels. A whole candidate section in
+   the saved synthesis request must uniquely match temperature and full reply before
+   the viewer marks it as sent. Missing/ambiguous evidence stays unknown. Python,
+   REGENERATE and FINISH are distinguished; execution links use source_model_event_id.
+   Model claims, code stdout, and evaluator results retain their separate sources.
+
 Polling. On a running episode in Live mode, the viewer reads new events and the episode
 summary about every second and keeps the newest event selected. Any manual selection, or a
 URL that names an event, switches to Browse, where only the summary is re-read (every
@@ -1438,3 +1481,14 @@ the tab lists the saved messages and state logs. Files in `prompts_and_responses
 appear separately under the heading
 「ハーネスが保存したプロンプト文字列（送信payloadではない）」 (prompt strings the harness saved;
 not the sent payload).
+
+When `all_responses.json` is available, the legacy output and ensemble tabs also
+show its sequential, parsed final responses (`decision`, `code_blocks`, `block_idx`,
+`reasoning`). These rows are never counted as parallel candidates. Saved
+`initial_prompt` / `multi_turn_prompt` values remain harness records, not verified
+synthesis payloads. Missing candidate parameters, individual answers/errors,
+synthesis input and fallback provenance are explicitly reported as unrecorded.
+`differencing_feedback_*.txt` is displayed with a VDM source label; stdout and
+harness evaluation values carry separate labels. A viewer import may add a
+`trial_record.json` `viewer_import.notice` to explain where the copied files came
+from. Import notes do not create trace events or synchronization anchors.

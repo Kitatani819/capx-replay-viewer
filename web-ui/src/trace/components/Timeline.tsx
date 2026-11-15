@@ -459,6 +459,7 @@ function NodeCard({ row, model, ep, running, selected, selectedEventId, collapse
       <div
         ref={cardRef}
         data-timeline-card=""
+        data-timeline-event={node.primary.event_id}
         role="button"
         tabIndex={selected ? 0 : -1}
         aria-pressed={selected}

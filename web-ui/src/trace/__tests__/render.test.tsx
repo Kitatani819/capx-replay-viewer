@@ -534,12 +534,12 @@ test('the recorded statistics of a nested service call whose data is in an asset
   end.artifacts = [...(end.artifacts ?? []), { path: 'assets/bb/out.npz', label: 'perception_output', kind: 'arrays', written: true }];
   r.apiEnd(api);
   r.blockEnd(block, 0, 0);
-  const loading = detail(r, api, 3, new Map([[end.event_id, { status: 'loading' }]]));
+  const loading = detail(r, api, 0, new Map([[end.event_id, { status: 'loading' }]]));
   assert.match(loading, new RegExp(`記録時の統計（#${end.seq} service_call_end）: 読み込み中…`));
-  const failed = detail(r, api, 3, new Map([[end.event_id, { status: 'failed', error: 'HTTP 404' }]]));
+  const failed = detail(r, api, 0, new Map([[end.event_id, { status: 'failed', error: 'HTTP 404' }]]));
   assert.match(failed, /記録時の統計（#\d+ service_call_end）: 読み込めません/);
   assert.match(failed, /再読み込み/);
-  const loaded = detail(r, api, 3, new Map([[end.event_id, { status: 'loaded', data: { service: 'sam3', function: 'sam3_seg_fn', response_summary: {} } }]]));
+  const loaded = detail(r, api, 0, new Map([[end.event_id, { status: 'loaded', data: { service: 'sam3', function: 'sam3_seg_fn', response_summary: {} } }]]));
   assert.ok(!loaded.includes('記録時の統計（#'), 'nothing to say once loaded');
 });
 
@@ -550,11 +550,11 @@ test('the input diff says the previous request\'s data failed to load (with a re
   makeOversize(prev, 'assets/pp/prev.json.gz');
   const cur = r.request('vdm', 'lc_cur', 1, { n_images: 1, images: [{ path: 'messages[1].content[1].image_url.url', order: 0, kind: 'image', sha256: 'bb' }] });
   r.response(cur);
-  const failed = detail(r, cur, 4, new Map([[prev.event_id, { status: 'failed', error: 'HTTP 500' }]]));
+  const failed = detail(r, cur, 0, new Map([[prev.event_id, { status: 'failed', error: 'HTTP 500' }]]));
   assert.match(failed, /前回の要求の data は 256 KB を超えたため別ファイルにあり、読み込めません（HTTP 500）。追加・削除は判定できません/);
   assert.match(failed, /再読み込み/);
   assert.ok(!/未記録前回の要求/.test(failed), 'not labelled 未記録');
-  const loading = detail(r, cur, 4, new Map([[prev.event_id, { status: 'loading' }]]));
+  const loading = detail(r, cur, 0, new Map([[prev.event_id, { status: 'loading' }]]));
   assert.match(loading, /前回の要求の data は 256 KB を超えたため別ファイルにあり、まだ読み込まれていません/);
 });
 
@@ -617,7 +617,7 @@ test('a nested service call beyond the loading bound says 未読み込み with a
       onSelect={() => {}}
       onFocusRange={() => {}}
       focus={null}
-      tab={3}
+      tab={0}
       onTab={() => {}}
       assetStates={shown}
       onRetryAsset={() => {}}
