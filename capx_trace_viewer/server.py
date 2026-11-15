@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from capx_trace_viewer.trace_api import create_trace_router
+from capx_trace_viewer.platform_support import UnsupportedBackendPlatform, require_supported_backend
 
 _CWD = Path.cwd()
 _DEFAULT_FRONTEND_DIST = Path(__file__).resolve().parents[1] / 'web-ui' / 'dist'
@@ -65,6 +66,7 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
                frontend_dist: str | Path | None = None) -> FastAPI:
     if not viewer_only:
         raise ValueError('The standalone server supports viewer-only mode')
+    require_supported_backend()
     app = FastAPI(title='CaP-X Trace Viewer', version=_package_version(),
                   docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(CORSMiddleware,
@@ -117,11 +119,14 @@ def main() -> None:
     parser.add_argument('--frontend-dist', help='Directory containing the built frontend index.html and assets')
     args = parser.parse_args()
     dist = _cli_path(args.frontend_dist) if args.frontend_dist is not None else _DEFAULT_FRONTEND_DIST
+    roots = [root for group in args.runner_root for root in group]
+    try:
+        app = create_app(trace_root=args.trace_root, runner_roots=roots or None,
+                         expose_traces=args.expose_traces, frontend_dist=args.frontend_dist)
+    except UnsupportedBackendPlatform as exc:
+        parser.error(str(exc))
     if not (dist / 'index.html').is_file():
         print(f'Frontend dist is missing or has no index.html: {dist}', file=sys.stderr)
-    roots = [root for group in args.runner_root for root in group]
-    app = create_app(trace_root=args.trace_root, runner_roots=roots or None,
-                     expose_traces=args.expose_traces, frontend_dist=args.frontend_dist)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

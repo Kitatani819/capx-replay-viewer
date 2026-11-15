@@ -22,39 +22,54 @@ CaP-Xの録画を見ながら、その場面の観測、モデルの入力・回
 
 GMOから取得済みの記録はローカル環境で表示確認していますが、**GMOの計算ノード上でのviewer起動と、そのノードへのSSH転送は未確認**です。ノードの接続制限は利用環境の案内に従ってください。
 
-## Linuxでデモを起動する
+## 対応環境
 
-必要なものはGit、Python **3.10～3.12**、Node.jsとnpmです。開発時はPython 3.12、Node.js 24.19.0、npm 11.17.0で確認しています。WindowsではバックエンドをWSL/Ubuntuで動かしてください。録画済みの閲覧・合成デモにCaP-X本体やGPUは必要ありません。
+| サーバーを動かす環境 | 起動方法 |
+|---|---|
+| Linux | `bash Start-Replay.sh` |
+| macOS（Apple Silicon / Intel） | `bash Start-Replay.sh`。PythonとNode.jsはそのMac用のものを使います。 |
+| Windows | WSL/Ubuntu内でサーバーを動かす `Start-Replay.ps1` |
+
+ブラウザでの閲覧はWindows・Linux・macOSで共通です。GMOなど別のLinuxマシンでサーバーを動かす場合、手元にはブラウザとSSHだけあればよく、手元へのPython・Node.js・WSLの導入は不要です。
+
+録画済みの閲覧・合成デモにCaP-X本体やGPUは必要ありません。OSごとの実行確認範囲は[検証](#検証)に記載しています。
+
+## Linux / macOSでデモを起動する
+
+必要なものはGit、Node.jsとnpm、Python **3.10～3.12**です。対応するPythonが見つからない場合は、導入済みの `uv` でPython 3.12を取得することもできます。開発時の構成はPython 3.12、Node.js 24.19.0、npm 11.17.0です。macOSの標準ターミナルからも同じコマンドを実行できます。
 
 非公開リポジトリのため、このリポジトリを読めるGitHubアカウントのSSH認証を用意します。
 
 ```bash
 git clone git@github.com:Kitatani819/capx-replay-viewer.git
 cd capx-replay-viewer
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
 cd web-ui
 npm ci
 npm run test:trace
 npm run build
 cd ..
-.venv/bin/python scripts/make_replay_demo.py --out outputs/geniac_demo
-.venv/bin/python -m capx_trace_viewer.server --viewer-only \
-  --host 127.0.0.1 --port 8390 \
-  --trace-root outputs/geniac_demo/traces \
-  --runner-root outputs/geniac_demo/runner
+bash Start-Replay.sh
 ```
 
 同じPCのブラウザで **http://127.0.0.1:8390/traces** を開きます。停止はサーバーの端末で `Ctrl+C`。
-デモ出力が既に存在する場合は、生成コマンドを省略するか別の `--out` を使います。既存出力は上書きしません。
+初回は専用のPython環境へ依存パッケージを導入し、合成デモを `outputs/geniac_demo` に生成します。既存データは上書きしません。環境の保存先はLinuxで `~/.cache/capx-geniac-replay`、macOSで `~/Library/Caches/capx-geniac-replay` です（`XDG_CACHE_HOME` を指定した場合はそちらを使います）。OSのPython環境や別のプロジェクトの仮想環境は変更しません。
+
+2回目以降はプロジェクト直下で `bash Start-Replay.sh` を実行します。更新後に画面をビルドし直す場合は `web-ui` で `npm ci` と `npm run build` を実行してください。
+
+自分で用意したPython環境を使う場合は、必要なパッケージを導入して明示できます。この指定ではランチャーからパッケージを追加しません。
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+bash Start-Replay.sh --python .venv/bin/python
+```
 
 操作は **試行を選ぶ → 再生 → 気になる場面で停止 → 動画下のログを選ぶ → 右の入出力 → 候補 → 統合結果** です。[操作の詳細](docs/replay.md)も参照してください。
 
 ## 自分の録画・ログを開く
 
 ```bash
-.venv/bin/python -m capx_trace_viewer.server --viewer-only \
-  --host 127.0.0.1 --port 8390 \
+bash Start-Replay.sh --port 8390 \
   --trace-root /absolute/path/to/traces \
   --runner-root /absolute/path/to/runner
 ```
@@ -63,9 +78,11 @@ cd ..
 
 MP4だけの記録もrunner形式で表示できますが、処理ログがなければ同期や入出力表示はできません。同じ試行の動画・ログ・画像をまとめて指定してください。
 
+既存の `.venv/bin/python -m capx_trace_viewer.server --viewer-only ...` による直接起動も引き続き使えます。複数のrunnerルートや別のフロントエンド配信先などを指定する場合は、この起動方法を利用してください。
+
 ## Windows / WSL
 
-WSLのUbuntuと、その中で利用できる [uv](https://docs.astral.sh/uv/getting-started/installation/) が必要です。リポジトリを取得後、PowerShellで実行します。
+ローカルでサーバーを動かす場合は、WSLのUbuntuと、その中で利用できるPython 3.10～3.12または `uv` が必要です。リポジトリを取得後、PowerShellで実行します。
 
 ```powershell
 cd web-ui
@@ -76,32 +93,40 @@ cd ..
 .\Start-Replay.ps1
 ```
 
-このランチャーはWSL内のキャッシュにPython環境を作り、必要なら合成デモを生成します。初回はPythonと依存パッケージを取得します。
+このランチャーはLinux / macOSと共通の起動処理をWSL内で実行し、専用のPython環境と、必要なら合成デモを作ります。初回は依存パッケージを取得します。`uv` を使う場合は必要に応じてPythonも取得します。
 
 ```powershell
 .\Start-Replay.ps1 -Port 8391 -TraceRoot 'C:\data\traces' -RunnerRoot 'C:\data\runner'
 ```
 
-Linux向けの安全なファイル読み出しを利用するため、WindowsネイティブのPythonでサーバーを動かす構成はサポートしていません。
+Linux / macOSの安全なファイル読み出し機能を利用するため、WindowsネイティブのPythonでサーバーを動かす構成はサポートしていません。対応しない環境では起動時に案内を表示します。Windowsのブラウザでの閲覧やOpenSSHによるGMOへの接続には、この制限はありません。
 
 ## 検証
 
 ```bash
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev,demo]'
 cd web-ui
+npm ci
 npm run test:trace
 npm run build
 cd ..
 .venv/bin/python -m pytest tests -q
-.venv/bin/python -m pip install -e '.[dev,demo]'
 .venv/bin/python -m playwright install chromium
-# デモサーバーを起動した状態で、別端末から実行
+```
+
+別端末で `bash Start-Replay.sh --python .venv/bin/python` を起動してから、次を実行します。
+
+```bash
 .venv/bin/python scripts/demo/check_replay_layout.py --base-url http://127.0.0.1:8390
 ```
 
-2026-11-15、A案への再設計後の検証:
+GitHub ActionsにもLinux・macOSでバックエンドテスト、フロントエンドのテストとビルド、合成デモのブラウザ操作を実行する検証を用意しています。macOSの実行結果は今回のCI結果で確認します。Apple Silicon・Intelの両方をローカル実機で確認したものではありません。
+
+2026-11-15、A案への再設計・選択表示修正時の検証記録:
 
 - フロントエンドのテスト **182件成功**、ビルド成功。
-- Pythonテストは再設計前の検証で **1,480件成功・24件スキップ**。今回の変更はフロントエンドと説明・検証スクリプトで、バックエンドは変更していません。
+- OS対応追加後のPythonテストはWSL/Ubuntuで **1,491件成功・24件スキップ**。Windowsで未対応理由を案内するテストも成功しました。
 - ブラウザは合成デモ **12項目成功**、GMOから取得済みの記録のローカル表示 **8項目成功**。ブラウザ例外0件。
 - 同位置の複数イベント・候補選択、停止位置の保持、マスクの拡大、未記録の表示、MP4のみ、狭幅・動きを減らす設定を確認。
 - モデル呼び出しだけに絞った状態からPythonへ移動すると対象行が隠れる問題と、録画切替後に再生ボタンの状態が残る問題を修正。
