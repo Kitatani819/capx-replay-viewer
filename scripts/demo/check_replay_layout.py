@@ -186,6 +186,11 @@ def check(base_url: str, root: Path, output: Path):
             all_turns()
             cue("synthesis_0").click()
             expect(page.locator('[data-synthesis]')).to_contain_text("Pythonコード")
+            expect(cue("synthesis_0")).to_have_attribute("data-current", "true")
+            # Complete the preceding manual selection/seek before exercising a
+            # separate native seek+play action (React effects run after paint).
+            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            paused_same(0)
             passed.append("Recorded candidate count may be three; Python, REGENERATE and FINISH are distinguished per turn")
 
             video.evaluate("v => { v.currentTime = .2; v.playbackRate = 2; return v.play(); }")
@@ -358,6 +363,9 @@ def check(base_url: str, root: Path, output: Path):
         except Exception:
             page.screenshot(path=str(output / "failure.png"))
             (output / "failure.txt").write_text(page.locator("body").inner_text(), encoding="utf-8")
+            (output / "failure.json").write_text(json.dumps({"url": page.url,
+                "passed": passed, "page_errors": errors, "observations": observations},
+                ensure_ascii=False, indent=2), encoding="utf-8")
             raise
         finally:
             browser.close()

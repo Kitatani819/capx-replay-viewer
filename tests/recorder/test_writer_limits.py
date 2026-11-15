@@ -620,11 +620,17 @@ def test_a_failed_unscoped_log_is_recorded_outside_it(rec):
 def test_an_unscoped_log_that_recovers_says_how_many_lines_it_lost(rec, monkeypatch):
     real = S._os_write
     state = {"fail": 2}
+    unscoped_path = rec.root / "run" / f"unscoped.{os.getpid()}.jsonl"
 
     def no_space(fd, data):
-        if state["fail"] and "/unscoped." in _fd_path(fd):
-            state["fail"] -= 1
-            raise OSError(28, "No space left on device")
+        # Identify the target by its open file identity, without Linux /proc.
+        # A /proc lookup failure would itself fail every write on macOS,
+        # preventing the intended two failures followed by recovery.
+        if state["fail"] and unscoped_path.exists():
+            opened, target = os.fstat(fd), unscoped_path.stat()
+            if (opened.st_dev, opened.st_ino) == (target.st_dev, target.st_ino):
+                state["fail"] -= 1
+                raise OSError(28, "No space left on device")
         return real(fd, data)
 
     monkeypatch.setattr(S, "_os_write", no_space)
@@ -632,6 +638,7 @@ def test_an_unscoped_log_that_recovers_says_how_many_lines_it_lost(rec, monkeypa
     for i in range(3):
         log.emit("model_request", data={"role": "preflight", "i": i})
     rec.flush()
+    assert state["fail"] == 0
     events = rec.unscoped()
     assert [e["data"].get("i") for e in events if e["event_type"] == "model_request"] == [2]
     reports = [e["data"] for e in events if e["data"].get("code") == "write_failed"]

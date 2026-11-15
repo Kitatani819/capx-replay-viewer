@@ -122,37 +122,48 @@ export function VirtualList<T>({
 
   // Bring the requested row into view. Row heights settle after mount (the
   // ResizeObserver measures rows, thumbnails load and grow the cards), so the
-  // request is checked against the row's real position on every render for a
-  // short while, and dropped as soon as the user scrolls by hand.
+  // request is checked against the row's real position after layout settles for
+  // a frame, and dropped as soon as the user scrolls by hand. Never correct and
+  // setView synchronously in every layout effect: mounting different virtual
+  // rows/scroll anchoring can alternate positions and exhaust React's nested
+  // update limit before ResizeObserver gets a chance to measure the new rows.
   // Declared before the effect below so both run in the same commit.
   const pending = useRef<{ key: string; until: number } | null>(null);
   useLayoutEffect(() => {
     pending.current = scrollToKey ? { key: scrollToKey, until: performance.now() + SCROLL_SETTLE_MS } : null;
   }, [scrollToKey, scrollToken]);
   useLayoutEffect(() => {
-    const p = pending.current;
-    const el = containerRef.current;
-    if (!p || !el) return;
-    const idx = keys.indexOf(p.key);
-    if (idx < 0 || performance.now() > p.until) {
-      pending.current = null;
-      return;
-    }
-    const margin = Math.min(el.clientHeight * 0.3, 160);
-    const row = el.querySelector<HTMLElement>(`[data-vkey="${CSS.escape(p.key)}"]`);
-    if (!row) {
-      el.scrollTop = Math.max(0, offsets[idx] - margin);
+    if (!pending.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const p = pending.current;
+      const el = containerRef.current;
+      if (!p || !el || el.clientHeight <= 0) return;
+      const idx = keys.indexOf(p.key);
+      if (idx < 0 || performance.now() > p.until) {
+        pending.current = null;
+        return;
+      }
+      const margin = Math.min(el.clientHeight * 0.3, 160);
+      const row = el.querySelector<HTMLElement>(`[data-vkey="${CSS.escape(p.key)}"]`);
+      let target: number;
+      if (!row) {
+        target = Math.max(0, offsets[idx] - margin);
+      } else {
+        const r = row.getBoundingClientRect();
+        const c = el.getBoundingClientRect();
+        // A short viewport must still be able to show the start of a tall card.
+        const head = Math.min(48, c.height * 0.7);
+        const visible = r.height <= c.height
+          ? r.top >= c.top - 1 && r.bottom <= c.bottom + 1
+          : r.top >= c.top - 1 && r.top <= c.bottom - head + 1;
+        if (visible) return;
+        target = Math.max(0, el.scrollTop + (r.top - c.top) - margin);
+      }
+      // Ignore subpixel rounding/scrollbar quantization instead of oscillating.
+      if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
       readView();
-      return;
-    }
-    const r = row.getBoundingClientRect();
-    const c = el.getBoundingClientRect();
-    const visible =
-      r.height <= c.height ? r.top >= c.top - 1 && r.bottom <= c.bottom + 1 : r.top >= c.top - 1 && r.top <= c.bottom - 48;
-    if (!visible) {
-      el.scrollTop = Math.max(0, el.scrollTop + (r.top - c.top) - margin);
-      readView();
-    }
+    });
+    return () => window.cancelAnimationFrame(frame);
   });
   const cancelPending = () => {
     pending.current = null;
