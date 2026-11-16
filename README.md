@@ -14,6 +14,16 @@ CaP-Xの録画を見ながら、その場面の観測、モデルの入力・回
 
 個人の接続設定・秘密鍵・GMOの実験ログは含めません。まず同梱スクリプトで作る**合成デモ**で操作を試せます。viewerは閲覧専用で、試行やモデル推論を開始しません。
 
+## デモ映像
+
+GMOで実行した `two_arm_handover`（seed 302）の録画です。2台のアームがハンマーを受け渡します。
+
+![GMOで実行したハンマーの受け渡し](docs/media/gmo-two-arm-handover.gif)
+
+[録画（MP4、14.53秒）](docs/media/gmo-two-arm-handover.mp4?raw=true)
+
+## ビューアの画面例
+
 ![合成デモのリプレイ画面](docs/media/replay-layout.png)
 
 「APIとPython」の試作（`goto_pose` と実行Pythonの3行目）:
@@ -43,10 +53,8 @@ GMOから取得済みの記録はローカル環境で表示確認していま�
 
 必要なものはGit、Node.jsとnpm、Python **3.10～3.12**です。対応するPythonが見つからない場合は、導入済みの `uv` でPython 3.12を取得することもできます。開発時の構成はPython 3.12、Node.js 24.19.0、npm 11.17.0です。macOSの標準ターミナルからも同じコマンドを実行できます。
 
-非公開リポジトリのため、このリポジトリを読めるGitHubアカウントのSSH認証を用意します。
-
 ```bash
-git clone git@github.com:Kitatani819/capx-replay-viewer.git
+git clone https://github.com/Kitatani819/capx-replay-viewer.git
 cd capx-replay-viewer
 cd web-ui
 npm ci
@@ -150,7 +158,7 @@ GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエ�
 - OS別検証で見つかった詳細ログのスクロール補正による連続更新を修正し、旧実装では失敗する回帰テストを追加。macOSに存在しない `/proc` に依存していたレコーダーのテストも、ファイルの識別情報を使う方法へ修正。
 - 実行中の応答をブラウザ内で模擬し、Liveの新着追従、再生による閲覧への切り替え、Live再開時の動画停止を確認。実際のGMO上で記録中の試行を使ったLive検証は未実施です。
 
-実際のGMO試行ではフレーム対応情報、SAM3マスク、VDMへの実送信画像、統合への実送信入力が不足していたため、それらの表示・同期は合成デモで確認しています。保存済みのGMO実試行 `two_arm_handover`（Oracle）をChromeで開き、seed 302の13.73秒で動画と38行目を同時に表示できることと、seed 301に切り替えても「APIとPython」が維持されることを確認しました。APIとPythonの呼び出し行には `call_site`、モデル入出力には `source_model_event_id` と要求・回答の記録が必要です。実データの検証用ファイルは同梱していません。
+実際のGMO試行ではフレーム対応情報、SAM3マスク、VDMへの実送信画像、統合への実送信入力が不足していたため、それらの表示・同期は合成デモで確認しています。保存済みのGMO実試行 `two_arm_handover`（Oracle）をChromeで開き、seed 302の13.73秒で動画と38行目を同時に表示できることと、seed 301に切り替えても「APIとPython」が維持されることを確認しました。APIとPythonの呼び出し行には `call_site`、モデル入出力には `source_model_event_id` と要求・回答の記録が必要です。実試行のトレースと実行ログは、各自の保存先から指定します。
 
 ## 記録形式とライセンス
 

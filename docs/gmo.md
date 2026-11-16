@@ -2,7 +2,7 @@
 
 [README](../README.md) | [画面の操作](replay.md)
 
-viewerをGMOの計算ノードで動かし、SSH転送を通して手元のブラウザから開く手順です。閲覧にGPUは使いません。このリポジトリにはログイン情報・鍵・実験データは含めません。
+viewerをGMOの計算ノードで動かし、SSH転送を通して手元のブラウザから開く手順です。閲覧にGPUは使いません。READMEではGMO実試行のデモ映像を公開しています。ログイン情報・鍵・実験ログは含めません。
 
 手元のPCはWindows・Linux・macOSのいずれでも使えます。この構成ではviewerのPythonサーバーをGMO側で動かすため、手元に必要なのはSSHとブラウザだけです。手元へ録画を持ち帰って動かす場合は、[Linux / macOSの起動方法](../README.md#linux--macosでデモを起動する)または[Windows / WSLの起動方法](../README.md#windows--wsl)を使います。
 
@@ -35,7 +35,7 @@ hostname
 
 ```bash
 cd /path/to/shared-storage/your-work-directory
-git clone git@github.com:Kitatani819/capx-replay-viewer.git
+git clone https://github.com/Kitatani819/capx-replay-viewer.git
 cd capx-replay-viewer
 python3.12 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev]'
@@ -47,8 +47,6 @@ cd ..
 ```
 
 Python 3.10～3.12、Node.js、npmが必要です。未導入の場合は計算ノード上で利用できる環境を用意してください。READMEはPython 3.12を使った例です。ロボットシミュレーターやLLMのモデル重みは不要です。
-
-この非公開リポジトリを読めるGitHub認証が必要です。GMOログイン用の鍵とGitHub用の認証は別です。GitHubの鍵の準備は[公式clone手順](https://github.com/matsuolab/geniac_prize_2026_baseline/blob/main/docs/tutorial/03_clone.md)を参照してください。既存のSSH設定を上書きしたり、手元のGMO秘密鍵を共有ストレージへコピーしたりしないでください。
 
 ## 3. 録画とログを指定して起動
 
