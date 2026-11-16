@@ -24,11 +24,13 @@ GMOで実行した `two_arm_handover`（seed 302）の録画です。2台のア�
 
 ## ビューアの画面例
 
-![合成デモのリプレイ画面](docs/media/replay-layout.png)
+GMOで実行した `two_arm_handover`（seed 302）の画面です。9.07秒の `goto_pose_arm1` を選択し、録画とAPIの引数・戻り値を表示しています。
 
-「APIとPython」の試作（`goto_pose` と実行Pythonの3行目）:
+![GMOの録画と9.07秒のAPI呼び出しの詳細](docs/media/replay-layout.png)
 
-![APIとPythonの表示](docs/media/api-python.png)
+「APIとPython」では、13.73秒の `goto_pose_arm0` に対応する実行コードの38行目が、動画と同時に見えます。
+
+![GMOの録画とPythonの38行目を表示する「APIとPython」](docs/media/api-python.png)
 
 ## GMOで使う
 
