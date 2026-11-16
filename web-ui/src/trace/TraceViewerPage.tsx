@@ -34,7 +34,7 @@
  * Related: hooks.ts (paging, polling, URL), model.ts (tree), components/*.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './replay.css';
 import { traceApi } from './api';
 import { applyDataAssets, dataAssetTargets, withTargetsLoading } from './dataAsset';
@@ -46,7 +46,7 @@ import { GRACE_MAX_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runne
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
 import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
-import type { ReplaySeek } from './components/VideoPlayback';
+import type { ReplayProcessMode, ReplaySeek } from './components/VideoPlayback';
 import { replayTab } from './replay';
 import { headerVerdict } from './outcome';
 import { dataOf } from './types';
@@ -205,17 +205,19 @@ export default function TraceViewerPage() {
 
   const [scrollToken, setScrollToken] = useState(0);
   const [tab, setTab] = useState(0);
+  const [processMode, setProcessMode] = useState<ReplayProcessMode>('main');
   const [apiPythonMode, setApiPythonMode] = useState(false);
   const [focus, setFocus] = useState<RangeFocus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [playbackEventId, setPlaybackEventId] = useState<string | null>(null);
+  const [playbackSelection, setPlaybackSelection] = useState<{ eventId: string | null } | null>(null);
   const [replaySeek, setReplaySeek] = useState<ReplaySeek | null>(null);
   useEffect(()=>{
     const navigate=()=>{
       // replaceState/pushState from playback do not fire popstate. A history
       // navigation to an explicit event is a user selection, even during Live.
       if(new URLSearchParams(window.location.search).get('event'))setLive(false);
-      setReplaySeek(null);setPlaybackEventId(null);
+      setReplaySeek(null);
+      setPlaybackSelection(null);
     };
     window.addEventListener('popstate',navigate);
     return ()=>window.removeEventListener('popstate',navigate);
@@ -248,7 +250,7 @@ export default function TraceViewerPage() {
 
   const onSelect = useCallback(
     (node: TNode, eventId?: string) => {
-      setPlaybackEventId(null);
+      setPlaybackSelection(null);
       setReplaySeek({key: node.key, token: nextFocusToken()});
       setLive(false);
       setParams({ event: eventId ?? selectionEventId(node) });
@@ -259,6 +261,7 @@ export default function TraceViewerPage() {
 
   const onFocusRange = useCallback(
     (eventId: string, path: string, start: number, end: number) => {
+      setPlaybackSelection(null);
       setLive(false);
       setParams({ event: eventId });
       setTab(0);
@@ -269,22 +272,26 @@ export default function TraceViewerPage() {
   );
 
   const onPlaybackSelect = useCallback((node: TNode, openDetail = false) => {
+    const eventId = selectionEventId(node);
+    setPlaybackSelection({ eventId });
     setReplaySeek(null);
     setLive(false);
-    setParams({event: selectionEventId(node)});
+    setParams({event: eventId});
     setScrollToken(x => x+1);
-    setPlaybackEventId(selectionEventId(node));
     setFocus(null);
     if(openDetail)setTab(replayTab(node));
   }, [setParams]);
   const onPlaybackClear = useCallback(() => {
+    setPlaybackSelection({ eventId: null });
     setReplaySeek(null);
     setLive(false);
     setParams({event: null});
-    setPlaybackEventId(null);
     setFocus(null);
   }, [setParams]);
-  const onReplayInteract = useCallback(()=>setLive(false),[]);
+  const onReplayInteract = useCallback(() => {
+    setReplaySeek(null);
+    setLive(false);
+  }, []);
 
   // A range focus applies only to the call it was made for.
   useEffect(() => {
@@ -293,7 +300,10 @@ export default function TraceViewerPage() {
 
   const onLive = (v: boolean) => {
     setLive(v);
-    if (v) setScrollToken((x) => x + 1);
+    if (v) {
+      setPlaybackSelection(null);
+      setScrollToken((x) => x + 1);
+    }
   };
 
   // Live 3D: only when this episode runs (status re-read in Browse too) and its recorded Viser
@@ -328,6 +338,24 @@ export default function TraceViewerPage() {
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
   const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-a-left-width', Math.round((window.innerWidth - 112) * .6));
   const mainRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const layout = mainRef.current;
+    if (!apiPythonMode || !layout) return;
+    const measureTop = () => {
+      // Use the document position so scrolling the page leaves the pane sizes stable.
+      const top = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
+      layout.style.setProperty('--replay-layout-top', `${top}px`);
+    };
+    measureTop();
+    const header = layout.parentElement?.querySelector('.replay-header');
+    const observer = header && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measureTop) : null;
+    if (header) observer?.observe(header);
+    window.addEventListener('resize', measureTop);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measureTop);
+    };
+  }, [apiPythonMode]);
   const clampLeft = (w: number) => {
     const total = mainRef.current?.getBoundingClientRect().width ?? 1400;
     return Math.round(Math.max(280, Math.min(total - 420, w)));
@@ -338,11 +366,12 @@ export default function TraceViewerPage() {
     setLive(true);
     setFocus(null);
     setReplaySeek(null);
-    setPlaybackEventId(null);
+    setPlaybackSelection(null);
     setParams({ run: r, episode: e, event: null, legacy_run: null, legacy_trial: null, legacy_root: null }, true);
   };
   const pickLegacy = (r: string, t: LegacyTrialRef) => {
     setPickerOpen(false);
+    setPlaybackSelection(null);
     setParams(
       { run: null, episode: null, event: null, legacy_run: r, legacy_trial: `${t.task}/${t.condition}/${t.trialDir}`, legacy_root: t.root !== null ? String(t.root) : null },
       true,
@@ -454,6 +483,8 @@ export default function TraceViewerPage() {
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
                 <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonModeChange={setApiPythonMode}
+                  processMode={processMode} onProcessModeChange={setProcessMode}
+                  selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
                 model={model}
                 ep={ep}
@@ -480,7 +511,7 @@ export default function TraceViewerPage() {
             <div className="flex-1 min-h-0">
               <DetailTabs
                 apiPythonMode={apiPythonMode}
-                revealPrompt={playbackEventId !== null && playbackEventId === selection?.eventId}
+                revealPrompt={playbackSelection?.eventId != null && playbackSelection.eventId === selection?.eventId}
                 model={model}
                 ep={ep}
                 summary={summary.data}

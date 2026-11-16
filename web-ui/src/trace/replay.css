@@ -60,7 +60,6 @@
 .replay-detail-body { padding: 26px 28px; }
 .replay-player { gap: 0; }
 .replay-film { flex: 0 0 auto; width: 100%; height: clamp(230px, 43vh, 520px); object-fit: contain; background: #e0e5de; border-radius: 8px; }
-@media (min-width: 901px) { .replay-api-python .replay-film { height: clamp(230px, 38vh, 520px); } }
 .replay-playbar { display: flex; align-items: center; gap: 20px; min-height: 70px; flex-shrink: 0; }
 .replay-play-button { background: #2e5743; color: white; border: 0; border-radius: 5px; min-width: 96px; padding: 8px 13px; white-space: nowrap; }
 .replay-playbar input[type="range"] { flex: 1; width: 0; accent-color: #356b4e; height: 4px; }
@@ -80,6 +79,14 @@
 .replay-playback-options > div { position: absolute; bottom: 32px; right: 0; z-index: 30; width: 300px; padding: 18px; border: 1px solid #d5ddd4; background: white; border-radius: 8px; box-shadow: 0 8px 30px #24332b22; display: flex; gap: 14px; flex-wrap: wrap; }
 .replay-media-tools { order: 2; padding-top: 9px; display: flex; align-items: center; gap: 16px; font-size: 12px; color: #69796c; flex-shrink: 0; }
 .replay-media-tools select { background: transparent; border-color: transparent; font-size: 12px; padding: 0 4px; }
+/* The recording and Python pane share the space below the trial header. */
+.replay-media:has(.replay-api-python) { height: max(520px, calc(100dvh - var(--replay-layout-top, 110px) - 16px)); }
+.replay-media:has(.replay-api-python) > .replay-media-tools { flex-shrink: 0; }
+.replay-video:has(.replay-api-python) { display: flex; flex: 1; min-height: 0; }
+.replay-api-python { width: 100%; min-width: 0; }
+.replay-api-python .replay-film { flex: 1 1 0; height: auto; min-height: 128px; max-height: 520px; }
+.replay-api-python .replay-process-log { display: flex; flex: 1 1 7rem; flex-direction: column; min-height: 0; }
+.replay-api-python :is(.replay-log-heading, .replay-log-tools, .replay-log-footer, .replay-sync-warning, .replay-warning) { flex-shrink: 0; }
 @media (max-width: 1200px) {
   .replay-header { padding: 0 24px; }
   .replay-workspace > .replay-layout { margin: 20px 24px 16px; }

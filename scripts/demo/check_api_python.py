@@ -92,6 +92,32 @@ def check_api_python(page, url, events, output):
     paused_at(0)
     passed.append('API/Python: definition details and recorded evidence are separate; other-time selection and previous/next full-code navigation pause and seek without leaving the mode')
 
+    slider = page.get_by_role('slider', name='動画の再生位置', exact=True)
+    slider.evaluate("""input => {
+        input.addEventListener('input', () => { window.__requestedReplayTime = Number(input.value); });
+    }""")
+
+    def check_slider_seek(event):
+        selected(event, 3)
+        requested = page.evaluate('window.__requestedReplayTime')
+        # React's selection update and the native seeking/seeked events may run
+        # in different frames. Verify the settled position after both.
+        page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+        paused_at(requested)
+        return requested
+
+    row(goto1).click()
+    paused_at(2)
+    slider.click(position={'x': slider.bounding_box()['width'] * .28, 'y': 2})
+    assert .5 < check_slider_seek(goto0) < 1.8
+    slider.press('End')
+    duration = video.evaluate('v => v.duration')
+    assert abs(check_slider_seek(goto1) - duration) < .02
+    assert abs(video.evaluate('v => v.currentTime') - duration) < .001
+    row(goto0).click()
+    paused_at(0)
+    passed.append('API/Python: a slider click between API calls and End keep the requested paused time while selecting the relevant Python line')
+
     # Wait for the programmatic jump to settle before a native seek/play.
     page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     video.evaluate('v => { v.playbackRate = 2; v.currentTime = .2; return v.play(); }')
@@ -117,6 +143,18 @@ def check_api_python(page, url, events, output):
         assert box and box['y'] >= 0 and box['y'] + box['height'] <= 1000, box
     page.screenshot(path=str(output / 'api-python.png'), animations='disabled')
     passed.append('API/Python: playback follows API and Python line across turns; candidate/synthesis tabs preserve paused position and selected API')
+
+    page.set_viewport_size({'width': 1366, 'height': 720})
+    page.evaluate('window.scrollTo(0, 0)')
+    page.wait_for_function("""() => {
+        const film = document.querySelector('.replay-film').getBoundingClientRect();
+        const mark = document.querySelector('[data-api-python-panel] [data-code-highlighted=true]');
+        const line = mark.getBoundingClientRect();
+        const code = mark.closest('.api-python-code-body').getBoundingClientRect();
+        return window.scrollY === 0 && film.height > 0 && film.top >= 0 && film.bottom <= innerHeight
+            && line.top >= code.top - 1 && line.bottom <= code.bottom + 1 && line.bottom <= innerHeight;
+    }""")
+    passed.append('API/Python: video and the highlighted call line fit in the viewport after reducing its height')
 
     page.set_viewport_size({'width': 760, 'height': 900})
     page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')

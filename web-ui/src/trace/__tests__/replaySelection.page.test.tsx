@@ -157,19 +157,22 @@ test('running page keeps Live tail ownership until replay interaction, and can r
   page.unmount();
 });
 
-test('picking another trial discards a previous trial manual seek before choosing its default',async()=>{
+test('picking another trial keeps the process mode and clears the previous selection and seek',async()=>{
   resetBrowser();const run=makeRun();
   for(const id of ['e1','e2'])addEpisode(run,id,{status:'ended'},[
     ev(id,1,'episode_start',{}),ev(id,2,'code_block_start',{code_block_id:`${id}_2`,code:'x=1'}),
   ]);
   serve(run);setLocation('/traces?view=details&run=r1&episode=e1&event=e1_2');
   const page=mount(TraceViewerPage,{});await advance(1000);
+  propsOf<MediaProps>(page.output,MediaPane).onProcessModeChange!('api-python');await advance(0);
   const detail=propsOf<DetailsProps>(page.output,DetailTabs);
   detail.onSelect(detail.model.blocks[0]);await advance(0);
   assert.ok(propsOf<MediaProps>(page.output,MediaPane).seekRequest);
   propsOf<BarProps>(page.output,TopBar).onOpenPicker();await advance(0);
   propsOf<Parameters<typeof Picker>[0]>(page.output,Picker).onPick('r1','e2');await advance(1000);
   const media=propsOf<MediaProps>(page.output,MediaPane);
+  assert.equal(media.ep.episodeId,'e2');
+  assert.equal(media.processMode,'api-python');
   assert.equal(media.seekRequest,null);
   assert.equal(media.selection,null);
   assert.equal(media.allowReplayInitialSelection,true);

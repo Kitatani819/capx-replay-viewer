@@ -147,3 +147,33 @@ test('registered descriptions identify pinned reference definitions and never in
   for (const api of apis.slice(3)) assert.equal(apiDefinition(model.nodeOfEvent.get(api.event_id)!), null);
   assert.equal(apiDefinition(model.nodeOfEvent.get(block.event_id)!), null);
 });
+
+test('recorded handover methods resolve only for the verified class and qualified method', () => {
+  const r = new Rec();
+  const block = r.blockStart(null, code);
+  const owner = 'FrankaHandoverPrivilegedApi';
+  const names = ['get_hammer_pose', 'goto_pose_arm0', 'goto_pose_arm1', 'open_gripper_arm0',
+    'close_gripper_arm0', 'open_gripper_arm1', 'close_gripper_arm1'];
+  const calls = names.map(name => r.apiStart(block, name, {}, null, {
+    api_class: owner, qualname: `${owner}.${name}`,
+  }));
+  const unverified = [
+    r.apiStart(block, 'goto_pose_arm0', {}, null, { api_class: owner, qualname: `${owner}.goto_pose_arm1` }),
+    r.apiStart(block, 'goto_pose_arm0', {}, null, { api_class: 'AnotherApi', qualname: `${owner}.goto_pose_arm0` }),
+    r.apiStart(block, 'goto_pose_arm0', {}, null, { api_class: owner, qualname: null }),
+    r.apiStart(block, 'goto_pose_arm2', {}, null, { api_class: owner, qualname: `${owner}.goto_pose_arm2` }),
+  ];
+  const model = buildEpisodeModel(r.events);
+  const definition = (call: (typeof calls)[number]) => apiDefinition(model.nodeOfEvent.get(call.event_id)!);
+  for (const [index, call] of calls.entries()) {
+    const doc = definition(call)!;
+    assert.equal(doc.name, names[index]);
+    assert.match(doc.sourceUrl, /blob\/ac680843fb60c464aa74c87a2815cb5917865be4\/.*handover_privileged\.py#L\d+-L\d+/);
+    assert.ok(doc.docstring);
+  }
+  assert.match(definition(calls[0])!.summaryJa, /ハンマーの柄の中央/);
+  assert.match(definition(calls[1])!.descriptionJa, /move_to_joints_blocking で/);
+  assert.match(definition(calls[2])!.descriptionJa, /move_to_joints_blocking_arm1 で/);
+  assert.match(definition(calls[2])!.summaryJa, /アーム0基準からアーム1基準に変換/);
+  for (const call of unverified) assert.equal(definition(call), null);
+});

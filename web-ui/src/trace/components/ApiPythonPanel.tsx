@@ -1,5 +1,5 @@
 /** Recorded API calls beside their executed Python, under the recording. */
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { apiCallSite, apiLineMatch } from '../apiPython';
 import { apiDefinition } from '../apiDefinitions';
 import { useFullText } from '../hooks';
@@ -86,6 +86,15 @@ function ApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }) {
   </details>;
 }
 
+function revealInPane(pane: HTMLElement, selector: string) {
+  const item = pane.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+  if (!item) return;
+  const top = pane.getBoundingClientRect().top + pane.clientTop;
+  if (item.top < top || item.bottom > top + pane.clientHeight) {
+    pane.scrollTop += item.top - top - Math.max(0, (pane.clientHeight - item.height) / 2);
+  }
+}
+
 export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn = null }: ApiPythonPanelProps) {
   const selected = model.allNodes.find(node => node.key === selectedKey) ?? null;
   const api = selected?.kind === 'api_call' ? selected : null;
@@ -102,22 +111,22 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
   const codeScroll = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<{ key: string; text: string; top: number; left: number } | null>(null);
 
-  useEffect(() => {
-    const list = apiList.current;
-    const row = list?.querySelector<HTMLElement>('[data-api-selected="true"]');
-    if (!list || !row || list.clientHeight <= 0) return;
-    const bounds = list.getBoundingClientRect(), item = row.getBoundingClientRect();
-    if (item.top < bounds.top || item.bottom > bounds.bottom) list.scrollTop += item.top - bounds.top - 12;
-  }, [selectedKey]);
-  useEffect(() => {
-    const pane = codeScroll.current;
-    if (!pane) return;
-    const line = pane.querySelector<HTMLElement>('[data-code-highlighted="true"]');
-    if (line) {
-      const bounds = pane.getBoundingClientRect(), row = line.getBoundingClientRect();
-      if (row.top < bounds.top || row.bottom > bounds.bottom) pane.scrollTop += row.top - bounds.top - 16;
-    } else pane.scrollTop = 0;
-  }, [block?.key, marked.line, code.text]);
+  useLayoutEffect(() => {
+    const listPane = apiList.current;
+    const codePane = codeScroll.current;
+    if (!listPane || !codePane) return;
+    if (marked.line === null) codePane.scrollTop = 0;
+    const revealSelection = () => {
+      revealInPane(listPane, '[data-api-selected="true"]');
+      revealInPane(codePane, '[data-code-highlighted="true"]');
+    };
+    revealSelection();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(revealSelection);
+    observer.observe(listPane);
+    observer.observe(codePane);
+    return () => observer.disconnect();
+  }, [selectedKey, turn, block?.key, marked.line, code.text]);
 
   const preview = (node: TNode, target: HTMLButtonElement) => {
     const box = target.getBoundingClientRect();
@@ -156,7 +165,7 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
       <div className="api-python-selected-description" data-api-description="">
         {api ? <><strong>{apiName(api)}{marked.line ? ` · ${marked.line}行目` : ''}</strong><p>{definition?.summaryJa ?? '説明未登録'}</p>{definition && <small className="api-python-muted">参照定義 · 実行時の実装との一致は未確認（出典は「詳細」）</small>}</> : <p>APIを選ぶと、役割と呼び出し行を確認できます。</p>}
       </div>
-      <div className="api-python-code-scroll" ref={codeScroll}>
+      <div className="api-python-code-body" ref={codeScroll}>
         {api && <ApiDetails key={api.key} node={api} ep={ep}/>}
         {site?.reason && <p className="api-python-missing">{site.reason}</p>}
         {!site?.reason && marked.reason && <p className="api-python-missing">{marked.reason}</p>}
