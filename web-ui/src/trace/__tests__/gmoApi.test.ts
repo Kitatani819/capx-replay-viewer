@@ -23,6 +23,8 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
     await gmoApi.episodes();
     await gmoApi.fetch('run_a', 'ep_1', controller.signal);
     await gmoApi.jobs(controller.signal);
+    await gmoApi.auto(controller.signal);
+    await gmoApi.setAutoPaused(true, controller.signal);
     assert.deepEqual(calls.map(call => [call.init.method, call.url]), [
       ['GET', '/api/gmo/config'],
       ['PUT', '/api/gmo/config'],
@@ -31,6 +33,8 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
       ['GET', '/api/gmo/episodes?scope=all&refresh=0'],
       ['POST', '/api/gmo/fetch'],
       ['GET', '/api/gmo/jobs'],
+      ['GET', '/api/gmo/auto'],
+      ['PUT', '/api/gmo/auto'],
     ]);
     for (const { init } of calls) {
       const headers = new Headers(init.headers);
@@ -46,6 +50,7 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
     assert.deepEqual(JSON.parse(String(calls[1].init.body)), settings);
     assert.deepEqual(JSON.parse(String(calls[2].init.body)), {});
     assert.deepEqual(JSON.parse(String(calls[5].init.body)), { run_id: 'run_a', episode_id: 'ep_1' });
+    assert.deepEqual(JSON.parse(String(calls[8].init.body)), { paused: true });
     assert.ok(calls.filter((_, i) => i !== 4).every(({ init }) => init.signal === controller.signal));
   } finally {
     globalThis.fetch = savedFetch;
@@ -61,6 +66,7 @@ test('GMO route-not-found answers identify a disabled integration on every endpo
     const calls = [
       () => gmoApi.config(), () => gmoApi.saveConfig(settings), () => gmoApi.check(),
       () => gmoApi.episodes(), () => gmoApi.fetch('r', 'e'), () => gmoApi.jobs(),
+      () => gmoApi.auto(), () => gmoApi.setAutoPaused(false),
     ];
     for (const call of calls) {
       await assert.rejects(call, (error: unknown) => {

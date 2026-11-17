@@ -11,7 +11,9 @@
  * while the episode is running; any manual selection switches to Browse, which
  * stops following new events but still re-reads the episode status every 5 s.
  * When the episode stops running, events and status are polled for a short
- * grace period so the tail and late events are read (live.ts). Nothing here
+ * grace period so the tail and late events are read (live.ts). Incomplete
+ * episodes keep re-reading status, and in Live their events, every 20 s to
+ * detect the next import even after its copied heartbeat expires. Nothing here
  * can pause or stop an experiment. A poll tick never aborts the read still in
  * flight unless it has been in flight for 60 s (hooks.ts useAsync `poll`).
  *
@@ -42,7 +44,7 @@ import { nextFocusToken } from './focus';
 import { fmtClock } from './format';
 import { useAsync, useDataAssets, useEpisodeEvents, useInterval, useStoredState, useUrlParams } from './hooks';
 import { LABELS } from './labels';
-import { GRACE_MAX_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
+import { GRACE_MAX_MS, INCOMPLETE_POLL_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
 import { awaitingOracleHookEvidence, episodeRecordingWarnings } from './recordingWarnings';
 import { episodeKeyOf, runnerRecordFor } from './runner';
@@ -95,10 +97,14 @@ export default function TraceViewerPage() {
   const [live, setLive] = useState<boolean>(() => !new URLSearchParams(window.location.search).get('event'));
   // Polling after the episode stopped running (tail and late events); see live.ts.
   const [grace, setGrace] = useState<GraceStart | null>(null);
-  const plan = pollPlan({ live, running, grace: grace !== null, videoPending,
+  const plan = pollPlan({ live, running, incomplete: status === 'incomplete', grace: grace !== null, videoPending,
     videoCopyInterrupted: videoCopyInterrupted(summary.data) });
   const events = useEpisodeEvents(runId, episodeId, plan.events && !!runId && !!episodeId);
   useInterval(summary.poll, plan.summaryMs ?? 1000, plan.summaryMs !== null && !!runId && !!episodeId);
+  // Copied heartbeats retain their source mtime and can expire before the next
+  // import. Keep detecting new data without claiming that the writer is alive.
+  useInterval(events.refresh, INCOMPLETE_POLL_MS,
+    live && status === 'incomplete' && !plan.events && !!runId && !!episodeId);
 
   // Summary reads, and how many in a row were identical (ends the grace period).
   const [summaryReads, setSummaryReads] = useState<{ key: string; n: number; stable: number; last: string | null }>({ key: '', n: 0, stable: 0, last: null });
@@ -125,9 +131,10 @@ export default function TraceViewerPage() {
   }, [epKey,videoPending,refreshEvents]);
   useEffect(() => {
     const prev = prevStatus.current;
-    if (prev.key === epKey && prev.status === 'running' && status !== null && status !== 'running') {
+    if (prev.key === epKey && ((prev.status === 'running' && status !== null && status !== 'running') ||
+      (prev.status === 'incomplete' && (status === 'ended' || status === 'ended_with_gaps')))) {
       setGrace({ startedAt: Date.now(), passesAtStart: events.passes, summaryReadsAtStart: summaryReads.n });
-      if (runId) setRunSeenRunningAt({ runId, at: Date.now() });
+      if (runId && prev.status === 'running') setRunSeenRunningAt({ runId, at: Date.now() });
       refreshEvents();
       reloadRun();
     }
@@ -330,7 +337,7 @@ export default function TraceViewerPage() {
     if (graceOn) return { text: `終了後に届くイベントを確認中（最長 ${GRACE_MAX_MS / 1000} 秒）`, tone: 'gold' };
     if (running && live) return { text: `ライブ更新中（約1秒ごと）${events.lastFetch ? ` · ${fmtClock(events.lastFetch)}` : ''}`, tone: 'gold' };
     if (running && !live) return { text: '更新停止中（Browse。状態は 5 秒ごとに確認）', tone: 'neutral' };
-    if (status === 'incomplete') return { text: '更新停止（記録が止まっています）', tone: 'neutral' };
+    if (status === 'incomplete') return { text: `記録の再開を ${INCOMPLETE_POLL_MS / 1000} 秒ごとに確認中${live ? '' : '（Browse。イベントの追従停止）'}`, tone: 'neutral' };
     if (status === 'unscoped') return { text: '自動更新なし（「更新」で再取得）', tone: 'neutral' };
     if (status) return { text: '更新停止（エピソード終了）', tone: 'neutral' };
     return { text: '更新停止', tone: 'neutral' };

@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BROWSE_SUMMARY_MS, GRACE_MAX_MS, GRACE_MIN_MS, INTERRUPTED_COPY_POLL_MS, graceActive, live3dState, pollPlan, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage } from '../live';
+import { BROWSE_SUMMARY_MS, GRACE_MAX_MS, GRACE_MIN_MS, INCOMPLETE_POLL_MS, INTERRUPTED_COPY_POLL_MS, graceActive, live3dState, pollPlan, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage } from '../live';
 import { EventsPager, type PagerSnapshot } from '../pager';
 import type { EpisodeSummary, EventsPage, TraceEvent } from '../types';
 
@@ -17,6 +17,8 @@ test('poll plan per mode', () => {
   assert.deepEqual(pollPlan({ live: false, running: true, grace: false }), { events: false, summaryMs: BROWSE_SUMMARY_MS });
   assert.deepEqual(pollPlan({ live: false, running: false, grace: true }), { events: true, summaryMs: 1000 });
   assert.deepEqual(pollPlan({ live: true, running: false, grace: false }), { events: false, summaryMs: null });
+  assert.deepEqual(pollPlan({ live: true, running: false, incomplete: true, grace: false }), { events: false, summaryMs: INCOMPLETE_POLL_MS });
+  assert.deepEqual(pollPlan({ live: false, running: false, incomplete: true, grace: false }), { events: false, summaryMs: INCOMPLETE_POLL_MS });
   assert.deepEqual(pollPlan({ live: false, running: false, grace: false, videoPending: true }), { events: true, summaryMs: 1000 });
   assert.deepEqual(pollPlan({ live: false, running: false, grace: false, videoPending: true, videoCopyInterrupted: true }), { events: false, summaryMs: INTERRUPTED_COPY_POLL_MS });
 });

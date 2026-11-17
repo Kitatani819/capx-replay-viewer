@@ -15,6 +15,9 @@
  *   ends when two consecutive event polls found nothing new and two summary
  *   reads in a row were identical, and it never lasts more than 60 s. Late
  *   events after that are read with the 更新 button.
+ * - Incomplete episodes can be an interrupted copy or a remote snapshot whose
+ *   heartbeat expired between imports. Their summary is re-read every 20 s,
+ *   and Live also re-reads events at that interval, until an end is recorded.
  * - Runner records: the runner appends a trial's record only when its last
  *   attempt ends, which can be long after this episode ended (a timed-out
  *   attempt is retried). While this episode has no record and the run was
@@ -35,6 +38,7 @@ export const LIVE_POLL_MS = 1000;
 export const BROWSE_SUMMARY_MS = 5000;
 export const GRACE_POLL_MS = 1000;
 export const INTERRUPTED_COPY_POLL_MS = 20_000;
+export const INCOMPLETE_POLL_MS = 20_000;
 export const GRACE_MAX_MS = 60_000;
 /** Late events can follow episode_end by seconds; the grace period never ends before this. */
 export const GRACE_MIN_MS = 15_000;
@@ -101,11 +105,12 @@ export interface PollPlan {
   summaryMs: number | null;
 }
 
-export function pollPlan(o: { live: boolean; running: boolean; grace: boolean; videoPending?: boolean; videoCopyInterrupted?: boolean }): PollPlan {
+export function pollPlan(o: { live: boolean; running: boolean; grace: boolean; incomplete?: boolean; videoPending?: boolean; videoCopyInterrupted?: boolean }): PollPlan {
   if (o.videoCopyInterrupted) return { events: false, summaryMs: INTERRUPTED_COPY_POLL_MS };
   if (o.videoPending || o.grace) return { events: true, summaryMs: GRACE_POLL_MS };
   if (o.running && o.live) return { events: true, summaryMs: LIVE_POLL_MS };
   if (o.running) return { events: false, summaryMs: BROWSE_SUMMARY_MS };
+  if (o.incomplete) return { events: false, summaryMs: INCOMPLETE_POLL_MS };
   return { events: false, summaryMs: null };
 }
 

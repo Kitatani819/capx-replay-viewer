@@ -97,6 +97,71 @@ test('Browse mode (5 s) with a 5.2 s summary read also reaches the end', async (
   p.unmount();
 });
 
+for (const initialStatus of ['running', 'incomplete'] as const) {
+  test(`Live detects a later import after 120 s even when opened ${initialStatus}`, async () => {
+    resetBrowser();
+    const run = makeRun();
+    const data = { ...KEY, attempt_index: 1 };
+    const e1 = addEpisode(run, 'e1', { status: initialStatus, ...data }, [ev('e1', 1, 'episode_start', data)]);
+    serve(run);
+    const p = open('/traces?view=details&run=r1&episode=e1');
+    await advance(30_000);
+    // The source heartbeat's mtime is preserved on import. Its local snapshot
+    // expires before the default 120 s import interval, or was already stale
+    // when opened. A heartbeat is not proof that no more data will arrive.
+    e1.summary = { ...e1.summary, status: 'incomplete', heartbeat_age_s: 31 };
+    await advance(100_000);
+    assert.equal(bar(p).summary?.status, 'incomplete');
+    assert.match(bar(p).poll.text, /20 秒ごとに確認中/);
+    assert.equal(bar(p).reader.count, 1);
+
+    // A delayed snapshot can contain new events with another stale heartbeat.
+    // It must be visible without requiring a running status or manual refresh.
+    e1.events.push(ev('e1', 2, 'trace_warning', { code: 'new_snapshot' }));
+    await advance(25_000);
+    assert.equal(bar(p).summary?.status, 'incomplete');
+    assert.equal(bar(p).reader.count, 2);
+
+    // A later snapshot includes the end. Its tail is read, then polling ends.
+    e1.events.push(ev('e1', 3, 'episode_end', { end_reason: 'completed', trace_complete: true }));
+    e1.summary = { ...e1.summary, status: 'ended', trace_complete: true };
+    await advance(80_000);
+    assert.equal(bar(p).summary?.status, 'ended');
+    assert.equal(bar(p).reader.count, 3);
+    const before = { events: requests(/\/events$/).sent, summary: requests(/\/episodes\/e1$/).sent };
+    await advance(30_000);
+    assert.equal(requests(/\/events$/).sent, before.events);
+    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary);
+    p.unmount();
+  });
+}
+
+test('Browse rechecks incomplete status and fetches the final imported tail when it ends', async () => {
+  resetBrowser();
+  const run = makeRun();
+  const data = { ...KEY, attempt_index: 1 };
+  const e1 = addEpisode(run, 'e1', { status: 'incomplete', ...data }, [ev('e1', 1, 'episode_start', data)]);
+  serve(run);
+  const p = open('/traces?view=details&run=r1&episode=e1&event=e1_1');
+  await advance(130_000);
+  const before = requests(/\/events$/).sent;
+  e1.events.push(ev('e1', 2, 'trace_warning', { code: 'new_snapshot' }));
+  e1.summary = { ...e1.summary, heartbeat_age_s: 40 };
+  await advance(25_000);
+  assert.equal(bar(p).summary?.heartbeat_age_s, 40);
+  assert.equal(requests(/\/events$/).sent, before, 'Browse keeps its event selection while incomplete');
+  assert.equal(bar(p).reader.count, 1);
+
+  e1.events.push(ev('e1', 3, 'episode_end', { end_reason: 'completed', trace_complete: false }));
+  e1.summary = { ...e1.summary, status: 'ended_with_gaps', trace_complete: false };
+  await advance(25_000);
+  assert.equal(bar(p).summary?.status, 'ended_with_gaps');
+  assert.equal(bar(p).reader.count, 3, 'the transition from incomplete reads the final tail');
+  assert.equal(bar(p).live, false);
+  assert.equal(new URLSearchParams(window.location.search).get('event'), 'e1_1');
+  p.unmount();
+});
+
 test('更新 re-reads the runner records, and so does opening another episode of the same run', async () => {
   resetBrowser();
   const run = makeRun();
@@ -149,8 +214,8 @@ for (const status of ['ended', 'incomplete'] as const) {
     e1.summary = { ...e1.summary, status: 'ended', trace_complete: true, late_events: 1 };
     run.records = [recordFor(start, [{ status: 'completed', from: -1, to: 60 }], true)];
     await advance(5000);
-    assert.equal(requests(/\/events$/).sent, before.events, 'archived events are not being polled');
-    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary, 'archived summaries are not being polled');
+    assert.equal(requests(/\/events$/).sent, before.events, 'events stay unchanged before the next incomplete recheck');
+    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary, 'no summary poll is due yet');
 
     bar(p).onOpenPicker();
     await advance(50);
@@ -160,9 +225,10 @@ for (const status of ['ended', 'incomplete'] as const) {
     assert.equal(bar(p).summary?.status, 'ended');
     assert.equal(bar(p).summary?.late_events, 1, 'the imported summary is shown');
     assert.equal(bar(p).runnerRecords.length, 1, 'the imported result is shown');
-    assert.equal(requests(/\/events$/).sent, before.events + 1);
-    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary + 1);
-    assert.equal(requests(RUNS).sent, before.run + 1);
+    // Incomplete -> ended also starts tail/grace reads after the explicit open.
+    assert.ok(requests(/\/events$/).sent >= before.events + 1);
+    assert.ok(requests(/\/episodes\/e1$/).sent >= before.summary + 1);
+    assert.ok(requests(RUNS).sent >= before.run + 1);
     p.unmount();
   });
 }
