@@ -10,10 +10,9 @@ Reads what the trace recorder writes under a trace root:
   that the file was replaced or rewritten in place; a cached page whose generation is
   not the file's current one is read again.
 - ``episode.json`` plus the ``heartbeat`` file: the episode status of section 9.2,
-  without reading ``events.jsonl``. Only for the summary fields, its first line (the
-  ``episode_start`` event) is read when ``episode.json`` does not name one of the fields
-  that event also holds (a field present with a null value counts as named: the recorder
-  copies every start field, a null one too). A missing heartbeat file means the liveness
+  without reading ``events.jsonl``. The summary reads the first event for missing start
+  fields or to identify startup hook failures when the episode ended with a hook gap.
+  A start field with a null value counts as present. A missing heartbeat file means the liveness
   is unknown, and an episode without ``episode_end`` is then ``incomplete``.
 - ``run.json`` and ``runner_records.jsonl`` of a run.
 - ``unscoped.<pid>.jsonl`` of a run (events with no episode, section 4.1): listed by
@@ -1088,8 +1087,8 @@ def episode_summary_at(
     """Summary of the episode in the open directory ``directory`` (None: unreadable).
 
     ``events.jsonl`` is only stat'ed, except for its first line when ``start_event`` is
-    true and episode.json does not name one of the fields the episode_start event also
-    holds (``_has_field``). The status never depends on that line, so callers that need
+    true and the summary needs missing start fields or details of a hook gap.
+    The status never depends on that line, so callers that need
     only the status pass ``start_event=False``. The fixed-name files are read only as
     regular files directly inside the directory: a symlink is never followed (for the
     status it counts as missing; ``episode_json_error`` says ``symlink_not_followed``).
@@ -1106,12 +1105,16 @@ def episode_summary_at(
         episode_json, error = None, "not_an_object"
     age = now - heartbeat_st.st_mtime if heartbeat_st is not None else None
     status, detail = derive_status(episode_json, age)
+    gaps = _lookup(episode_json, "gaps")
+    needs_hook_evidence = status == "ended_with_gaps" and isinstance(gaps, list) and any(
+        isinstance(gap, dict) and gap.get("code") == "hook_install_failed" for gap in gaps
+    )
     first_event = None
     if (
         start_event
         and directory is not None
         and events_st is not None
-        and not all(_has_field(episode_json, key) for key in _FIRST_EVENT_FIELDS)
+        and (needs_hook_evidence or not all(_has_field(episode_json, key) for key in _FIRST_EVENT_FIELDS))
     ):
         try:
             fd, _st = directory.open_file(EVENTS_FILE)
@@ -1128,6 +1131,21 @@ def episode_summary_at(
         if value is None:
             value = _from_start_event(first_event, key)
         summary[key] = value
+    if needs_hook_evidence and first_event and (
+        first_event.get("run_id") == run_id and first_event.get("episode_id") == episode_id
+        and type(first_event.get("seq")) is int
+    ):
+        tracer = _from_start_event(first_event, "tracer")
+        failures = tracer.get("hooks_failed") if isinstance(tracer, dict) else None
+        if isinstance(failures, list):
+            summary["startup_hook_failures"] = {
+                "seq": first_event["seq"],
+                "failures": [
+                    {key: entry[key] for key in ("hook", "target", "reason") if isinstance(entry.get(key), str)}
+                    if isinstance(entry, dict) else None
+                    for entry in failures
+                ],
+            }
     mtimes = [
         st.st_mtime for st in (events_st, episode_st, heartbeat_st) if st is not None
     ]

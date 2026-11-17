@@ -400,11 +400,20 @@ section 6.5), `streamed`, `n_chunks`, `ttft_s`, `content`
 (the full text), `reasoning`, `usage`, `finish_reason`, `response_model`, `response_id`
 and `payload_path`.
 `reasoning` is `{text, field}` and is present only when the API returned it in
-`choices[0].message.reasoning`, `choices[0].message.reasoning_content` or a streamed
-reasoning delta; the recorder never infers it. The model call hook (H3) records a streamed response (web UI
-code generation) from the stream. Its payload file holds the assembled
+`choices[0].message.reasoning`, `choices[0].message.reasoning_content`, a streamed
+reasoning delta, or `query_model_return.reasoning`. The model call hook (H3) records a
+streamed response from the chunks. Its payload file holds the assembled
 `{streamed, content, reasoning, n_chunks}`, and `done_chunk_seen` says whether the stream's
 final chunk arrived.
+
+For a successful `query_model` call whose last HTTP attempt used `stream=True`, H3 can
+record `content`, `reasoning` and JSON-safe `usage` from the returned dict (section 6.1).
+This response has `body_captured: false` and `source: "query_model_return_value"`.
+`latency_s` runs from the start of the HTTP attempt through the client reading and parsing
+the reply. `streamed` is false, and `n_chunks`, `ttft_s`, `response_model` and `response_id`
+are null. `finish_reason` is `"length"` when the returned `truncated` is true and null
+otherwise. `payloads/<event_id>.response.json` holds the assembled `content`, `reasoning`,
+`usage` and `truncated`, with `assembled_from_return_value: true` on the artifact.
 
 `model_error`: `scope` is `attempt` for one failed HTTP attempt (an HTTP status of 400 or
 more, with `body_excerpt`, or a transport exception) and `logical` for the failure of the
@@ -413,7 +422,9 @@ its caller stopped reading, `GeneratorExit`, with `partial_content` and `n_chunk
 other fields are `role`, `call_kind`, `logical_call_id`, `http_attempt`, `http_status`,
 `error_type`, `message` (redacted, at most 2000 characters, with `message_redacted`),
 `latency_s` where it is known, and `body_excerpt` (the first 2000 characters of the error
-body, redacted, with `body_excerpt_redacted`).
+body, redacted, with `body_excerpt_redacted`). With streamed HTTP transport, an attempt
+that returns status 400 or above has `body_excerpt: null` and
+`reason: "stream_body_not_read"`.
 
 `model_output_parsed`: the harness's reading of a reply. With `parser: "_extract_code"` it
 has `code_blocks` and `code_source` (`model`, `oracle` or `unknown`). With
@@ -590,10 +601,18 @@ The HTTP hook (H1) classifies a request by the innermost open context of its thr
 - inside another service call: one HTTP attempt of that call;
 - anywhere else: nothing is recorded.
 
-For `stream=True`, the HTTP hook (H1) records the request and, when `send` returns, the status and the
-timing. It never touches `r.content`, `r.text`, `r.json()`, `r.raw` or `iter_*`; the model call hook (H3)
-generator wrapper records the streamed text. For a response that is not streamed, `send`
-has already read the body, and the HTTP hook (H1) keeps the cached `bytes`.
+When the sending thread has an empty context stack, H1 can use the open model or service
+call saved at the start of a single-job thread (section 7.3). This includes the competition
+client's daemon thread for `requests.post`.
+
+For `stream=True`, H1 records the request and, when `send` returns, the status and timing.
+An HTTP status of 400 or above emits an attempt-level `model_error` before the client
+decides whether to retry. H1 leaves `r.content`, `r.text`, `r.json()`, `r.raw` and `iter_*`
+to the client. The H3 generator wrapper records streamed text from the yielded chunks.
+The competition client also uses `stream=True` for ordinary `query_model` calls and reads
+the body with `raw.read1()` on a separate daemon thread. In that case H3 records the reply
+from the returned dict if the matching HTTP attempt has no recorded response. With
+`stream=False`, `send` has already read the body, and H1 uses the cached `bytes`.
 
 ### 6.2 Normalisation and images
 
@@ -813,23 +832,25 @@ the variable to an empty string to turn the note off.
 
 ## 7. Hook installation and compatibility
 
-The recorder installs hooks after each target module loads. A missing required symbol or an invalid callable goes in `hooks_failed` and counts as a trace gap. Only symbols explicitly listed as optional in `bootstrap.OPTIONAL_SYMBOLS` go in `hooks_skipped`; the upstream target modules currently have no such omissions. The recorder attempts an install only for modules that are imported. If H4 cannot install, `recorder_warnings.<pid>.jsonl` at the trace root explains why no episodes were recorded.
+The recorder installs hooks after each target module loads. A missing required symbol or an invalid callable goes in `hooks_failed` and counts as a trace gap. An absent symbol explicitly listed in `bootstrap.OPTIONAL_SYMBOLS` goes in `hooks_skipped`. Competition CaP-X `ac68084` omits the legacy prompt builder. The recorder attempts an install only for modules that are imported. If H4 cannot install, `recorder_warnings.<pid>.jsonl` at the trace root explains why no episodes were recorded.
 
 ### 7.1 Table
 
 `capx_trace_recorder/bootstrap.py` installs hooks when tracing is on. Each install
-checks that the target exists and has the expected shape. A missing required symbol or
-an incompatible callable goes in `hooks_failed`. If the optional H2 target
-`_patch_libero_goal` is missing (upstream 53e9966 defines it), it goes in `hooks_skipped`. Wrappers carry `__capx_trace_wrapper__ = True` and are
+checks that the target exists and has the expected shape. The optional targets are H2's
+`_patch_libero_goal` and H5's `_build_multi_turn_decision_prompt_legacy`. They are wrapped
+when present and skipped only when absent. A missing required target or an incompatible
+callable goes in `hooks_failed`. Wrappers carry `__capx_trace_wrapper__ = True` and are
 never applied twice to the same callable.
 
 | Id | Target | How | Records |
 |---|---|---|---|
 | H1 | `requests.sessions.Session.send` | class attribute wrapper | `model_request`, `model_response`, `model_error` per HTTP attempt; the HTTP attempts of service calls; Molmo requests and their logical calls |
+| H1 | `threading.Thread.start` | class attribute wrapper | Saves a weak reference to the initiating call on single-job threads for HTTP classification |
 | H2 | `capx.envs.trial`: `_describe_initial_scene`, `_get_visual_differencing_feedback`, `_get_video_differencing_feedback`, `_query_initial_code`, `_handle_multi_turn_step`, `_patch_libero_goal` | module attribute rebinding (the trial loop calls them as module globals); the module's aliases of H3, H5, H6 and H12 targets are rebound as well | role context (`role`, `call_kind`, `turn_index`); the task text after `_patch_libero_goal` |
 | H3 | `capx.llm.client`: `query_model`, `query_model_streaming`, `query_model_ensemble`, `query_single_model_ensemble` and the module's own underscore aliases | rebinding in the defining module (callers bind their aliases at import, after the patch) | logical calls (the only place a `logical_call_id` is created for code-generation and VDM calls); ensemble member and synthesis roles; streamed responses; preflight requests; `task_text` |
 | H4 | `capx.envs.trial._run_single_trial`, also rebound in `capx.envs.runner` | rebinding before `capx.envs.runner` and `capx.experiments.run` import it; the first four parameters must be `env, trial, args, config` | `episode_start`, `episode_end`, the episode's `evaluator_result`, and `trial_videos`; copies completed upstream trial MP4 files from the returned `code_path` directory; installs H10 on the env before the original resets it |
-| H5 | `capx.utils.launch_utils`: `_build_multi_turn_decision_prompt`, `_build_multi_turn_decision_prompt_legacy` | rebinding | `feedback_built` |
+| H5 | `capx.utils.launch_utils`: `_build_multi_turn_decision_prompt`, `_build_multi_turn_decision_prompt_legacy` (optional) | rebinding, each installed function listed separately | `feedback_built` |
 | H6 | `capx.utils.launch_utils`: `_parse_multi_turn_decision`, `_extract_code` | rebinding | `model_output_parsed` |
 | H7 | `CodeExecutionEnvBase`: `step`, `_exec_user_code`, `render`, `render_wrist`, `get_video_frames_range`, `get_wrist_video_frames_range`, `reset` | class attribute wrappers | `code_block_start`, `code_block_end`, `stdout`, `stderr`, the block's `evaluator_result`, `observation_snapshot`, `video_frames_read`, `env_reset`; binds a web UI env to its episode; installs H8 and H9 at the first `step` of an env in an episode |
 | H8 | the public API methods that `api.functions()` returns | instance attributes `types.MethodType(functools.wraps(fn.__func__)(traced), fn.__self__)` | `api_call_start`, `api_call_end`, `api_call_error`, including nested `self.x()` calls |
@@ -904,11 +925,19 @@ object and H14 closes it. The H2 and H13 wrappers set the role context (`role`,
 `call_kind`, `turn_index`) in per-thread state and clear it when the wrapped function
 returns or raises. Ensemble members run on a `ThreadPoolExecutor` in
 `query_model_ensemble` and `query_single_model_ensemble` in `capx/llm/client.py`. The web runner runs its env on an executor thread (`async_trial_runner.py:143`)
-and streams code generation on others (`:364` and `:710`). None of these threads inherits
-the context. The H3 wrapper therefore takes the role from the first source that applies:
+and streams code generation on others (`:364` and `:710`). Role and context stacks are
+local to their threads. The H3 wrapper takes the role from the first source that applies:
 the thread's own role stack; the episode's current role, which the caller set before the
 pool started; `preflight` in the experiment runner before any episode (when H4 is
 installed); and otherwise `unknown`.
+
+`Thread.start` saves a weak reference to the caller's innermost context if it is an
+open logical model call or service call, and the target is a single-job thread. Pool
+workers and threads without a target are excluded. Only H1 reads this reference, and
+only when the worker's own context stack is empty. The wrapper marks the call closed
+on return or exception, so a daemon that starts an HTTP send after the call finishes
+cannot use that reference. Forking invalidates inherited references in the child.
+A failure to install the thread wrapper is reported in `recorder_status.<pid>.json`.
 
 An event with no enclosing context of its own finds its episode by these steps; the first
 one that gives an answer wins:
@@ -986,7 +1015,8 @@ video matched the original file.
 |---|---|---|---|
 | `requests.sessions` | Present | H1 HTTP requests and responses | None |
 | `capx.llm.client` | Present; model reply is a dictionary despite its `str` annotation | H3 logical and streamed calls | None |
-| `capx.utils.launch_utils` | Present | H5 feedback prompt; H6 output parsing | None |
+| `capx.llm.client` (competition `ac68084`) | Sends and body reads use daemon threads | `query_model`, SSE via `query_model_streaming` and `query_model_ensemble` verified against a loopback model server | The client owns the streamed HTTP body |
+| `capx.utils.launch_utils` | Present | H5 feedback prompt; H6 output parsing | The legacy prompt builder is absent on competition `ac68084` |
 | `capx.utils.video_utils` | Present | H12 frame hashes | None |
 | `capx.envs.trial` | Present; `_save_trial_artifacts` creates the final named directory and `_save_turn_and_combined_videos` writes into it before `_run_single_trial` returns | H2 roles; H4 batch episodes and completed MP4 copies | None |
 | `capx.envs.runner` | Present | Rebinds H4 trial alias | None |
@@ -1137,9 +1167,11 @@ Episode summary. The summary has the fields `source`, `task`, `condition`,
 `status_detail`, `recorded_status`, `heartbeat_age_s`, `liveness_source`,
 `last_modified`, `events_bytes`, `episode` (the raw `episode.json`) and
 `episode_json_error`. It comes from `episode.json` and the heartbeat. The backend reads the
-first line of `events.jsonl` (at most 1 MB) only when `episode.json` does not name one of
-the start fields (a field present with a null value counts as named), and the run list
-reads no `events.jsonl` at all. Episode status:
+first line of `events.jsonl` (at most 1 MB) for missing start fields or when an ended
+episode has a `hook_install_failed` gap. In the latter case `startup_hook_failures`
+contains the matching `episode_start` sequence and its list of startup failures, if
+available. A start field with a null value counts as present. The run list reads no
+`events.jsonl`. Episode status:
 
 - `ended`: `episode.json` says `ended` and `trace_complete` is true;
 - `ended_with_gaps`: `episode.json` says `ended` and `trace_complete` is not true;
@@ -1292,6 +1324,10 @@ switch with a 更新 (refresh) button.
   `events.jsonl`, and `episode_json_error`. When the backend says `ended` but the reader
   found corrupt lines or failed hooks, the status reads
   「終了（記録完了と報告。ただし欠落を検出）」 (ended, reported complete, gaps detected).
+  Older traces may count the absent legacy prompt builder as an H5/H6 startup failure.
+  The viewer uses the exact hook, target and reason from `episode_start` to remove that
+  contribution when it matches the recorded counts. It shows that warning in the trial
+  details and keeps other gaps and failures reported during the episode visible.
 - Outcomes: the evaluator (`task_completed` and reward, with their source); the model
   (「モデルは完了と主張」 only when a code-generator parse has `model_said_finish`); and the
   runner's verdict from `runner_records.jsonl`.

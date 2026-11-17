@@ -17,7 +17,8 @@ import { useMemo, useState } from 'react';
 import { traceApi } from '../api';
 import { fmtBytes, fmtWall } from '../format';
 import { useAsync } from '../hooks';
-import { LABELS, UNSCOPED_STATUS_LABEL, episodeStatusLabel, episodeStatusShortLabel } from '../labels';
+import { LABELS, UNSCOPED_STATUS_LABEL, WARNING_CODE_LABELS, episodeStatusLabel, episodeStatusShortLabel } from '../labels';
+import { LEGACY_PROMPT_HOOK_REASON, UNUSED_HOOK_STATUS, summaryRecordingWarnings } from '../recordingWarnings';
 import type { EpisodeSummary, TraceConfigResponse, UnscopedFileInfo } from '../types';
 import { Badge, ErrorText, Notice, Spinner, SmallButton } from './common';
 import { episodeStatusTone } from './TopBar';
@@ -232,9 +233,15 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
  * used (`episode_json_error` other than "missing": unreadable, a symlink, invalid JSON, ...).
  */
 export function EpisodeStatusCell({ episode: e }: { episode: EpisodeSummary }) {
+  const { onlyUnused, gaps } = summaryRecordingWarnings(e);
+  const gapReasons = gaps.map(g => `${WARNING_CODE_LABELS[g.code ?? ''] ?? g.code ?? '?'}×${g.count ?? '?'}`);
   return (
     <>
-      <Badge tone={episodeStatusTone(e.status)}>{episodeStatusLabel(e.status)}</Badge>
+      {onlyUnused ? (
+        <Badge tone="neutral" title={LEGACY_PROMPT_HOOK_REASON}>{UNUSED_HOOK_STATUS}</Badge>
+      ) : (
+        <Badge tone={episodeStatusTone(e.status)} title={gapReasons.join('、') || undefined}>{episodeStatusLabel(e.status)}</Badge>
+      )}
       {typeof e.episode_json_error === 'string' && e.episode_json_error !== 'missing' && (
         <Badge tone="amber" title={`episode.json を読めません（${e.episode_json_error}）`} className="ml-1">
           episode.json: {e.episode_json_error}

@@ -37,7 +37,8 @@ import {
   type LogicalCall,
   type TNode,
 } from '../model';
-import { dataOf, type ModelOutputParsedData } from '../types';
+import { episodeRecordingWarnings } from '../recordingWarnings';
+import { dataOf, type EpisodeSummary, type ModelOutputParsedData } from '../types';
 import { CodeView } from './CodeView';
 import { Badge, EventLink, statusTone, type Tone } from './common';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -163,6 +164,7 @@ function flatten(
 
 interface TimelineProps {
   model: EpisodeModel;
+  summary?: EpisodeSummary | null;
   ep: EpisodeRef;
   running: boolean;
   selectedKey: string | null;
@@ -173,7 +175,7 @@ interface TimelineProps {
   showTaskText?: boolean;
 }
 
-export function Timeline({ model, ep, running, selectedKey, selectedEventId, onSelect, scrollToken, showTaskText = true }: TimelineProps) {
+export function Timeline({ model, summary, ep, running, selectedKey, selectedEventId, onSelect, scrollToken, showTaskText = true }: TimelineProps) {
   const [types, setTypes] = useState<Set<TypeKey>>(new Set());
   const [roles, setRoles] = useState<Set<string>>(new Set());
   const [failuresOnly, setFailuresOnly] = useState(false);
@@ -198,6 +200,8 @@ export function Timeline({ model, ep, running, selectedKey, selectedEventId, onS
     [model, filters, collapsed, nestedOpen, running],
   );
   const roleList = useMemo(() => Array.from(new Set(model.calls.map((c) => c.role))).sort(), [model]);
+  const episodeEndHasGap = dataOf(model.episodeEnd, 'episode_end').trace_complete === false &&
+    !episodeRecordingWarnings(model, summary).onlyUnused;
 
   const toggle = (set: Set<string>, key: string, setter: (s: Set<string>) => void) => {
     const next = new Set(set);
@@ -248,6 +252,7 @@ export function Timeline({ model, ep, running, selectedKey, selectedEventId, onS
         <NodeCard
           row={r}
           model={model}
+          episodeEndHasGap={episodeEndHasGap}
           ep={ep}
           running={running}
           selected={r.node.key === selectedKey}
@@ -261,11 +266,11 @@ export function Timeline({ model, ep, running, selectedKey, selectedEventId, onS
       </ErrorBoundary>
     ),
     // Every input of the card is listed, so a card re-renders when any of them changes.
-    [model, ep, running, selectedKey, selectedEventId, collapsed, nestedOpen, onSelect],
+    [model, episodeEndHasGap, ep, running, selectedKey, selectedEventId, collapsed, nestedOpen, onSelect],
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0" onKeyDown={onKeyDown}>
+    <div onKeyDown={onKeyDown}>
       {showTaskText && <TaskText model={model} ep={ep} />}
       <div className="flex-shrink-0 px-3 py-2 border-b border-surface-border space-y-2 bg-surface-raised">
         <input
@@ -317,7 +322,7 @@ export function Timeline({ model, ep, running, selectedKey, selectedEventId, onS
         renderItem={renderItem}
         scrollToKey={selectedKey}
         scrollToken={scrollToken + filterToken}
-        className="flex-1 min-h-0 py-1"
+        className="replay-process-scroll py-1"
         empty={<div className="p-4 text-xs text-text-tertiary">表示するイベントがありません</div>}
       />
     </div>
@@ -360,17 +365,18 @@ function TaskText({ model, ep }: { model: EpisodeModel; ep: EpisodeRef }) {
   const full = useFullText(ep, td ? td.text : null, open);
   const text = full.text ?? '';
   const { text: head, more } = firstLines(text, 4);
+  const oracle = !ev && dataOf(model.episodeStart, 'episode_start').config_flags?.use_oracle_code === true;
   return (
     <div className="flex-shrink-0 px-3 py-2 border-b border-surface-border bg-surface-raised">
       <div className="flex items-center gap-2 mb-1">
         <span className="text-[11px] font-bold font-display uppercase tracking-widest text-text-tertiary">タスク文</span>
-        {ev && full.text !== null ? (
+        {oracle ? <Badge tone="neutral">Oracleコードで実行</Badge> : ev && full.text !== null ? (
           <span className="text-[11px] text-text-tertiary">最初のコード生成要求で実際に送られた文</span>
         ) : (
           <Badge tone="neutral">{LABELS.notRecorded}</Badge>
         )}
       </div>
-      {ev && full.text === null ? (
+      {oracle ? <div className="text-[11px] text-text-tertiary">コード生成モデルへのタスク文の送信はありません。</div> : ev && full.text === null ? (
         <div className="text-[11px] text-text-tertiary">
           最初のコード生成要求からタスク文を切り出せませんでした{td?.reason ? `（${td.reason}）` : ''}。送信内容はその要求の「実際のモデル入力」タブで確認できます。
         </div>
@@ -429,6 +435,7 @@ export function roleTone(role: string | null | undefined): Tone {
 interface NodeCardProps {
   row: Row;
   model: EpisodeModel;
+  episodeEndHasGap: boolean;
   ep: EpisodeRef;
   running: boolean;
   selected: boolean;
@@ -440,7 +447,7 @@ interface NodeCardProps {
   onToggleNested: () => void;
 }
 
-function NodeCard({ row, model, ep, running, selected, selectedEventId, collapsed, nestedOpen, onSelect, onToggle, onToggleNested }: NodeCardProps) {
+function NodeCard({ row, model, episodeEndHasGap, ep, running, selected, selectedEventId, collapsed, nestedOpen, onSelect, onToggle, onToggleNested }: NodeCardProps) {
   const { node, depth, context } = row;
   const tag = KIND_TAG[node.kind];
   const dur = nodeDuration(node);
@@ -503,7 +510,7 @@ function NodeCard({ row, model, ep, running, selected, selectedEventId, collapse
           </span>
         </div>
         <div className="px-2 pb-1.5 pt-1 pl-7 space-y-1 min-w-0">
-          <CardBody node={node} model={model} ep={ep} selectedEventId={selectedEventId} onSelect={onSelect} nestedOpen={nestedOpen} onToggleNested={onToggleNested} />
+          <CardBody node={node} model={model} episodeEndHasGap={episodeEndHasGap} ep={ep} selectedEventId={selectedEventId} onSelect={onSelect} nestedOpen={nestedOpen} onToggleNested={onToggleNested} />
           <Markers node={node} running={running} />
         </div>
       </div>
@@ -533,7 +540,11 @@ function Markers({ node, running }: { node: TNode; running: boolean }) {
   const items: ReactNode[] = [];
   if (node.open) items.push(<Badge key="open" tone={running ? 'gold' : 'red'}>{running ? LABELS.openWhileRunning : LABELS.openProcessEnded}</Badge>);
   if (node.late) items.push(<Badge key="late" tone="violet">{LABELS.lateEvent}</Badge>);
-  if (node.orphan) items.push(<Badge key="orphan" tone="red" title={node.orphan}>親イベント不明: {truncate(node.orphan, 40)}</Badge>);
+  if (node.orphan) items.push(
+    <Badge key="orphan" tone="red" className="max-w-full !whitespace-normal [overflow-wrap:anywhere]" title={node.orphan}>
+      親イベント不明: {truncate(node.orphan, 40)}
+    </Badge>,
+  );
   if (node.warnings.length) items.push(<Badge key="warn" tone="amber">記録の警告 {node.warnings.length}</Badge>);
   const pendingData = node.events.filter((e) => isOversize(e) && (e.data as { data_asset_loaded?: unknown }).data_asset_loaded !== true);
   const unwritten = pendingData.filter((e) => dataAssetRef(e)?.written !== true).length;
@@ -578,6 +589,7 @@ function Markers({ node, running }: { node: TNode; running: boolean }) {
 interface BodyProps {
   node: TNode;
   model: EpisodeModel;
+  episodeEndHasGap: boolean;
   ep: EpisodeRef;
   selectedEventId: string | null;
   onSelect: (node: TNode, eventId?: string) => void;
@@ -606,7 +618,7 @@ function CardBody(props: BodyProps) {
     case 'episode_start':
       return <EpisodeStartBody node={node} />;
     case 'episode_end':
-      return <EpisodeEndBody node={node} />;
+      return <EpisodeEndBody node={node} hasGap={props.episodeEndHasGap} />;
     case 'env_reset': {
       const d = dataOf(node.primary, 'env_reset');
       return <div className="text-[11px] text-text-secondary">sim_epoch {d.sim_epoch ?? node.primary.sim_epoch ?? '?'}{d.reason ? ` · ${d.reason}` : ''}</div>;
@@ -1007,13 +1019,13 @@ function EpisodeStartBody({ node }: { node: TNode }) {
   );
 }
 
-function EpisodeEndBody({ node }: { node: TNode }) {
+function EpisodeEndBody({ node, hasGap }: { node: TNode; hasGap: boolean }) {
   const d = dataOf(node.primary, 'episode_end');
   return (
     <div className="flex flex-wrap gap-1 text-[11px] text-text-secondary">
       {d.end_reason && <Badge tone={node.failed ? 'red' : 'neutral'}>end_reason={d.end_reason}</Badge>}
       {typeof d.duration_s === 'number' && <span>{fmtDuration(d.duration_s)}</span>}
-      {d.trace_complete === false && <Badge tone="amber">記録に欠落あり</Badge>}
+      {hasGap && <Badge tone="amber">記録に欠落あり</Badge>}
       {typeof d.n_code_blocks === 'number' && <span>ブロック {d.n_code_blocks}</span>}
       {typeof d.n_model_calls === 'number' && <span>モデル呼び出し {d.n_model_calls}</span>}
     </div>

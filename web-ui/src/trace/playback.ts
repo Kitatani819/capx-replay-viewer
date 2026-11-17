@@ -76,7 +76,13 @@ export function videosForEpisode(ep: EpisodeRef, model: EpisodeModel, match: Run
 export const RECORDED_VIDEO_FPS = 30;
 export interface PlaybackCue { time: number; node: TNode; positionSource?: 'sim_step' | 'turn_synthesis'; candidateCount?: number }
 export interface PlaybackGroup { time: number; cues: PlaybackCue[] }
-export interface PlaybackMap { reason: string | null; prompts: PlaybackCue[]; actions: PlaybackCue[]; all: PlaybackCue[]; timeForStep?: (step: number) => number }
+export interface PlaybackMap { reason: string | null; pending?: boolean; prompts: PlaybackCue[]; actions: PlaybackCue[]; all: PlaybackCue[]; unsynced: TNode[]; timeForStep?: (step: number) => number }
+const replayKinds = new Set(['model_call', 'api_call', 'code_block', 'service_call', 'stdout', 'stderr', 'evaluator', 'feedback']);
+const primaryKinds = new Set(['model_call', 'code_block', 'service_call', 'evaluator']);
+
+export function isPrimaryReplayNode(node: TNode): boolean {
+  return primaryKinds.has(node.kind);
+}
 export function groupCues(cues: PlaybackCue[]): PlaybackGroup[] {
   const groups: PlaybackGroup[] = [];
   for (const cue of [...cues].sort((a,b) => a.time-b.time || a.node.seq-b.node.seq)) {
@@ -101,14 +107,16 @@ export function primaryPlaybackCues(cues: PlaybackCue[]): PlaybackCue[] {
         const members=group.cues.filter(c=>c.node.call?.callKind==='ensemble_member' && turnOf(c.node)===turn);
         return [{...cue,candidateCount:new Set(members.map(c=>c.node.call!.id)).size}];
       }
-      return ['model_call','code_block','service_call','evaluator'].includes(cue.node.kind) ? [cue] : [];
+      return isPrimaryReplayNode(cue.node) ? [cue] : [];
     });
   });
 }
 export function playbackMap(model: EpisodeModel, name: string, duration: number): PlaybackMap {
-  const fail = (reason: string): PlaybackMap => ({reason, prompts: [], actions: [], all: []});
+  const nodes = model.allNodes.filter(node => replayKinds.has(node.kind));
+  const fail = (reason: string, pending = false): PlaybackMap => ({reason, pending, prompts: [], actions: [], all: [], unsynced: nodes});
   if (name !== 'video_combined.mp4') return fail('このカメラの動画とイベントの対応は未記録です。');
-  if (!Number.isFinite(duration) || duration <= 0) return fail('動画を読み込み中です。');
+  if (!(duration > 0)) return fail('動画を読み込み中です。', true);
+  if (!Number.isFinite(duration)) return fail('動画の長さを取得できないため、自動同期はできません。');
   if (model.events.some(e => e.event_type === 'env_reset')) return fail('環境リセットを含むため、自動同期はできません。');
   const cameras = [...model.framesByCamera.values()].filter(fs => fs.length > 0);
   if (cameras.length !== 1) return fail('動画と記録カメラを一意に対応付けられません。');
@@ -132,26 +140,30 @@ export function playbackMap(model: EpisodeModel, name: string, duration: number)
     const fraction = (step-lo.simStep!) / Math.max(1,up.simStep!-lo.simStep!);
     return (lo.bufferIndex + fraction*(up.bufferIndex-lo.bufferIndex))/RECORDED_VIDEO_FPS;
   };
-  const kinds = new Set(['model_call','api_call','code_block','service_call','stdout','stderr','evaluator','feedback']);
   const all: PlaybackCue[] = [];
-  for (const node of model.allNodes.filter(n => kinds.has(n.kind))) {
+  const unsynced: TNode[] = [];
+  for (const node of nodes) {
     let anchor = node;
     let positionSource: PlaybackCue['positionSource'] = 'sim_step';
     // Worker threads do not carry simulator coordinates. A unique, recorded
     // synthesis in the SAME turn can provide a turn position, explicitly labelled.
     if (node.primary.sim_step == null && node.call?.callKind === 'ensemble_member' && turnOf(node) !== null) {
       const syntheses = model.calls.filter(c => c.callKind === 'ensemble_synthesis' && c.turnIndex === turnOf(node));
-      if (syntheses.length !== 1) continue;
-      anchor = syntheses[0].node;
-      positionSource = 'turn_synthesis';
+      if (syntheses.length === 1) {
+        anchor = syntheses[0].node;
+        positionSource = 'turn_synthesis';
+      }
     }
     const step = anchor.primary.sim_step;
     if (typeof step !== 'number' || !Number.isFinite(step) || anchor.primary.sim_epoch !== 0 ||
-        step < anchors[0].simStep! || step > anchors.at(-1)!.simStep!) continue;
+        step < anchors[0].simStep! || step > anchors.at(-1)!.simStep!) {
+      unsynced.push(node);
+      continue;
+    }
     all.push({node, time: seconds(step), positionSource});
   }
   all.sort((a,b) => a.time-b.time || a.node.seq-b.node.seq);
-  return {reason:null, timeForStep: seconds, all, prompts:all.filter(c => c.node.kind === 'model_call'),
+  return {reason:null, timeForStep: seconds, all, unsynced, prompts:all.filter(c => c.node.kind === 'model_call'),
     actions:all.filter(c => c.node.kind !== 'model_call')};
 }
 export function cueAt(cues: PlaybackCue[], time: number): PlaybackCue | null {

@@ -30,6 +30,7 @@ import { pendingAsset, type DataAssetState } from '../dataAsset';
 import { fmtClock, fmtNum } from '../format';
 import { LABELS, NOT_MODEL_INPUT, WARNING_CODE_LABELS, episodeStatusLabel } from '../labels';
 import type { EpisodeModel } from '../model';
+import { LEGACY_PROMPT_HOOK_REASON, UNUSED_HOOK_STATUS, awaitingOracleHookEvidence, episodeRecordingWarnings } from '../recordingWarnings';
 import { episodeKeyOf, runnerRecordFor, type RunnerAttempt, type RunnerMatch } from '../runner';
 import { dataOf, type EpisodeSummary, type RunnerRecord, type RunnerRecordsInfo, type TraceEvent } from '../types';
 import { Badge, SmallButton, type Tone } from './common';
@@ -256,6 +257,14 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+export function UnusedHookNotice({ count }: { count: number }) {
+  return <div className="mt-2 text-sm text-text-secondary">
+    <p>使われなかったフックの登録警告（{count}件）</p>
+    <p>旧式プロンプト用の関数が実行環境に見つかりませんでした。</p>
+    <code className="break-all">{LEGACY_PROMPT_HOOK_REASON}</code>
+  </div>;
+}
+
 export function TopBar({
   onSimpleView,
   runLabel,
@@ -298,12 +307,14 @@ export function TopBar({
   const match = runnerRecordFor(runnerRecords, episodeKeyOf(start, summary, startWall));
 
   const unscoped = status === 'unscoped';
-  const gaps = [...(summary?.gaps ?? end?.gaps ?? [])];
+  const recording = episodeRecordingWarnings(model, summary);
+  const checkingHook = awaitingOracleHookEvidence(summary, reader);
+  const gaps = checkingHook ? [] : recording.gaps;
   const gapParts: string[] = gaps.map((g) => `${WARNING_CODE_LABELS[g.code ?? ''] ?? g.code ?? '?'}×${g.count ?? '?'}`);
   const gapDetails: string[] = gaps.map((g) => `${g.code ?? '?'}×${g.count ?? '?'}（最初 seq ${g.first_seq ?? '?'}）`);
   const dropped = summary?.dropped_events ?? end?.dropped_events ?? 0;
   const late = summary?.late_events ?? end?.late_events ?? 0;
-  const nWarn = model?.warnings.length ?? 0;
+  const nWarn = checkingHook ? 0 : model?.warnings.length ?? 0;
   if (dropped && !gaps.some((g) => g.code === 'dropped_events')) gapParts.push(`dropped ${dropped}`);
   if (late && !gaps.some((g) => g.code === 'late_event')) gapParts.push(`late ${late}`);
   if (nWarn) {
@@ -323,7 +334,7 @@ export function TopBar({
       gapParts.push(`記録の警告 ${n}（${extra.map(([c, k]) => `${WARNING_CODE_LABELS[c] ?? c}×${k}`).join(', ')}）`);
     }
     gapDetails.push(...Array.from(byCode.entries()).map(([c, n]) => `trace_warning ${c}×${n}`));
-    if (hookDuring) gapParts.push(`エピソード中のフック導入失敗 ${hookDuring}`);
+    if (hookDuring) gapDetails.push(`エピソード中のフック導入失敗 ${hookDuring}`);
   }
   if (reader.corruptLines) gapParts.push(`破損行 ${reader.corruptLines}`);
   if (reader.tornTail && status !== 'running') gapParts.push('末尾の行が途中で切れています');
@@ -333,17 +344,21 @@ export function TopBar({
   // episode.json exists but could not be used: the status and summary fields come without it.
   const episodeJsonError = !unscoped && typeof summary?.episode_json_error === 'string' && summary.episode_json_error !== 'missing' ? summary.episode_json_error : null;
   if (episodeJsonError) gapParts.push(`episode.json を読めません（${episodeJsonError}）`);
-  const hooksFailed = Array.isArray(start?.tracer?.hooks_failed) ? start.tracer.hooks_failed : [];
+  const hooksFailed = checkingHook ? [] : recording.hooksFailed;
   if (hooksFailed.length) {
     const names = hooksFailed.map((h) => (typeof h === 'string' ? h : h && typeof h === 'object' ? String((h as { hook?: unknown; id?: unknown }).hook ?? (h as { id?: unknown }).id ?? '?') : '?'));
-    gapParts.push(`フック導入失敗 ${hooksFailed.length}（${names.join(', ')}）`);
+    if (gaps.some(gap => gap.code === 'hook_install_failed')) gapDetails.push(`導入に失敗したフック ${names.join(', ')}`);
+    else gapParts.push(`フック導入失敗 ${hooksFailed.length}（${names.join(', ')}）`);
   }
-  const incomplete = !unscoped && (status === 'incomplete' || status === 'ended_with_gaps' || (summary?.trace_complete ?? end?.trace_complete) === false);
+  const incomplete = !unscoped && !checkingHook && !recording.onlyUnused &&
+    (status === 'incomplete' || status === 'ended_with_gaps' || (summary?.trace_complete ?? end?.trace_complete) === false);
   if (incomplete && gapParts.length === 0) gapParts.push(status === 'incomplete' ? 'episode_end なし' : 'trace_complete=false');
   // The recorder reported a complete trace, but reading it found gaps: never show it as complete.
   const readerGaps = reader.corruptLines > 0 || hooksFailed.length > 0;
-  const statusText = status === 'ended' && readerGaps ? '終了（記録完了と報告。ただし欠落を検出）' : episodeStatusLabel(status);
-  const statusToneValue: Tone = status === 'ended' && readerGaps ? 'amber' : episodeStatusTone(status);
+  const onlyHookNotice = recording.onlyUnused && gapParts.length === 0 && status === 'ended_with_gaps';
+  const statusText = checkingHook && gapParts.length === 0 ? '記録の警告を確認中' : onlyHookNotice ? UNUSED_HOOK_STATUS :
+    status === 'ended' && readerGaps ? '終了（記録完了と報告。ただし欠落を検出）' : episodeStatusLabel(status);
+  const statusToneValue: Tone = onlyHookNotice ? 'neutral' : status === 'ended' && readerGaps ? 'amber' : episodeStatusTone(status);
 
   return (
     <header className="replay-header">
@@ -369,6 +384,7 @@ export function TopBar({
           {onSimpleView && <SmallButton onClick={onSimpleView}>実行回ごとの表示</SmallButton>}
         </div>
         {gapParts.length > 0 && <p className="replay-warning">記録の欠落: {gapParts.join('、')}</p>}
+        {recording.count > 0 && <UnusedHookNotice count={recording.count}/>}
       </div>
       {episodeId && unscoped && (
         <div className="px-4 pb-2 text-[11px] text-text-secondary">

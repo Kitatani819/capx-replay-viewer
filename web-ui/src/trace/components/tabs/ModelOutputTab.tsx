@@ -30,7 +30,7 @@ import {
   type LogicalCall,
   type TNode,
 } from '../../model';
-import { dataOf, type TextValue, type TraceEvent } from '../../types';
+import { dataOf, type Artifact, type ModelResponseData, type TextValue, type TraceEvent } from '../../types';
 import { Badge, EventLink, KV, Notice, NotRecorded, SectionTitle, Spinner, ErrorText } from '../common';
 import { CodeView } from '../CodeView';
 import { TextView } from '../TextView';
@@ -69,6 +69,7 @@ function ModelCallOutput({ model, ep, selection, running, onSelect, call }: TabP
   // shown as if this attempt had received it.
   const resp = attempt?.responses[0] ?? null;
   const rd = resp ? dataOf(resp, 'model_response') : null;
+  const storedResponse = storedResponseText(rd, resp?.artifacts ?? []);
   const outcome = callOutcome(call);
   const answer = okResponse(call);
   const httpAnswer = outcome.httpAnswer;
@@ -208,16 +209,10 @@ function ModelCallOutput({ model, ep, selection, running, onSelect, call }: TabP
       {rd?.payload_path && (
         <div>
           <button type="button" onClick={() => setShowRaw(!showRaw)} className="text-[11px] text-accent-light hover:text-accent">
-            {showRaw
-              ? '保存した応答を隠す'
-              : assembledFromStream(resp)
-                ? 'ストリームの chunk から組み立てた応答（保存ファイル、JSON）を表示'
-                : '保存したレスポンス本文（JSON）を表示'}
+            {showRaw ? '保存した応答を隠す' : storedResponse.label}
           </button>
-          {showRaw && assembledFromStream(resp) && (
-            <div className="mt-1 text-[11px] text-text-tertiary">
-              ストリーミング応答の本文そのものではなく、レコーダーが受け取った chunk を組み立てた結果です。
-            </div>
+          {showRaw && storedResponse.description && (
+            <div className="mt-1 text-[11px] text-text-tertiary">{storedResponse.description}</div>
           )}
           {showRaw && <StoredJson ep={ep} path={rd.payload_path} />}
         </div>
@@ -241,11 +236,20 @@ function CallFailure({ call, stopped, httpAnswerStatus }: { call: LogicalCall; s
   );
 }
 
-/** The stored response of a streamed call is assembled from the chunks (web trial hook), not an HTTP body. */
-function assembledFromStream(resp: TraceEvent | null): boolean {
-  if (!resp) return false;
-  if (dataOf(resp, 'model_response').streamed === true) return true;
-  return (resp.artifacts ?? []).some((a) => (a as { assembled_from_stream?: unknown }).assembled_from_stream === true);
+function storedResponseText(data: ModelResponseData | null, artifacts: Artifact[]) {
+  if (data?.source === 'query_model_return_value' || artifacts.some((a) => a.assembled_from_return_value === true)) {
+    return {
+      label: 'query_model の戻り値から組み立てた応答（保存ファイル、JSON）を表示',
+      description: '保存した JSON の出典は、query_model の戻り値です。',
+    };
+  }
+  if (data?.streamed === true || artifacts.some((a) => a.assembled_from_stream === true)) {
+    return {
+      label: 'ストリームの chunk から組み立てた応答（保存ファイル、JSON）を表示',
+      description: 'ストリーミング応答の本文そのものではなく、レコーダーが受け取った chunk を組み立てた結果です。',
+    };
+  }
+  return { label: '保存したレスポンス本文（JSON）を表示', description: null };
 }
 
 function StoredJson({ ep, path }: { ep: EpisodeRef; path: string }) {

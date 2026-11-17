@@ -44,6 +44,7 @@ import { useAsync, useDataAssets, useEpisodeEvents, useInterval, useStoredState,
 import { LABELS } from './labels';
 import { GRACE_MAX_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
+import { awaitingOracleHookEvidence, episodeRecordingWarnings } from './recordingWarnings';
 import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
 import type { ReplayProcessMode, ReplaySeek } from './components/VideoPlayback';
@@ -58,7 +59,7 @@ import { Picker } from './components/Picker';
 import { SimplePicker, SimpleViewer } from './components/SimpleViewer';
 import { Splitter } from './components/Splitter';
 import { Timeline } from './components/Timeline';
-import { TopBar, type PollStatus } from './components/TopBar';
+import { TopBar, UnusedHookNotice, type PollStatus } from './components/TopBar';
 import { Badge, ErrorText, SmallButton, Spinner } from './components/common';
 
 function parseLegacyTrial(v: string | null, root: string | null): LegacyTrialRef | null {
@@ -240,7 +241,7 @@ export default function TraceViewerPage() {
     }
   }, [live, running, detailed, model, eventParam, runId, episodeId, setParams]);
 
-  // When the URL names an event that is loaded, bring it into view once.
+  // Let the timeline reveal the selected row once the event loads.
   const scrolledFor = useRef<string | null>(null);
   useEffect(() => {
     if (!selection || scrolledFor.current === selection.eventId) return;
@@ -392,19 +393,37 @@ export default function TraceViewerPage() {
 
   const showLegacy = !ep && legacyRun && legacyTrial;
   const simple = !detailed && !showLegacy;
+  const pageScroll = !simple && (ep || showLegacy);
   const simpleMatch = runnerRecordFor(runnerRecords ?? [], episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, summary.data, startWall));
   const simpleOutcome = headerVerdict(running, simpleMatch, summary.data,
     model.episodeStart ? dataOf(model.episodeStart, 'episode_start').source : null,
     runDetail.data !== null, runnerRecords?.length ?? 0);
+  const reader = {
+    corruptLines: events.corruptLines,
+    tornTail: events.tornTail,
+    eof: events.eof,
+    count: events.events.length,
+    replaced: events.replaced,
+    error: events.error,
+  };
+  const simpleHookWarnings = simple && ep ? episodeRecordingWarnings(model, summary.data) : null;
+  const waitingForHook = awaitingOracleHookEvidence(summary.data, reader);
+  const simpleGaps = summary.data?.trace_complete === false &&
+    ((!simpleHookWarnings?.onlyUnused && !waitingForHook) || reader.corruptLines > 0 || reader.tornTail || reader.replaced || reader.error);
 
   // Font ligatures are off: the viewer shows recorded text as it was sent ("->" must not
   // turn into an arrow, "!=" into "≠").
   return (
-    <div className={`${!simple ? 'replay-workspace ' : ''}h-full flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]`}>
+    <div className={`${!simple ? 'replay-workspace ' : ''}${pageScroll ? 'replay-page min-h-full' : 'h-full'} flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]`}>
       {simple && <header className="flex-shrink-0 flex flex-wrap items-center gap-3 px-5 py-3 border-b border-surface-border bg-surface-raised">
         <span className="font-semibold">{simple ? '実験を見る' : '実験の詳細'}</span>
         {simple && ep && <><span className="text-sm text-text-secondary">{summary.data?.task ?? ''} · {summary.data?.condition ?? ''}</span><span className="text-sm text-accent">試行全体の最終結果：{simpleOutcome}</span></>}
-        {simple && summary.data?.trace_complete === false && <span className="text-sm text-amber-200">記録に欠落があります</span>}
+        {simpleGaps && <span className="text-sm text-amber-200">記録に欠落があります</span>}
+        {!simpleGaps && waitingForHook && <span className="text-sm text-text-secondary">記録の警告を確認中</span>}
+        {simpleHookWarnings && simpleHookWarnings.count > 0 && <details className="text-sm">
+          <summary className="cursor-pointer">記録の詳細</summary>
+          <UnusedHookNotice count={simpleHookWarnings.count}/>
+        </details>}
         {videoPending && <span className="text-sm text-amber-200">{videoCopyMessage(summary.data)}</span>}
         <div className="ml-auto flex gap-2">
           <SmallButton onClick={() => setPickerOpen(true)}>試行を選ぶ</SmallButton>
@@ -431,14 +450,7 @@ export default function TraceViewerPage() {
           onLive={onLive}
           poll={pollStatus}
           lastFetch={events.lastFetch}
-          reader={{
-            corruptLines: events.corruptLines,
-            tornTail: events.tornTail,
-            eof: events.eof,
-            count: events.events.length,
-            replaced: events.replaced,
-            error: events.error,
-          }}
+          reader={reader}
           onOpenPicker={() => setPickerOpen(true)}
           onRefresh={() => {
             events.refresh();
@@ -484,9 +496,11 @@ export default function TraceViewerPage() {
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
                 <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonModeChange={setApiPythonMode}
                   processMode={processMode} onProcessModeChange={setProcessMode}
+                  assetStates={shownAssetStates} onRetryAsset={assets.retry}
                   selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
                 model={model}
+                summary={summary.data}
                 ep={ep}
                 running={running}
                 selectedKey={selection?.node.key ?? null}
@@ -511,7 +525,6 @@ export default function TraceViewerPage() {
             <div className="flex-1 min-h-0">
               <DetailTabs
                 apiPythonMode={apiPythonMode}
-                revealPrompt={playbackSelection?.eventId != null && playbackSelection.eventId === selection?.eventId}
                 model={model}
                 ep={ep}
                 summary={summary.data}

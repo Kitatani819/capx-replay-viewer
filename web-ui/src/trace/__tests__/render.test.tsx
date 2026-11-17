@@ -35,7 +35,7 @@ import { InputDiffTab } from '../components/tabs/InputDiffTab';
 import { ModelInputTab } from '../components/tabs/ModelInputTab';
 import { ModelOutputTab } from '../components/tabs/ModelOutputTab';
 import { MAX_NESTED_ASSET_TARGETS, applyDataAssets, dataAssetTargets, withTargetsLoading, type DataAssetState } from '../dataAsset';
-import type { RunnerRecord, TraceEvent } from '../types';
+import type { EpisodeSummary, RunnerRecord, TraceEvent } from '../types';
 import { Rec, summaryWith } from './fixtures';
 
 // react-dom/server warns once per useLayoutEffect (VirtualList, DetailTabs); expected here.
@@ -71,6 +71,91 @@ function sel(m: EpisodeModel, ev: TraceEvent): Selection {
 function timeline(m: EpisodeModel): string {
   return text(<Timeline model={m} ep={EP} running={false} selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
 }
+
+test('Oracle-only warnings are explained in the details and real recording gaps stay visible', () => {
+  const r = new Rec();
+  const legacyHook = {
+    hook: 'H5/H6', target: 'capx.utils.launch_utils', reason: '_build_multi_turn_decision_prompt_legacy: not found',
+  };
+  const config_flags = { use_oracle_code: true, multi_turn: false };
+  const start = r.episodeStart({ config_flags, tracer: { hooks_failed: [legacyHook] } });
+  const gaps = [{ code: 'hook_install_failed', count: 1, first_seq: start.seq }];
+  const end = r.episodeEnd({ trace_complete: false, gaps, dropped_events: 0, late_events: 0, n_warnings: 0 });
+  const summary = { episode_id: EP.episodeId, status: 'ended_with_gaps', trace_complete: false, gaps };
+  const bar = (data: EpisodeSummary = summary, corruptLines = 0, loading = false) => <TopBar
+    runLabel={EP.runId} episodeLabel={EP.episodeId} episodeId={EP.episodeId} summary={data}
+    model={loading ? null : buildEpisodeModel(r.events)} runnerRecords={[]} live={false} onLive={() => {}}
+    poll={{ text: '', tone: 'neutral' }} lastFetch={null} onOpenPicker={() => {}} onRefresh={() => {}}
+    reader={{ corruptLines, tornTail: false, eof: !loading, count: loading ? 0 : r.events.length, replaced: false }}
+  />;
+  const onlyUnused = text(bar());
+  assert.doesNotMatch(onlyUnused, /記録に欠落/);
+  assert.match(onlyUnused, /使われなかったフックの登録警告（1件）/);
+  assert.match(onlyUnused, /_build_multi_turn_decision_prompt_legacy: not found/);
+  const log = timeline(buildEpisodeModel(r.events));
+  assert.match(log, /end_reason=completed/);
+  assert.doesNotMatch(log, /記録に欠落あり/);
+
+  const metadata = { ...summary, episode: { config_flags } };
+  const loading = text(bar(metadata, 0, true));
+  assert.match(loading, /記録の警告を確認中/);
+  assert.doesNotMatch(loading, /記録に欠落があります/);
+  assert.match(text(bar({ ...metadata, dropped_events: 1 }, 0, true)), /記録に欠落があります/);
+
+  const mixed = text(bar({ ...summary, gaps: [...gaps, { code: 'dropped_events', count: 1, first_seq: end.seq }], dropped_events: 1 }));
+  assert.match(mixed, /記録に欠落があります/);
+  assert.match(mixed, /_build_multi_turn_decision_prompt_legacy: not found/);
+  assert.match(text(bar({ ...summary, gaps: [{ ...gaps[0], count: 2 }] })), /記録に欠落があります/);
+  assert.match(text(bar(summary, 1)), /記録に欠落があります.*破損行 1/);
+
+  start.data = { config_flags, tracer: { hooks_failed: [{ ...legacyHook, reason: '_extract_code: not found' }] } };
+  assert.match(text(bar()), /記録に欠落があります/);
+  start.data = { config_flags: { ...config_flags, use_oracle_code: false }, tracer: { hooks_failed: [legacyHook] } };
+  assert.doesNotMatch(text(bar()), /記録に欠落があります/);
+});
+
+test('model trials exclude the unused startup hook and preserve array-budget gaps', () => {
+  const r = new Rec();
+  const legacy = { hook: 'H5/H6', target: 'capx.utils.launch_utils', reason: '_build_multi_turn_decision_prompt_legacy: not found' };
+  const start = r.episodeStart({
+    config_flags: { use_oracle_code: false, multi_turn: true, use_legacy_multi_turn_decision_prompt: null },
+    tracer: { hooks_failed: [legacy] },
+  });
+  r.response(r.request('code_generator', 'generated'));
+  const firstWarning = r.add('trace_warning', { code: 'array_budget' });
+  r.add('trace_warning', { code: 'array_budget' });
+  const gaps = [
+    { code: 'hook_install_failed', count: 1, first_seq: start.seq },
+    { code: 'array_budget', count: 2, first_seq: firstWarning.seq },
+  ];
+  const end = r.episodeEnd({ gaps, trace_complete: false, n_warnings: 2 });
+  const render = (summaryGaps = gaps, n_warnings = 2) => text(<TopBar
+    runLabel={EP.runId} episodeLabel={EP.episodeId} episodeId={EP.episodeId}
+    summary={{ episode_id: EP.episodeId, status: 'ended_with_gaps', trace_complete: false, gaps: summaryGaps, n_warnings }}
+    model={buildEpisodeModel(r.events)} runnerRecords={[]} live={false} onLive={() => {}}
+    poll={{ text: '', tone: 'neutral' }} lastFetch={null} onOpenPicker={() => {}} onRefresh={() => {}}
+    reader={{ corruptLines: 0, tornTail: false, eof: true, count: r.events.length, replaced: false }}
+  />);
+  const mixed = render();
+  assert.match(mixed, /記録の欠落: 配列の保存上限超過×2/);
+  assert.doesNotMatch(mixed, /フック導入失敗/);
+  assert.match(mixed, /使われなかったフックの登録警告（1件）/);
+  assert.match(timeline(buildEpisodeModel(r.events)), /記録に欠落あり/);
+
+  start.data = { tracer: { hooks_failed: [{ ...legacy, reason: '_extract_code: not found' }] } };
+  const real = render();
+  assert.match(real, /記録の欠落: フック導入失敗×1、配列の保存上限超過×2/);
+  assert.equal([...real.matchAll(/フック導入失敗/g)].length, 1);
+  assert.doesNotMatch(real, /使われなかったフック/);
+
+  start.data = { tracer: { hooks_failed: [legacy] } };
+  r.events.splice(r.events.indexOf(firstWarning), 2);
+  end.data = { trace_complete: false, gaps: [gaps[0]], n_warnings: 0 };
+  const onlyLegacy = render([gaps[0]], 0);
+  assert.match(onlyLegacy, /使われなかったフックの登録警告（1件）/);
+  assert.doesNotMatch(onlyLegacy, /記録に欠落|フック導入失敗/);
+  assert.doesNotMatch(timeline(buildEpisodeModel(r.events)), /記録に欠落あり/);
+});
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -270,6 +355,25 @@ test('HTTP 200 then a logical error: the card and the output tab show a failed c
   const out = text(<ModelOutputTab {...props(m, sel(m, req))} />);
   assert.match(out, /この論理呼び出しは失敗しました（HTTP 200 の応答を受け取った後）/);
   assert.match(out, /ハーネスはこの応答を使っていません/);
+});
+
+test('stored model output labels its source', () => {
+  const r = new Rec();
+  const returned = r.request('code_generator', 'returned', 1, { stream: true });
+  const streamed = r.request('code_generator', 'streamed', 1, { stream: true });
+  const ordinary = r.request('code_generator', 'ordinary');
+  const payload = { payload_path: 'payloads/reply.response.json' };
+  const returnedResponse = r.response(returned, 200, 'OK', { ...payload, streamed: false });
+  returnedResponse.artifacts = [{ assembled_from_return_value: true }];
+  r.response(streamed, 200, 'OK', { ...payload, streamed: true });
+  r.response(ordinary, 200, 'OK', payload);
+
+  const m = buildEpisodeModel(r.events);
+  const output = (req: TraceEvent) => text(<ModelOutputTab {...props(m, sel(m, req))} />);
+  assert.match(output(returned), /query_model の戻り値から組み立てた応答/);
+  assert.doesNotMatch(output(returned), /保存したレスポンス本文/);
+  assert.match(output(streamed), /ストリームの chunk から組み立てた応答/);
+  assert.match(output(ordinary), /保存したレスポンス本文/);
 });
 
 test('a stopped stream shows the partial output and no recording-gap claim', () => {

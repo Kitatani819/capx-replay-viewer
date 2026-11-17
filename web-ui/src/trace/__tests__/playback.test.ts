@@ -24,6 +24,31 @@ test('maps simulator frames, not wall-clock inference waits; preserves prompts s
  assert.equal(cueAt(m.prompts,.1)?.node.call?.id,'first','backward seek must restore earlier prompt');
 });
 
+test('preserves evaluations beyond the last frame and unanchored model calls as unsynced records', () => {
+  const { r } = recording();
+  const summary = r.add('evaluator_result', { scope: 'episode', reward: 1, task_completed: true });
+  summary.sim_step = 60;
+  summary.sim_epoch = 0;
+  const point = r.request('perception_vlm', 'point', 1, { call_kind: 'point' });
+  const map = playbackMap(buildEpisodeModel(r.events), 'video_combined.mp4', 2);
+  assert.equal(map.reason, null);
+  assert.equal(map.all.some(cue => cue.node.primary === summary || cue.node.primary === point), false);
+  assert.deepEqual(new Set(map.unsynced.map(node => node.primary)), new Set([summary, point]));
+});
+
+test('only a combined video with no positive duration is pending', () => {
+  const { r } = recording();
+  const model = buildEpisodeModel(r.events);
+  for (const duration of [0, NaN]) {
+    assert.equal(playbackMap(model, 'video_combined.mp4', duration).pending, true);
+    assert.ok(!playbackMap(model, 'video_turn_01.mp4', duration).pending);
+  }
+  const unknown = playbackMap(model, 'video_combined.mp4', Infinity);
+  assert.equal(unknown.pending, false);
+  assert.match(unknown.reason ?? '', /動画の長さ/);
+  assert.doesNotMatch(unknown.reason ?? '', /読み込み中/);
+});
+
 test('groups service calls and turn-anchored worker candidates without dropping co-located events',()=>{
  const {r,second}=recording();
  const member=r.request('code_generator','member',1,{call_kind:'ensemble_member',turn_index:1});

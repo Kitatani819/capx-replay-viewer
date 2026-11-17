@@ -1,5 +1,5 @@
 /** Recorded API calls beside their executed Python, under the recording. */
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { apiCallSite, apiLineMatch } from '../apiPython';
 import { apiDefinition } from '../apiDefinitions';
 import { useFullText } from '../hooks';
@@ -8,10 +8,11 @@ import type { PlaybackCue } from '../playback';
 import { turnOf } from '../replay';
 import { dataOf } from '../types';
 import { CodeView } from './CodeView';
+import { UnavailableEventData, type EventDataAccess } from './DataAssetState';
 import { ValueView, type EpisodeRef } from './ValueView';
 import './ApiPythonPanel.css';
 
-export interface ApiPythonPanelProps {
+export interface ApiPythonPanelProps extends EventDataAccess {
   model: EpisodeModel;
   ep: EpisodeRef;
   apiCues: PlaybackCue[];
@@ -31,7 +32,7 @@ function recordedStatus(node: TNode) {
 }
 
 /** The definition and the execution evidence are deliberately separate sections. */
-export function RecordedApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }) {
+export function RecordedApiDetails({ node, ep, ...access }: { node: TNode; ep: EpisodeRef } & EventDataAccess) {
   const definition = apiDefinition(node);
   const start = dataOf(node.primary, 'api_call_start');
   const end = dataOf(node.end, 'api_call_end');
@@ -43,7 +44,7 @@ export function RecordedApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }
       <h4>API定義の説明</h4>
       {definition ? <>
         <p>{definition.descriptionJa}</p>
-        <p lang="en">定義の説明文: {definition.docstring}</p>
+        <p>定義の原文（抜粋） <span lang="en">{definition.docstring}</span></p>
         <pre>{definition.signature}</pre>
         <a href={definition.sourceUrl} target="_blank" rel="noreferrer">{definition.sourceLabel}</a>
         <p className="api-python-muted">{definition.scopeNote}</p>
@@ -60,9 +61,9 @@ export function RecordedApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }
         <div><dt>呼び出し元</dt><dd><code>{start.call_site?.code_block_id ?? '未記録'}</code> / 行 {start.call_site?.line ?? '未記録'}</dd></div>
       </dl>
       <h4>記録された引数</h4>
-      {start.args === undefined ? <p>未記録</p> : <ValueView ep={ep} value={start.args}/>}
+      {start.args === undefined ? <UnavailableEventData ev={node.primary} {...access}/> : <ValueView ep={ep} value={start.args}/>}
       <h4>記録された結果</h4>
-      {!node.end ? <p>未記録（終了イベントなし）</p> : error ? <p>エラー終了のため戻り値は未記録</p> : 'return' in end ? <ValueView ep={ep} value={end.return}/> : <p>未記録</p>}
+      {!node.end ? <p>未記録（終了イベントなし）</p> : error ? <p>エラー終了（戻り値なし）</p> : 'return' in end ? <ValueView ep={ep} value={end.return}/> : <UnavailableEventData ev={node.end} {...access}/>}
       <h4>記録されたエラー</h4>
       {error ? <>
         <p><strong>{end.error_type ?? '例外の種類は未記録'}</strong></p>
@@ -78,11 +79,11 @@ export function RecordedApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }
   </div>;
 }
 
-function ApiDetails({ node, ep }: { node: TNode; ep: EpisodeRef }) {
+function ApiDetails({ node, ep, ...access }: { node: TNode; ep: EpisodeRef } & EventDataAccess) {
   const [open, setOpen] = useState(false);
   return <details className="api-python-details" onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>詳細</summary>
-    {open && <RecordedApiDetails node={node} ep={ep}/>}
+    {open && <RecordedApiDetails node={node} ep={ep} {...access}/>}
   </details>;
 }
 
@@ -95,7 +96,7 @@ function revealInPane(pane: HTMLElement, selector: string) {
   }
 }
 
-export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn = null }: ApiPythonPanelProps) {
+export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn = null, assetStates, onRetryAsset }: ApiPythonPanelProps) {
   const selected = model.allNodes.find(node => node.key === selectedKey) ?? null;
   const api = selected?.kind === 'api_call' ? selected : null;
   const site = api ? apiCallSite(model, api) : null;
@@ -128,6 +129,13 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
     return () => observer.disconnect();
   }, [selectedKey, turn, block?.key, marked.line, code.text]);
 
+  useEffect(() => {
+    if (!hover) return;
+    const dismiss = () => setHover(null);
+    window.addEventListener('scroll', dismiss, { passive: true });
+    return () => window.removeEventListener('scroll', dismiss);
+  }, [hover]);
+
   const preview = (node: TNode, target: HTMLButtonElement) => {
     const box = target.getBoundingClientRect();
     setHover({ key: node.key, text: apiDefinition(node)?.summaryJa ?? '説明未登録',
@@ -138,7 +146,8 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
   return <div className="api-python-panel" data-api-python-panel="">
     <section className="api-python-list-section" aria-label="時刻とAPIの一覧">
       <div className="api-python-list-heading"><span>動画時刻</span><span>API（記録順）</span></div>
-      <div ref={apiList} className="api-python-list" onScroll={() => setHover(null)}>
+      <div ref={apiList} className="api-python-list" role="region" aria-label="API呼び出し" tabIndex={0}
+        onScroll={() => setHover(null)}>
         {apis.map(node => {
           const time = times.get(node.key);
           return <button key={node.key} type="button" className="api-python-row"
@@ -147,7 +156,7 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
             onMouseEnter={event => preview(node, event.currentTarget)} onMouseLeave={() => setHover(null)}
             onFocus={event => preview(node, event.currentTarget)} onBlur={() => setHover(null)}
             onClick={() => onSelect(node)}>
-            <span className="api-python-time">{time === undefined ? '未記録' : `${time.toFixed(2)}s`}</span>
+            <span className="api-python-time">{time === undefined ? '同期なし' : `${time.toFixed(2)}s`}</span>
             <span className="api-python-name"><code>{apiName(node)}</code><small>#{node.seq}{node.failed ? ' · エラー' : ''}{time === undefined ? ' · 同期情報なし' : ''}</small></span>
           </button>;
         })}
@@ -163,10 +172,10 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
         </nav>
       </header>
       <div className="api-python-selected-description" data-api-description="">
-        {api ? <><strong>{apiName(api)}{marked.line ? ` · ${marked.line}行目` : ''}</strong><p>{definition?.summaryJa ?? '説明未登録'}</p>{definition && <small className="api-python-muted">参照定義 · 実行時の実装との一致は未確認（出典は「詳細」）</small>}</> : <p>APIを選ぶと、役割と呼び出し行を確認できます。</p>}
+        {api ? <><strong>{apiName(api)}{marked.line ? ` · ${marked.line}行目` : ''}</strong><p>{definition?.summaryJa ?? '説明未登録'}</p>{definition && <small className="api-python-muted">定義の出典は「詳細」</small>}</> : <p>APIを選ぶと、役割と呼び出し行を確認できます。</p>}
       </div>
-      <div className="api-python-code-body" ref={codeScroll}>
-        {api && <ApiDetails key={api.key} node={api} ep={ep}/>}
+      <div ref={codeScroll} className="api-python-code-body" role="region" aria-label="Pythonコードと記録" tabIndex={0}>
+        {api && <ApiDetails key={api.key} node={api} ep={ep} assetStates={assetStates} onRetryAsset={onRetryAsset}/>}
         {site?.reason && <p className="api-python-missing">{site.reason}</p>}
         {!site?.reason && marked.reason && <p className="api-python-missing">{marked.reason}</p>}
         {block ? <>
@@ -176,6 +185,6 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
         </> : <p className="api-python-empty">対応する実行コードは未記録です。</p>}
       </div>
     </section>
-    {hover && <div id="api-role-preview" role="tooltip" className="api-python-tooltip" style={{ left: hover.left, top: hover.top }}>{hover.text}{hover.text !== '説明未登録' && <small>参照定義 · 実行時の実装との一致は未確認</small>}</div>}
+    {hover && <div id="api-role-preview" role="tooltip" className="api-python-tooltip" style={{ left: hover.left, top: hover.top }}>{hover.text}</div>}
   </div>;
 }

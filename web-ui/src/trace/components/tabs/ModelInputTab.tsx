@@ -380,7 +380,6 @@ function PayloadView({
           <RawJson value={payload.data} />
         </>
       )}
-      {parsed && parsed.messages.length > 0 && <div data-playback-input />}
       {parsed &&
         parsed.messages.map((m) => (
           <MessageView

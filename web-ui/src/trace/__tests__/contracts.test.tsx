@@ -177,6 +177,53 @@ test('the picker names why an episode.json could not be used, and not a missing 
   assert.ok(!missing.includes('episode.json'));
 });
 
+const hookGap = { code: 'hook_install_failed', count: 1, first_seq: 1 };
+const legacyFailure = { hook: 'H5/H6', target: 'capx.utils.launch_utils', reason: '_build_multi_turn_decision_prompt_legacy: not found' };
+const oracleHookSummary: EpisodeSummary = {
+  episode_id: 'ep', status: 'ended_with_gaps', trace_complete: false,
+  gaps: [hookGap], dropped_events: 0, late_events: 0,
+  startup_hook_failures: { seq: 1, failures: [legacyFailure] },
+  episode: { config_flags: { use_oracle_code: true, multi_turn: false } },
+};
+const hookWarningLabel = '終了（未使用フックの警告あり）';
+const gapLabel = '終了（記録に欠落あり）';
+
+test('the picker shows a neutral registration warning for a single Oracle hook gap', () => {
+  const cell = <EpisodeStatusCell episode={oracleHookSummary} />;
+  assert.equal(text(cell), hookWarningLabel);
+  const html = renderToStaticMarkup(cell);
+  assert.match(html, /bg-surface-overlay/);
+  assert.match(html, /title="_build_multi_turn_decision_prompt_legacy: not found"/);
+});
+
+const pickerStatusCases: Array<[string, Partial<EpisodeSummary>, string]> = [
+  ['Oracle is disabled', { episode: { config_flags: { use_oracle_code: false, multi_turn: true, use_legacy_multi_turn_decision_prompt: null } } }, hookWarningLabel],
+  ['the summary also reports dropped events', { gaps: [hookGap, { code: 'dropped_events', count: 1, first_seq: 2 }] }, gapLabel],
+  ['the hook gap counts two failures', { gaps: [{ ...hookGap, count: 2 }] }, gapLabel],
+  ['the hook gap started during the episode', { gaps: [{ ...hookGap, first_seq: 2 }] }, gapLabel],
+  ['startup evidence is unavailable', { startup_hook_failures: undefined }, gapLabel],
+  ['episode.json is unavailable', { episode: undefined, episode_json_error: 'missing' }, gapLabel],
+  ['the failure has a different reason', { startup_hook_failures: { seq: 1, failures: [{ ...legacyFailure, reason: `${legacyFailure.reason} (different)` }] } }, gapLabel],
+  ['the failure comes from a different target', { startup_hook_failures: { seq: 1, failures: [{ ...legacyFailure, target: 'another.module' }] } }, gapLabel],
+  ['the failure comes from a different hook', { startup_hook_failures: { seq: 1, failures: [{ ...legacyFailure, hook: 'H6' }] } }, gapLabel],
+  ['Oracle multi-turn skips the legacy prompt', {
+    episode: { config_flags: { use_oracle_code: true, multi_turn: true, use_legacy_multi_turn_decision_prompt: false } },
+  }, hookWarningLabel],
+];
+
+for (const [name, overrides, expected] of pickerStatusCases) {
+  test(`the picker status when ${name}`, () => {
+    assert.equal(text(<EpisodeStatusCell episode={{ ...oracleHookSummary, ...overrides }} />), expected);
+  });
+}
+
+test('the picker explains the remaining array gaps after excluding the unused hook', () => {
+  const gaps = [hookGap, { code: 'array_budget', count: 2, first_seq: 2 }];
+  const cell = <EpisodeStatusCell episode={{ ...oracleHookSummary, gaps, n_warnings: 2 }} />;
+  assert.equal(text(cell), gapLabel);
+  assert.match(renderToStaticMarkup(cell), /title="配列の保存上限超過×2"/);
+});
+
 test('an episode.json that could not be used is listed with the recording gaps', () => {
   const t = bar({ summary: { episode_id: 'ep', status: 'incomplete', episode_json_error: 'unreadable (EACCES)' } });
   assert.match(t, /episode\.json を読めません（unreadable \(EACCES\)）/);

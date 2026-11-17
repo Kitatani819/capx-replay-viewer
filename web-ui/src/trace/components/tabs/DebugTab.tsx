@@ -24,7 +24,7 @@ import { pendingAsset, type DataAssetState } from '../../dataAsset';
 import { fmtDuration, fmtNum } from '../../format';
 import { useAsync, useFullText } from '../../hooks';
 import { LABELS, NOT_MODEL_INPUT, REDACTED_MESSAGE_NOTE, REDACTED_SHORT } from '../../labels';
-import { descendants, enclosingBlock, imageSourceText, mainAttempt, resolveStateRef, textOf, type EpisodeModel, type TNode } from '../../model';
+import { descendants, enclosingBlock, imageSourceText, mainAttempt, nodeTitle, resolveStateRef, textOf, type EpisodeModel, type TNode } from '../../model';
 import { dataOf, type ArrayStats, type Artifact, type EpisodeSummary, type StateRef, type TextValue, type TraceEvent } from '../../types';
 import { Badge, DebugBanner, EventLink, KV, Notice, SectionTitle, Spinner, ErrorText } from '../common';
 import { DataAssetInline, NO_ASSET_STATES } from '../DataAssetState';
@@ -535,13 +535,12 @@ export function Perception({
   if (services.length === 0) return null;
   return (
     <div>
-      <SectionTitle>知覚サービスの入力と出力</SectionTitle>
+      <SectionTitle>サービスの入出力</SectionTitle>
       {services.map(s=><div key={s.key} className="mb-3 space-y-1">
-        <Badge tone="violet">出典: {dataOf(s.primary,'service_call_start').service ?? '知覚サービス'} · {s.primary.event_id}</Badge>
-        <SectionTitle>渡した画像・対象物の指示（request_summary）</SectionTitle>
+        <Badge tone="violet">{nodeTitle(s)} · {s.primary.event_id}</Badge>
+        <SectionTitle>記録された入力（request_summary）</SectionTitle>
         <ValueView ep={ep} value={dataOf(s.primary,'service_call_start').request_summary}/>
       </div>)}
-      {items.length === 0 && <div className="text-xs text-text-tertiary">保存された入出力はありません（{services.length} 件の呼び出し）</div>}
       <div className="space-y-2">
         {items.map(({ s, a }, i) => {
           const sd = dataOf(s.primary, 'service_call_start');

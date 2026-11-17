@@ -526,6 +526,8 @@ export function buildEpisodeModel(input: TraceEvent[]): EpisodeModel {
         if (call) {
           call.parsed.push(ev);
           callOfEvent.set(ev.event_id, call);
+        } else if (d.code_source === 'oracle' && !mid && !lid) {
+          roots.push(addNode(mkNode('other', ev)));
         } else {
           orphanNode(ev, 'model_event_id に対応するモデル呼び出しがありません');
         }
@@ -1267,6 +1269,9 @@ export function nodeTitle(n: TNode): string {
     case 'warning':
       return `記録の警告: ${dataOf(n.primary, 'trace_warning').code ?? ''}`;
     default:
+      if (n.primary.event_type === 'model_output_parsed' && dataOf(n.primary, 'model_output_parsed').code_source === 'oracle') {
+        return 'Oracleコードの取り出し';
+      }
       return n.primary.event_type;
   }
 }

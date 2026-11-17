@@ -26,7 +26,7 @@ test('API/Python panel shows same-time calls separately and full code with the r
   assert.equal((html.match(/data-code-highlighted="true"/g) ?? []).length, 1);
   assert.match(html, /step_36/);
   assert.doesNotMatch(html, /残り \d+ 行を表示/);
-  assert.match(html, /実行時の実装との一致は未確認/);
+  assert.match(html, /定義の出典は「詳細」/);
 });
 
 test('missing call_site and recording time stay explicit without displaying a parent block as a proven match', () => {
@@ -74,6 +74,6 @@ test('API details distinguish the reference definition, recorded arguments and r
   assert.match(failed, /RuntimeError/);
   assert.match(failed, /RECORDED_FAILURE/);
   assert.match(failed, /原因未特定/);
-  assert.match(failed, /エラー終了のため戻り値は未記録/);
+  assert.match(failed, /エラー終了（戻り値なし）/);
   assert.doesNotMatch(failed, /RECORDED_RESULT/);
 });

@@ -6,7 +6,7 @@ import { VirtualList } from '../components/VirtualList';
 
 // Node has no CSS.escape; the fixture only uses simple ASCII keys.
 (globalThis as unknown as {CSS:unknown}).CSS={escape:(value:string)=>value};
-const items=Array.from({length:30},(_,i)=>`row-${i}`);
+const items=Array.from({length:100},(_,i)=>`row-${i}`);
 const props={items,itemKey:(item:string)=>item,estimateHeight:()=>100,renderItem:(item:string)=>item,
   scrollToKey:'row-10',scrollToken:0};
 

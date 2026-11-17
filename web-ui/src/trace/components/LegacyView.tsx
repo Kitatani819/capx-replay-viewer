@@ -273,7 +273,7 @@ export function LegacyTrialView({ runId, trial }: { runId: string; trial: Legacy
       </div>
       <section data-legacy-log aria-label="保存された処理ログ" className="replay-legacy-log">
         <div className="replay-legacy-log-heading"><h2>保存された記録</h2><span>選ぶと録画を停止</span></div>
-        <div className="replay-legacy-rows">
+        <div className="replay-legacy-rows replay-process-scroll" role="region" aria-label="記録一覧" tabIndex={0}>
           {hasInputRecords && recordButton('section-0', '入力とカメラ画像を見る', '入力', () => selectRecord(0))}
           {hasCodeRecords && recordButton('section-1', '回答と実行コードを見る', 'Python', () => selectRecord(1))}
           {summary && recordButton('section-2', '実行の出力と評価を確認する', '実行ログ', () => selectRecord(2))}
