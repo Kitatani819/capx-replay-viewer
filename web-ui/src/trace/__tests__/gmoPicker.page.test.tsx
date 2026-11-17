@@ -5,7 +5,7 @@ import { Picker } from '../components/Picker';
 import { GmoPicker } from '../components/GmoPicker';
 import { SmallButton } from '../components/common';
 import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
-import type { GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings } from '../api';
+import type { GmoAutoStatus, GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings } from '../api';
 import { advance, findAll, net, resetBrowser, type FakeElement } from './harness/browser';
 import { mount } from './harness/fakeReact';
 
@@ -29,8 +29,10 @@ function job(row: GmoEpisodeSummary, overrides: Partial<GmoJob> = {}): GmoJob {
 function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   resetBrowser();
   const state = { config: config(configured), disabled: false, rows, jobs: [] as GmoJob[],
+    auto: { enabled: configured, paused: false, interval_s: 120, running: false, last_run_at: null,
+      next_run_at: new Date(Date.now() + 120_000).toISOString(), last_error: null, queued_in_last_run: 0, skipped_large: [] } as GmoAutoStatus,
     check: { ok: true, mine_episodes: 2, team_episodes: 3, error: null as string | null },
-    saveError: '', fetchError: '', fetchStatus: 502, sent: [] as SentRequest[] };
+    saveError: '', fetchError: '', fetchStatus: 502, autoError: '', autoReadError: '', sent: [] as SentRequest[] };
   let nextJob = 1;
   globalThis.fetch = (input, init) => {
     const path = new URL(String(input), 'http://localhost').pathname;
@@ -42,6 +44,13 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
     if (req.path === '/api/traces/runs') return { json: { runs: [] } };
     if (!req.path.startsWith('/api/gmo/')) return null;
     if (state.disabled) return { status: 404, json: { detail: 'Not Found' } };
+    if (req.path === '/api/gmo/auto') {
+      if (sent.method === 'PUT') {
+        if (state.autoError) return { status: 502, json: { detail: state.autoError } };
+        state.auto = { ...state.auto, paused: (sent.body as { paused: boolean }).paused };
+      } else if (state.autoReadError) return { status: 502, json: { detail: state.autoReadError } };
+      return { json: state.auto };
+    }
     if (req.path === '/api/gmo/config') {
       if (sent.method === 'PUT') {
         if (state.saveError) return { status: 400, json: { detail: state.saveError } };
@@ -136,7 +145,8 @@ test('unconfigured GMO opens the labelled connection settings without listing re
   assert.match(text(page.output), /ssh-agent/);
   assert.match(text(page.output), /パスフレーズ/);
   assert.equal(findAll(page.output, 'select').some(el => el.props['aria-label'] === '自動取り込みの間隔'), false);
-  assert.match(text(page.output), /自動取り込みは未対応/);
+  assert.match(text(page.output), /接続先と自分の記録の場所を設定してください/);
+  assert.equal(findAll(page.output, 'input').find(el => el.props.type === 'checkbox')?.props.disabled, true);
   assert.equal(state.sent.some(req => req.path === '/api/gmo/episodes'), false);
   page.unmount();
 });
@@ -176,6 +186,98 @@ test('GMO lists local state, result, owner and size and filters scope, outcome, 
   click(page.output, '一覧を更新'); await advance(100);
   assert.ok(net.log.some(req => req.path === '/api/gmo/episodes' && req.query.get('refresh') === '1'));
   assertGmoHeaders(state.sent); page.unmount();
+});
+
+function autoCheckbox(node: unknown): FakeElement {
+  const input = findAll(node, 'input').find(el => el.props['aria-label'] === '自分の試行を自動で取り込む');
+  assert.ok(input);
+  return input!;
+}
+function toggleAuto(node: unknown, checked: boolean): void {
+  const input = autoCheckbox(node);
+  assert.notEqual(input.props.disabled, true);
+  (input.props.onChange as (event: unknown) => void)({ target: { checked } });
+}
+
+test('GMO shows automatic import status, own recording follow and manual large rows, and refreshes every five seconds', async () => {
+  const mine = episode('recording', { status: 'running' });
+  const team = episode('team_recording', { status: 'running', mine: false });
+  const large = episode('large_recording', { status: 'running' });
+  const state = setup([mine, team, large]);
+  state.auto = { ...state.auto, last_run_at: new Date(Date.now() - 1000).toISOString(), queued_in_last_run: 2,
+    skipped_large: [{ run_id: large.run_id, episode_id: large.episode_id, size_bytes: 1024 ** 3 }] };
+  const page = mountGmo(state.config); await advance(100);
+  assert.equal(autoCheckbox(page.output).props.checked, true);
+  assert.match(text(page.output), /次の巡回まで 120 秒/);
+  assert.match(text(page.output), /最後の巡回：.*2 件を取り込みキューに登録/);
+  assert.match(text(page.output), /大きいため手動：1 件/);
+  assert.match(text(rowFor(page.output, mine.task!)), /自動で追従中/);
+  assert.doesNotMatch(text(rowFor(page.output, team.task!)), /自動で追従中/);
+  assert.doesNotMatch(text(rowFor(page.output, large.task!)), /自動で追従中/);
+  assert.match(text(rowFor(page.output, large.task!)), /大きいため手動/);
+  const initialReads = state.sent.filter(req => req.path.endsWith('/auto')).length;
+  const statusText = () => ['span', 'p', 'div'].flatMap(type => findAll(page.output, type))
+    .filter(el => el.props.role === 'status').map(text);
+  const waitingStatus = statusText();
+  assert.ok(waitingStatus.includes('次の巡回を待っています'));
+  assert.equal(waitingStatus.some(message => /次の巡回まで \d+ 秒/.test(message)), false, 'countdown stays outside live regions');
+  await advance(1000);
+  assert.match(text(page.output), /次の巡回まで 119 秒/);
+  assert.deepEqual(statusText(), waitingStatus, 'each countdown tick leaves live-region messages unchanged');
+  assert.equal(state.sent.filter(req => req.path.endsWith('/auto')).length, initialReads);
+  state.auto = { ...state.auto, running: true, last_error: 'Permission denied (publickey)' };
+  await advance(3800);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/auto')).length, initialReads);
+  await advance(200);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/auto')).length, initialReads + 1);
+  assert.match(text(page.output), /巡回中/);
+  assert.ok(statusText().includes('自動取り込み：巡回中…'), 'scan state changes remain announced');
+  assert.match(text(page.output), /Permission denied \(publickey\)/);
+  assertGmoHeaders(state.sent);
+  page.unmount();
+  const readsAtClose = state.sent.length;
+  await advance(10_000);
+  assert.equal(state.sent.length, readsAtClose, 'closing the GMO tab stops status polling');
+});
+
+test('GMO pauses and resumes automatic imports through the guarded JSON API and preserves failed-toggle state', async () => {
+  const row = episode('recording', { status: 'running' });
+  const state = setup([row]);
+  const page = mountGmo(state.config); await advance(100);
+  toggleAuto(page.output, false); await advance(100);
+  assert.equal(autoCheckbox(page.output).props.checked, false);
+  assert.match(text(page.output), /一時停止中/);
+  assert.doesNotMatch(text(rowFor(page.output, row.task!)), /自動で追従中/);
+  toggleAuto(page.output, true); await advance(100);
+  assert.equal(autoCheckbox(page.output).props.checked, true);
+  assert.match(text(rowFor(page.output, row.task!)), /自動で追従中/);
+  state.autoError = 'Cannot change automatic imports';
+  toggleAuto(page.output, false); await advance(100);
+  assert.equal(autoCheckbox(page.output).props.checked, true);
+  assert.match(text(page.output), /Cannot change automatic imports/);
+  assert.deepEqual(state.sent.filter(req => req.path === '/api/gmo/auto' && req.method === 'PUT').map(req => req.body),
+    [{ paused: true }, { paused: false }, { paused: true }]);
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO shows zero interval and status read errors and reconciles automatically queued jobs', async () => {
+  const row = episode('automatic'); const state = setup([row]);
+  state.auto = { ...state.auto, enabled: false, interval_s: 0, next_run_at: null };
+  const page = mountGmo(state.config); await advance(100);
+  assert.equal(autoCheckbox(page.output).props.disabled, true);
+  assert.match(text(page.output), /自動取り込みは無効です（間隔 0 秒）/);
+  state.autoReadError = 'Automatic status unavailable';
+  await advance(5000);
+  assert.match(text(page.output), /Automatic status unavailable/);
+  state.autoReadError = '';
+  state.rows = [{ ...row, local_state: 'fetching' }];
+  state.jobs = [job(row)];
+  state.auto = { ...state.auto, enabled: true, interval_s: 120, last_run_at: new Date(Date.now()).toISOString(), queued_in_last_run: 1 };
+  await advance(5000);
+  assert.doesNotMatch(text(page.output), /Automatic status unavailable/);
+  assert.equal(button(rowFor(page.output, row.task!), '取り込み中…').props.disabled, true);
+  assert.ok(net.log.filter(req => req.path.endsWith('/episodes')).every(req => req.query.get('refresh') === '0'), 'automatic status uses the cached listing');
+  page.unmount();
 });
 
 test('GMO imports, polls once a second while active, reloads on completion and opens with existing onPick', async () => {

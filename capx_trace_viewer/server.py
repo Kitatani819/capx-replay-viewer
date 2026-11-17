@@ -83,6 +83,7 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
         gmo_service = GmoService(trace_dir)
         app.state.gmo_service = gmo_service
         app.include_router(create_gmo_router(gmo_service))
+        app.router.add_event_handler('startup', gmo_service.start_auto)
         app.router.add_event_handler('shutdown', gmo_service.close)
 
     @app.api_route('/api/gmo', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])

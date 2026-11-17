@@ -42,6 +42,9 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const [settingsOpen, setSettingsOpen] = useState(!initialConfig?.configured);
   const [draft, setDraft] = useState(() => settingsDraft(initialConfig?.settings));
   const [saving, setSaving] = useState(false);
+  const [autoSaving, setAutoSaving] = useState(false);
+  const [autoActionError, setAutoActionError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now);
   const [checkMessage, setCheckMessage] = useState<string | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
   const [scope, setScope] = useState<GmoScope>('all');
@@ -59,6 +62,8 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const recheckedSnapshot = useRef<GmoJob[] | null>(null);
   const actions = useRef(new Set<AbortController>());
   const savingRef = useRef(false);
+  const autoSavingRef = useRef(false);
+  const seenAutoRun = useRef<string | null>(null);
 
   useEffect(() => {
     if (!initialConfig) return;
@@ -90,6 +95,22 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     try { return await gmoApi.jobs(signal); }
     catch (error) { return handleError(error, signal); }
   } : null, [config?.settings]);
+  const auto = useAsync(config ? async (signal) => {
+    try { return await gmoApi.auto(signal); }
+    catch (error) { return handleError(error, signal); }
+  } : null, [config?.settings]);
+  useInterval(auto.poll, 5000, config !== null);
+  useInterval(() => setNow(Date.now()), 1000, !!auto.data?.enabled && !auto.data.paused);
+  useEffect(() => {
+    if (!auto.data?.last_run_at) return;
+    const run = JSON.stringify([auto.data.last_run_at, auto.data.running, auto.data.queued_in_last_run]);
+    if (seenAutoRun.current === run) return;
+    seenAutoRun.current = run;
+    // A scan can enqueue jobs after this tab's last snapshot. Reconcile the
+    // shared jobs and list once per change, using a cached listing if available.
+    listing.reload();
+    jobs.reload();
+  }, [auto.data, listing.reload, jobs.reload]);
 
   const reloadList = () => { refreshNext.current = true; listing.reload(); };
   const hasActiveJobs = jobs.data?.some(activeJob) || Object.keys(pending).length > 0 || listing.data?.rows.some(row => row.local_state === 'fetching') === true;
@@ -177,6 +198,27 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     } finally { actions.current.delete(controller); }
   };
 
+  const toggleAuto = async (paused: boolean) => {
+    if (autoSavingRef.current) return;
+    autoSavingRef.current = true;
+    setAutoSaving(true);
+    setAutoActionError(null);
+    const controller = new AbortController();
+    actions.current.add(controller);
+    try {
+      await gmoApi.setAutoPaused(paused, controller.signal);
+      if (!controller.signal.aborted) auto.reload();
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof GmoDisabledError) onDisabled();
+      setAutoActionError(errorText(error));
+    } finally {
+      actions.current.delete(controller);
+      autoSavingRef.current = false;
+      if (!controller.signal.aborted) setAutoSaving(false);
+    }
+  };
+
   const saveAndCheck = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
@@ -216,6 +258,11 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const connectionError = checkError || listing.error || initialConfigError;
   const connectionStatus = saving ? '接続を確認中…' : connectionError ? '接続エラー' : !configured ? '未設定' : listing.data || checkMessage ? '接続できました' : listing.loading ? '接続中…' : '未確認';
   const updateDraft = (key: keyof SettingsDraft, value: string) => setDraft(previous => ({ ...previous, [key]: value }));
+  const autoStatus = auto.data;
+  const autoFollowing = autoStatus?.enabled === true && !autoStatus.paused;
+  const secondsUntilNext = autoStatus?.next_run_at ? Math.max(0, Math.ceil((Date.parse(autoStatus.next_run_at) - now) / 1000)) : null;
+  const autoError = autoActionError || auto.error || autoStatus?.last_error;
+  const skippedLarge = new Set(autoStatus?.skipped_large.map(rowKey));
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
@@ -227,6 +274,20 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           <SmallButton active={settingsOpen} onClick={() => setSettingsOpen(previous => !previous)}>接続設定</SmallButton>
         </div>
       </div>
+      {config && <section aria-label="自動取り込み" className="flex-shrink-0 px-3 py-2 border-b border-surface-border text-xs text-text-secondary">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" aria-label="自分の試行を自動で取り込む" checked={autoFollowing} disabled={!autoStatus?.enabled || autoSaving || saving} onChange={event => void toggleAuto(!event.target.checked)} />
+          自分の試行を自動で取り込む
+          {autoSaving && <span>変更中…</span>}
+        </label>
+        <p className="mt-1 text-[11px]">
+          <span role="status">{!autoStatus ? '自動取り込みの状態を確認中…' : !autoStatus.enabled ? autoStatus.interval_s === 0 ? '自動取り込みは無効です（間隔 0 秒）' : '接続先と自分の記録の場所を設定してください' : autoStatus.paused ? '自動取り込みは一時停止中' : autoStatus.running ? '自動取り込み：巡回中…' : '次の巡回を待っています'}</span>
+          {autoFollowing && !autoStatus?.running && secondsUntilNext !== null && <span> · 次の巡回まで {secondsUntilNext} 秒</span>}
+        </p>
+        {autoStatus && <p className="mt-1 text-[11px]">{autoStatus.last_run_at ? `最後の巡回：${fmtWall(autoStatus.last_run_at)} · ${autoStatus.queued_in_last_run} 件を取り込みキューに登録` : 'まだ巡回していません'}</p>}
+        {!!autoStatus?.skipped_large.length && <p className="mt-1 text-[11px] text-amber-500">大きいため手動：{autoStatus.skipped_large.length} 件（1 回の巡回は 1 GiB 未満）</p>}
+        {autoError && <div role="alert" className="mt-1"><ErrorText>自動取り込み：{autoError}</ErrorText></div>}
+      </section>}
       {settingsOpen && (
         <section aria-label="GMO の接続設定" className="flex-shrink-0 px-3 py-3 border-b border-surface-border bg-surface-raised">
           <h3 className="text-xs font-bold text-text-primary mb-2">GMO の接続設定</h3>
@@ -243,7 +304,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           </form>
           {checkMessage && <p role="status" className="mt-2 text-xs text-nv-green">{checkMessage}</p>}
           {checkError && <div role="alert" className="mt-2"><ErrorText>{checkError}</ErrorText></div>}
-          <p className="mt-3 text-[11px] text-text-secondary">自動取り込みは未対応です。試行の「取り込む」「更新を取り込む」で取り込んでください。</p>
+          <p className="mt-3 text-[11px] text-text-secondary">自動取り込みは自分の記録だけが対象です。チームの試行は「取り込む」「更新を取り込む」で取り込めます。</p>
           <p className="mt-3 text-[11px] text-text-secondary">鍵は ssh-agent に読み込ませておく必要があります。この画面ではパスフレーズは聞けません。</p>
           <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host gmo\n  HostName example.com\n  User your-user\n  Port 22\n  IdentityFile ~/.ssh/id_ed25519'}</pre></details>
         </section>
@@ -275,7 +336,10 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
               const localState = busy ? 'fetching' : row.local_state;
               const error = rowErrors[key] || (!busy && job?.state === 'failed' ? job.error || '取り込みに失敗しました' : null);
               return <tr key={`${key}\0${index}`} className="border-b border-surface-border/50 align-top">
-                <td className="py-2 px-3"><Badge tone={localState === 'local' ? 'green' : localState === 'stale' ? 'amber' : localState === 'fetching' ? 'gold' : 'neutral'}>{LOCAL_LABELS[localState]}</Badge></td>
+                <td className="py-2 px-3"><Badge tone={localState === 'local' ? 'green' : localState === 'stale' ? 'amber' : localState === 'fetching' ? 'gold' : 'neutral'}>{LOCAL_LABELS[localState]}</Badge>
+                  {row.mine && row.status === 'running' && autoFollowing && !row.conflict && !skippedLarge.has(key) && <p className="mt-1 text-[11px] text-nv-green">自動で追従中</p>}
+                  {skippedLarge.has(key) && <p className="mt-1 text-[11px] text-amber-500">大きいため手動</p>}
+                </td>
                 <td className="py-2 px-3"><TaskOutcomeBadge verdict={episodeVerdict(row)} /></td>
                 <td className="py-2 px-3"><div>{row.task ?? '—'} · seed {row.seed ?? '—'}</div><div className="text-[11px] text-text-tertiary font-mono break-all">{row.run_id} / {row.episode_id}</div></td>
                 <td className="py-2 px-3">{row.mine ? '自分' : row.owner || '—'}</td>

@@ -1147,9 +1147,9 @@ Endpoints:
 | `GET /api/traces/legacy/runs`, `/legacy/runs/{run_id}`, `/legacy/trials/{run_id}/{task}/{condition}/{trial_dir}`, `/legacy/file/{run_id}/{task}/{condition}/{trial_dir}/{relpath}` | read-only views of runner outputs (section 9.4) |
 
 When the server starts with `--gmo`, it also includes `/api/gmo`. This router always
-requires a loopback peer, local `Host`, and local `Origin` if present, even when
-`--expose-traces` is set. PUT and POST additionally require a loopback `Origin`,
-`X-CapX-Request: gmo`, and `Content-Type: application/json`. Without `--gmo` these
+requires a loopback peer, local `Host`, `X-CapX-Request: gmo`, and local `Origin` if
+present, even when `--expose-traces` is set. PUT and POST additionally require a
+loopback `Origin` and `Content-Type: application/json`. Without `--gmo` these
 routes return 404. The episode list is cached for 30 seconds; `refresh=1` reloads it.
 
 | Method and path | Response |
@@ -1160,6 +1160,29 @@ routes return 404. The episode list is cached for 30 seconds; `refresh=1` reload
 | `GET /api/gmo/episodes?scope=all\|mine\|team&refresh=0\|1` | Local episode summary fields plus `owner`, `mine`, `size_bytes`, `local_state`, `conflict` |
 | `POST /api/gmo/fetch` | `{job_id}` for `{run_id, episode_id}`; conflict or duplicate active job returns 409 |
 | `GET /api/gmo/jobs` | Last 50 `{job_id, run_id, episode_id, state, bytes, error, started_at, finished_at}` records |
+| `GET /api/gmo/auto` | `{enabled, paused, interval_s, running, last_run_at, next_run_at, last_error, queued_in_last_run, skipped_large}` |
+| `PUT /api/gmo/auto` | Set the in-memory pause flag with `{paused: bool}`; same response as GET |
+
+With `--gmo`, automatic imports list `mine` episodes in one SSH call per cycle and
+also check `team` run names for collisions without traversing team episode contents.
+Runs present at different remote paths are skipped, as in manual imports. Missing or
+changed episode files or `run.json` enqueue work on the manual import worker, without
+duplicate active jobs. A missing or partial `run.json` is repaired even if the episode
+files already match; shared run metadata is included only once in each cycle.
+The changed-file manifests share a preflight total budget below 1 GiB per cycle, newest
+first. `skipped_large` retains `{run_id, episode_id, size_bytes}` entries that did not
+fit, for manual import. `enabled` means host, mine patterns and a positive `interval_s`
+are configured; `paused` is independent. `running` covers discovery and queueing;
+transfer progress is in `/jobs`. Timestamps are UTC ISO 8601 strings or null.
+Failures double the delay up to 30 minutes; success restores `interval_s`. Each cycle
+uses the current settings. `interval_s` accepts integers from 0 to 86400 (one day).
+Zero disables automatic imports; an invalid config file reports an error without
+stopping the scheduler, which recovers when the file is corrected. Shutdown stops both
+the scheduler and its subprocesses. The GMO tab polls status every five seconds while
+open. Running recordings become `stale` as they grow and are updated with `--inplace`,
+so an open viewer's Live display follows subsequent imports. If the preserved heartbeat
+becomes stale between imports, `incomplete` summaries (and events in Live mode) continue
+to be read every 20 seconds; the recorded heartbeat and status rules stay unchanged.
 
 Runs. A directory under the trace root is a run when it holds a regular `run.json` or
 `runner_records.jsonl` (readable or not), an episode directory, an unscoped log or an
@@ -1497,7 +1520,11 @@ summary about every second and keeps the newest event selected. Any manual selec
 URL that names an event, switches to Browse, where only the summary is re-read (every
 5 s). After the episode stops running, the viewer keeps polling every second for a grace
 period of 15 to 60 s, so the tail of `events.jsonl` and late events are read; events after
-that need 更新 (refresh). While the open episode has no matching runner record and the run
+that need 更新 (refresh). An `incomplete` episode continues to be re-read every 20 s
+after the grace period, including events in Live mode and only the summary in Browse.
+This also applies when opening an episode whose heartbeat is already stale, so a later
+automatic import or resumed copy is detected. A transition from `incomplete` to an ended
+status starts the tail grace period. While the open episode has no matching runner record and the run
 had a running episode in the last 60 s, the viewer re-reads the runner records every 30 s.
 `web-ui/src/trace/live.ts` states the exact rules.
 

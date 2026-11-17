@@ -35,6 +35,7 @@ SAFE_PATTERN = re.compile(r"[A-Za-z0-9._/+@*?~-]+")
 SAFE_HOST = re.compile(r"[A-Za-z0-9._@-]+")
 MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
+MAX_INTERVAL_S = 24 * 60 * 60
 
 # Runs on GMO with its python3: lists the runs under each trace root matching the
 # patterns, with the size and modification time of every regular file.
@@ -266,8 +267,8 @@ class GmoSettings:
                 raise FetchError(f"Invalid {key} pattern: use plain paths and glob characters")
             patterns[key] = tuple(items)
         interval = value.get("interval_s", 120)
-        if type(interval) is not int or interval < 0:
-            raise FetchError("interval_s must be a nonnegative integer")
+        if type(interval) is not int or not 0 <= interval <= MAX_INTERVAL_S:
+            raise FetchError(f"interval_s must be an integer from 0 to {MAX_INTERVAL_S}")
         return cls(host, port, identity, patterns["mine"], patterns["team"], interval)
 
 
@@ -466,9 +467,11 @@ def stats(directory):
     # Keep the representation identical to local_episode_stats. Whole-second
     # mtimes match rsync's quick check and its default timestamp preservation.
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
-    return count, size, newest, digest
+    return count, size, newest, digest, files
 
 mine, team = json.loads(sys.argv[1])
+include_files = len(sys.argv) > 2 and sys.argv[2] == 'files'
+mine_only = len(sys.argv) > 3 and sys.argv[3] == 'mine'
 out = []
 seen = {}
 run_paths = {}
@@ -484,6 +487,12 @@ for scope, patterns in (('mine', mine), ('team', team)):
                 real = os.path.realpath(run)
                 key = (name, real)
                 if key in seen:
+                    continue
+                seen[key] = True
+                run_paths.setdefault(name, set()).add(real)
+                # Automatic imports only need team run names to detect a
+                # destination collision; never walk their episode contents.
+                if mine_only and scope == 'team':
                     continue
                 try:
                     owner_id = os.stat(run).st_uid
@@ -506,7 +515,7 @@ for scope, patterns in (('mine', mine), ('team', team)):
                         continue
                     episode_json, episode_error, episode_mtime = read_json(os.path.join(episode, 'episode.json'))
                     heartbeat_st = regular(os.path.join(episode, 'heartbeat'))
-                    count, size, newest, digest = stats(episode)
+                    count, size, newest, digest, files = stats(episode)
                     rows.append(dict(run_id=name, episode_id=episode_id, path=real, owner=owner,
                                      mine=scope == 'mine', episode_json=episode_json,
                                      episode_json_error=episode_error, episode_mtime=episode_mtime,
@@ -517,8 +526,12 @@ for scope, patterns in (('mine', mine), ('team', team)):
                                      first_event=first_event(os.path.join(episode, 'events.jsonl')),
                                      file_count=count, size_bytes=size, max_mtime=newest,
                                      files_digest=digest))
-                seen[key] = True
-                run_paths.setdefault(name, set()).add(real)
+                    if include_files:
+                        manifest = [[episode_id + '/' + rel, size, mtime] for rel, size, mtime in files]
+                        run_st = regular(os.path.join(run, 'run.json'))
+                        if run_st:
+                            manifest.append(['run.json', run_st.st_size, int(run_st.st_mtime)])
+                        rows[-1]['files'] = manifest
                 out.extend(rows)
 remote_now = time.time()
 for row in out:
@@ -577,11 +590,13 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
         raise FetchError("Unexpected reply from GMO") from exc
 
 
-def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings) -> list[dict[str, Any]]:
+def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
+                         include_files: bool = False, mine_only: bool = False) -> list[dict[str, Any]]:
     if not settings.configured:
         raise FetchError("GMO host and at least one trace pattern are required")
     payload = json.dumps([settings.mine, settings.team])
-    rows = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, [payload], timeout=60)
+    args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
+    rows = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
     if not isinstance(rows, list):
         raise FetchError("Unexpected episode list from GMO")
     locations: dict[str, set[str]] = {}
@@ -600,6 +615,8 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings) -> list[d
                 raise FetchError("Unexpected episode fingerprint from GMO")
             if row["first_event"] is not None and not isinstance(row["first_event"], dict):
                 raise FetchError("Unexpected first event from GMO")
+            if include_files:
+                episode_manifest(row, row)
         except (KeyError, TypeError, AttributeError) as exc:
             raise FetchError("Unexpected episode list from GMO") from exc
         locations.setdefault(run_id, set()).add(path)
@@ -679,14 +696,23 @@ def _episode_files(runner: ProcessRunner, settings: GmoSettings, row: dict[str, 
     if not isinstance(data, dict) or "error" in data:
         raise FetchError(data.get("error", "Unexpected episode files from GMO") if isinstance(data, dict)
                          else "Unexpected episode files from GMO")
+    return episode_manifest(row, data)
+
+
+def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
+    """Validate a manifest from either discovery or the manual fetch preflight."""
+    run_id, episode_id, remote_path = row["run_id"], row["episode_id"], row["path"]
+    _validate_run_path(run_id, remote_path)
+    if not RUN_ID.fullmatch(episode_id):
+        raise FetchError("Refusing an unexpected episode name")
     try:
         run = RemoteRun(run_id, remote_path, [tuple(f) for f in data["files"]])
-        check_runs([run])
         if any(not isinstance(rel, str) or "\x00" in rel
                or any(part in ("", ".", "..") for part in rel.split("/"))
                or type(size) is not int or size < 0 or type(mtime) is not int
                for rel, size, mtime in run.files):
             raise FetchError("Unexpected episode files from GMO")
+        check_runs([run])
         if len({rel for rel, _, _ in run.files}) != len(run.files):
             raise FetchError("Duplicate episode file from GMO")
         if any(rel != "run.json" and not rel.startswith(episode_id + "/") for rel, _, _ in run.files):

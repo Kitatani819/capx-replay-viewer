@@ -248,6 +248,18 @@ export interface GmoCheckResponse {
   error: string | null;
 }
 
+export interface GmoAutoStatus {
+  enabled: boolean;
+  paused: boolean;
+  interval_s: number;
+  running: boolean;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  last_error: string | null;
+  queued_in_last_run: number;
+  skipped_large: { run_id: string; episode_id: string; size_bytes: number }[];
+}
+
 /** A server started without --gmo has no GMO routes. */
 export class GmoDisabledError extends ApiError {
   constructor(url: string) {
@@ -306,6 +318,14 @@ export const gmoApi = {
 
   jobs(signal?: AbortSignal): Promise<GmoJob[]> {
     return gmoJson('/jobs', signal);
+  },
+
+  auto(signal?: AbortSignal): Promise<GmoAutoStatus> {
+    return gmoJson('/auto', signal);
+  },
+
+  setAutoPaused(paused: boolean, signal?: AbortSignal): Promise<GmoAutoStatus> {
+    return gmoJson('/auto', signal, 'PUT', { paused });
   },
 };
 
