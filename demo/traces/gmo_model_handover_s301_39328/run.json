@@ -1,0 +1,15 @@
+{
+ "schema_version": "capx-trace/1",
+ "tracer_version": "1.0.0",
+ "run_id": "gmo_model_handover_s301_39328",
+ "created_wall_time": 1794893124.9748704,
+ "created_at": "2026-11-17T05:25:24.974+00:00",
+ "created_by": {
+  "pid": 2478234,
+  "host": "gmo-compute-node",
+  "python": "3.10.12",
+  "git_commit": "ac680843fb60c464aa74c87a2815cb5917865be4"
+ },
+ "trace_dir": "/work/traces",
+ "runner_run_dir": null
+}

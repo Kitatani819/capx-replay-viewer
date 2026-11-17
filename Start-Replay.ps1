@@ -1,7 +1,7 @@
 param(
     [ValidateRange(1, 65535)][int]$Port = 8390,
-    [string]$TraceRoot = 'outputs/geniac_demo/traces',
-    [string]$RunnerRoot = 'outputs/geniac_demo/runner',
+    [string]$TraceRoot = 'demo/traces',
+    [string]$RunnerRoot = 'demo/runner',
     [string]$Distribution = 'Ubuntu'
 )
 $ErrorActionPreference = 'Stop'

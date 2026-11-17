@@ -1,0 +1,10 @@
+
+
+There is no observable difference between the current state and the previous state. Both images show:
+
+- Arm 0 (left) in the same position, hovering over the white table
+- The hammer lying flat on the table in the same orientation (handle pointing toward +Y, head toward -Y)
+- Arm 1 (right) in the same resting position
+- No movement or gripper action has occurred
+
+The task has not been initiated. The hammer remains on the table and no handover has taken place.

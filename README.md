@@ -12,7 +12,7 @@ CaP-Xの録画を見ながら、その場面の観測、モデルの入力・回
 - **「APIとPython」** では、動画の下に時刻付きAPI一覧と実行Python全文を並べます。再生・シーク・APIの選択に合わせて、呼び出し行が見える位置までコード欄内をスクロールします。試行を切り替えても「APIとPython」の表示を引き継ぎます。APIの説明はホバーで確認できます。右には、そのPythonを生成したモデルの入力と回答を表示します。[操作と記録条件](docs/replay.md#apiとpythonを同時に追う)
 - 同期情報が足りない場合は「同期情報なし」と表示し、MP4の再生を維持します。保存されていない入力やマスクは復元・推定しません。
 
-個人の接続設定・秘密鍵・GMOの実験ログは含めません。まず同梱スクリプトで作る**合成デモ**で操作を試せます。viewerは閲覧専用で、試行やモデル推論を開始しません。
+個人の接続設定・秘密鍵は含めません。起動すると、同梱の**デモ記録**（`demo/`）が開きます。GMOでQwen3.8-27Bが生成したコードによる `two_arm_handover`（seed 301）の1試行で、ターン0の失敗後にターン1で作り直して成功するまでを記録しています。アカウント名・パス・計算ノード名は伏せてあります。viewerは閲覧専用で、試行やモデル推論を開始しません。
 
 ## デモ映像
 
@@ -49,7 +49,7 @@ GMOから取得済みの記録はローカル環境で表示確認していま�
 
 ブラウザでの閲覧はWindows・Linux・macOSで共通です。GMOなど別のLinuxマシンでサーバーを動かす場合、手元にはブラウザとSSHだけあればよく、手元へのPython・Node.js・WSLの導入は不要です。
 
-録画済みの閲覧・合成デモにCaP-X本体やGPUは必要ありません。OSごとの実行確認範囲は[検証](#検証)に記載しています。
+録画済みの閲覧・デモ記録にCaP-X本体やGPUは必要ありません。OSごとの実行確認範囲は[検証](#検証)に記載しています。
 
 ## Linux / macOSでデモを起動する
 
@@ -67,7 +67,7 @@ bash Start-Replay.sh
 ```
 
 同じPCのブラウザで **http://127.0.0.1:8390/traces** を開きます。停止はサーバーの端末で `Ctrl+C`。
-初回は専用のPython環境へ依存パッケージを導入し、合成デモを `outputs/geniac_demo` に生成します。既存データは上書きしません。環境の保存先はLinuxで `~/.cache/capx-geniac-replay`、macOSで `~/Library/Caches/capx-geniac-replay` です（`XDG_CACHE_HOME` を指定した場合はそちらを使います）。OSのPython環境や別のプロジェクトの仮想環境は変更しません。
+初回は専用のPython環境へ依存パッケージを導入し、同梱のデモ記録 `demo/` を開きます。環境の保存先はLinuxで `~/.cache/capx-geniac-replay`、macOSで `~/Library/Caches/capx-geniac-replay` です（`XDG_CACHE_HOME` を指定した場合はそちらを使います）。OSのPython環境や別のプロジェクトの仮想環境は変更しません。
 
 2回目以降はプロジェクト直下で `bash Start-Replay.sh` を実行します。更新後に画面をビルドし直す場合は `web-ui` で `npm ci` と `npm run build` を実行してください。
 
@@ -110,7 +110,7 @@ cd ..
 .\Start-Replay.ps1
 ```
 
-このランチャーはLinux / macOSと共通の起動処理をWSL内で実行し、専用のPython環境と、必要なら合成デモを作ります。初回は依存パッケージを取得します。`uv` を使う場合は必要に応じてPythonも取得します。
+このランチャーはLinux / macOSと共通の起動処理をWSL内で実行し、専用のPython環境を作って同梱のデモ記録を開きます。初回は依存パッケージを取得します。`uv` を使う場合は必要に応じてPythonも取得します。
 
 ```powershell
 .\Start-Replay.ps1 -Port 8391 -TraceRoot 'C:\data\traces' -RunnerRoot 'C:\data\runner'

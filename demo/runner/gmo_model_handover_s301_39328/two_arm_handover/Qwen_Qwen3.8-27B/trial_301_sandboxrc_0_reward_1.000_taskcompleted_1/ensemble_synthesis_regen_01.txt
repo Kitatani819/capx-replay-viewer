@@ -1,0 +1,535 @@
+Model: Qwen/Qwen3.8-27B
+
+============================================================
+REASONING
+============================================================
+Let me analyze the candidates carefully:
+
+**Key observations from the environment:**
+- Hammer center: [0.349, 0.044, -0.086]
+- Hammer extent: [0.205, 0.079, 0.044]
+- Table z: -0.108
+- Hammer is aligned along Y-axis, handle toward +Y
+
+**Critical issues to consider:**
+
+1. **Grasp orientation**: The hammer lies flat on the table, aligned along Y-axis. To grasp the handle from above, the gripper should have its opening perpendicular to the hammer's long axis. Since the hammer is along Y, the gripper opening should be along X. So `q_arm0_open_x = [0, 0.707, 0.707, 0]` is correct for the initial grasp.
+
+2. **Handover orientation**: For the handover, we need to think about what orientation allows Arm 1 to grasp the handle. The task says "Arm 1 should then grasp the hammer handle (not hammer head)." 
+
+   If we rotate the hammer so it's along X (handle toward +X, toward Arm 1), then Arm 1 can approach from the +X side and grasp the handle end. The gripper opening for Arm 1 should be along Y (perpendicular to the hammer's long axis which is now along X). So `q_arm1_open_y = [0, 0, 1, 0]` is correct.
+
+3. **Rotation strategy**: The hammer starts along Y. We need to rotate it to be along X (handle toward +X). This is a 90° rotation around Z. The gripper orientation changes from opening-along-X to opening-along-Y.
+
+   - `q_arm0_open_x = [0, 0.707, 0.707, 0]` → opening along X
+   - `q_arm0_open_y = [0, 1, 0, 0]` → opening along Y
+
+   Wait, let me think about this more carefully. If the hammer is along Y and the gripper opening is along X, the gripper fingers are perpendicular to the hammer (good for grasping). After rotating 90° around Z, the hammer is along X, and the gripper opening should be along Y (still perpendicular to the hammer).
+
+   Actually, I need to think about what "opening along X" means. The gripper opening direction is the direction in which the two fingers separate. If the opening is along X, the fingers are on the ±X sides. For grasping a hammer along Y, we want the fingers to close on the hammer from the ±X sides, so opening along X is correct.
+
+   After rotating the hammer 90° around Z (so it's now along X), we want the fingers to close from the ±Y sides, so opening along Y.
+
+4. **Collision avoidance**: The key concern is:
+   - The table doesn't span the entire region between arms
+   - Need to keep 8cm buffer between grippers
+   - Need to decompose movements into rotation and translation
+
+5. **Handover position**: Midpoint between arms is x = (0.44 + 1.18)/2 = 0.81. Z should be between 0.15 and 0.20.
+
+6. **Arm 1 grasp position**: After rotation, the hammer extends along X. The handle (free end) is toward +X. Arm 1 needs to grasp the handle. The handle end would be at approximately handover_x + (hammer_length/2 - grasp_offset). 
+
+   Actually, let me reconsider. If Arm 0 grasps the hammer at some point along the handle, and then moves to the handover position, the hammer center (or the grasp point) is at the handover position. The handle extends from the grasp point toward +X.
+
+   If we grasp at the center of the hammer (or slightly toward the handle), the handle end extends about 0.10m (half of 0.205) from the center toward +X. So Arm 1 should grasp at approximately handover_x + 0.07 to 0.10.
+
+   But wait - we need to be careful. If Arm 0 is holding the hammer at the handover position, and Arm 1 approaches from the +X side to grasp the handle end, we need to make sure:
+   - The distance between the two grippers is at least 8cm
+   - Arm 1 doesn't collide with Arm 0
+
+   If Arm 0's gripper is at x=0.81 and Arm 1's gripper is at x=0.81+0.07=0.88, that's only 7cm apart. That's less than the 8cm buffer!
+
+   Let me reconsider. Maybe Arm 0 should grasp closer to the head end, so the handle extends further. Or maybe the handover should be positioned so that Arm 0 is slightly to the left of the midpoint.
+
+   Actually, re-reading the task: "Handover must occur near the midpoint of the initial gripper positions." So the handover point (where the hammer is) should be near x=0.81.
+
+   Let me think about this differently. If Arm 0 grasps the hammer near the head end (toward -Y initially, which becomes -X after rotation), then the handle extends further toward +X. 
+
+   Actually, let me reconsider the grasp point. The hammer extent is 0.205m total. If we grasp at the center, the handle extends 0.10m in each direction. If we grasp 0.05m toward the head end, the handle extends 0.15m toward +X and 0.05m toward -X.
+
+   For the 8cm buffer: If Arm 0 is at x=0.81 and Arm 1 grasps at x=0.81+0.15=0.96, that's 15cm apart. That works!
+
+   But wait, we need to be more careful. The "grasp point" is where the gripper is. If Arm 0's gripper is at x=0.81 (holding the hammer), and Arm 1's gripper is at x=0.96 (grasping the handle end), the distance is 15cm. That's fine.
+
+   Actually, I realize I need to think about this more carefully. The hammer is 0.205m long. If Arm 0 grasps it at a point that's 0.05m from the head end (i.e., 0.155m from the handle end), then:
+   - Head end is at x = 0.81 - 0.05 = 0.76
+   - Handle end is at x = 0.81 + 0.155 = 0.965
+
+   Arm 1 would grasp at around x = 0.93-0.96 (on the handle, not at the very tip).
+
+   Distance between grippers: 0.93 - 0.81 = 0.12m = 12cm. That's > 8cm. Good.
+
+   But actually, I think a simpler approach is:
+   - Arm 0 grasps the hammer near its center (or slightly toward the head)
+   - After rotation, the handle extends toward +X
+   - Arm 1 approaches from above and grasps the handle at a point that's at least 8cm from Arm 0's gripper
+
+   Let me look at what the candidates do:
+
+**Candidate 1 (temp=0.5):**
+- Re-queries the environment (unnecessary but safe)
+- Uses handle_center from world points
+- Grasp orientation: q_arm0_grasp = [0, 0.707, 0.707, 0] (opening along X) ✓
+- Lifts to z=0.25
+- Rotates to vertical (handle up) - this is problematic! If the handle is vertical, Arm 1 would need to grasp it from the side, which is more complex
+- Handover at z=0.175
+- Arm 1 approaches from +X side
+
+The "rotate to vertical" approach is risky and complex. It's better to keep the hammer horizontal and rotate it 90° around Z so the handle points toward Arm 1.
+
+**Candidate 2 (temp=0.4):**
+- Uses q_arm0_grasp = [0, 1, 0, 0] (opening along Y) - this is WRONG for the initial grasp! The hammer is along Y, so the gripper opening should be along X (perpendicular to the hammer).
+- Doesn't rotate the hammer at all - just moves it to the handover position
+- This means the hammer is still along Y at the handover point, and Arm 1 would need to grasp it with opening along Y... but the hammer is along Y, so the opening should be along X for Arm 1 too. But q_arm1_grasp = [0, 0, 1, 0] is opening along Y, which would be parallel to the hammer - that won't work for grasping!
+
+Wait, let me reconsider. If the hammer is along Y and the gripper opening is along Y, the fingers would be on the ±Y sides, which means they'd be along the hammer's length - that's not a good grasp. The fingers need to be perpendicular to the object they're grasping.
+
+So Candidate 2 has a fundamental orientation error.
+
+**Candidate 3 (temp=0.1):**
+- Grasp orientation: q_arm0_open_x = [0, 0.707, 0.707, 0] (opening along X) ✓
+- Lifts to z=0.25
+- Rotates 90° around Z using slerp (good for smooth rotation)
+- After rotation, hammer is along X, handle toward +X
+- Arm 1 grasps at handover_x + 0.08 with q_arm1_open_y
+- Distance between grippers: 0.08m = 8cm - exactly at the minimum!
+
+This is borderline. The 8cm buffer is the minimum, so this might be too tight.
+
+**Candidate 4 (temp=0.6):**
+- Grasp orientation: q_arm0_open_X = [0, 0.707, 0.707, 0] ✓
+- Lifts to z=0.25
+- Rotates to q_arm0_open_Y (90° around Z)
+- Arm 1 grasps at handover_x + 0.10
+- Distance: 10cm > 8cm ✓
+- Good stepwise approach
+
+**Candidate 5 (temp=0.8):**
+- Grasp orientation: q_arm0_open_x = [0, 0.707, 0.707, 0] ✓
+- Grasp at hammer_center (not specifically the handle)
+- Lifts to z=0.25
+- Rotates to q_arm0_open_y
+- Arm 1 grasps at handover_x + 0.07
+- Distance: 7cm < 8cm ✗ - violates the buffer requirement!
+
+**My synthesis:**
+
+The best approach combines:
+1. From Candidate 4/5: Correct initial grasp orientation (opening along X)
+2. From Candidate 3: Slerp for smooth rotation (safer than a single jump)
+3. From Candidate 4: Arm 1 grasps at handover_x + 0.10 (10cm buffer)
+4. Stepwise translation to avoid collisions
+5. Proper collision avoidance by moving in X first, then adjusting Y, then lowering Z
+
+Let me also think about the grasp point more carefully:
+- Hammer center: [0.349, 0.044, -0.086]
+- Hammer extent: [0.205, 0.079, 0.044]
+- The largest extent (0.205) is along... which axis? The OBB rotation tells us, but we didn't print it.
+
+Actually, the problem states "The hammer initially lies flat on the table, aligned along the Y-axis, with the handle toward +Y and the hammer head toward -Y." So the 0.205 extent should be along Y.
+
+But wait, the OBB might not align perfectly with the world axes. Let me check: the center is at [0.349, 0.044, -0.086]. The extent is [0.205, 0.079, 0.044]. If the hammer is along Y, the Y extent should be the largest (0.205). But in the extent array, the first element (0.205) is the largest. This depends on how the OBB is parameterized.
+
+Actually, looking at the OBB function, it returns "extent" which is the full size along each principal axis of the OBB (not necessarily aligned with world axes). The rotation matrix R tells us how the OBB axes relate to world axes.
+
+Since we didn't print R, let's assume the hammer is roughly along Y as stated. The grasp point should be on the handle, which is toward +Y.
+
+For the grasp, I'll use a point slightly toward the handle end from the center:
+- grasp_y = hammer_center[1] + 0.03 (slightly toward handle)
+
+Actually, for a cleaner approach, let me just grasp at the center of the hammer. The hammer is 0.205m long, so the handle extends about 0.10m from center in each direction. After rotation, the handle end is at handover_x + 0.10.
+
+Wait, but the task says "Arm 1 should then grasp the hammer handle (not hammer head)." So Arm 1 needs to grasp specifically the handle part. If we grasp at the center, the handle extends 0.10m toward +X after rotation. Arm 1 can grasp at x = handover_x + 0.07 or so, which is on the handle.
+
+Let me also consider: should Arm 0 grasp closer to the head end to give more handle length for Arm 1? If Arm 0 grasps 0.05m toward the head from center, then the handle extends 0.15m toward +X after rotation. Arm 1 can grasp at handover_x + 0.10, giving a 10cm buffer.
+
+I think the safest approach is:
+1. Grasp the hammer at a point slightly toward the head end (so more handle is available for Arm 1)
+2. Lift well above the table
+3. Rotate 90° around Z (using slerp for smoothness)
+4. Move to handover position in steps
+5. Arm 1 approaches from above and grasps the handle
+6. Arm 0 releases and retracts
+
+Let me also think about the z-height during the move. The table surface is at z=-0.108. The hammer top is at about z=-0.064. We need to lift well above the table to avoid the central gap. Let's use z=0.25 for the lift, which is well above any table surface.
+
+For the handover, z=0.175 is in the required range [0.15, 0.20].
+
+One more consideration: when Arm 0 moves from the grasp position (x≈0.35) to the handover position (x≈0.81), it's moving over the table. If the table doesn't span the entire region, the hammer could fall into the gap. But since we're holding the hammer at z=0.25 (well above the table), this should be fine as long as we don't lower it until we're at the handover position.
+
+Actually wait - the concern is that if the hammer falls (e.g., if the grip is lost), it would fall into the gap. But as long as we maintain a firm grip, this shouldn't be an issue. The key is to keep the hammer elevated during the lateral move.
+
+Let me write the final solution:
+
+```python
+import numpy as np
+
+# Helper: slerp for smooth quaternion interpolation
+def slerp(q1, q2, t):
+    q1 = q1 / np.linalg.norm(q1)
+    q2 = q2 / np.linalg.norm(q2)
+    dot = np.clip(np.dot(q1, q2), -1.0, 1.0)
+    if dot < 0:
+        q2 = -q2
+        dot = -dot
+    if dot > 0.9999:
+        return (q1 + t * (q2 - q1)) / np.linalg.norm(q1 + t * (q2 - q1))
+    theta_0 = np.arccos(dot)
+    theta = theta_0 * t
+    s1 = np.cos(theta) - dot * np.sin(theta) / np.sin(theta_0)
+    s2 = np.sin(theta) / np.sin(theta_0)
+    return s1 * q1 + s2 * q2
+
+# Constants from previous step
+hammer_center = np.array([0.34935842, 0.04449645, -0.08605274])
+hammer_extent = np.array([0.20457902, 0.07897013, 0.04390533])
+table_z = -0.1080
+hammer_top_z = hammer_center[2] + hammer_extent[2] / 2  # ≈ -0.064
+
+# Grasp point: slightly toward head end (-Y) to leave more handle for Arm 1
+# This way after rotation, more handle extends toward +X
+grasp_offset_y = -0.03  # 3cm toward head end
+grasp_pos = np.array([hammer_center[0], hammer_center[1] + grasp_offset_y, hammer_top_z])
+print(f"Grasp position: {grasp_pos}")
+
+# Handover position
+handover_x = 0.81
+handover_y = 0.0
+handover_z = 0.175
+handover_pos = np.array([handover_x, handover_y, handover_z])
+
+# Quaternions (w, x, y, z)
+q_arm0_open_x = np.array([0, 0.707, 0.707, 0])  # facing down, opening along X
+q_arm0_open_y = np.array([0, 1, 0, 0])           # facing down, opening along Y
+q_arm1_open_y = np.array([0, 0, 1, 0])           # facing down, opening along Y
+
+# ============================================================
+# PHASE 1: Arm 0 picks up the hammer
+# ============================================================
+open_gripper_arm0()
+print("Phase 1: Arm 0 picking up hammer...")
+
+# 1a: Approach from above
+approach_pos = np.array([grasp_pos[0], grasp_pos[1], 0.15])
+joints = solve_ik_arm0(approach_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Above hammer at z=0.15")
+
+# 1b: Lower to grasp
+joints = solve_ik_arm0(grasp_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Lowered to grasp: {grasp_pos}")
+
+# 1c: Close gripper
+close_gripper_arm0()
+print("  Gripper closed")
+
+# 1d: Lift well above table
+lift_pos = np.array([grasp_pos[0], grasp_pos[1], 0.25])
+joints = solve_ik_arm0(lift_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Lifted to z=0.25")
+
+# ============================================================
+# PHASE 2: Rotate hammer 90° around Z (handle from +Y to +X)
+# ============================================================
+print("Phase 2: Rotating hammer...")
+n_rot_steps = 5
+for i in range(1, n_rot_steps + 1):
+    t = i / n_rot_steps
+    q_rot = slerp(q_arm0_open_x, q_arm0_open_y, t)
+    q_rot = q_rot / np.linalg.norm(q_rot)
+    joints = solve_ik_arm0(lift_pos, q_rot)
+    if not np.any(np.isnan(joints)):
+        move_to_joints_arm0(joints)
+print("  Rotation complete: handle now points +X")
+
+# ============================================================
+# PHASE 3: Move to handover position (stepwise)
+# ============================================================
+print("Phase 3: Moving to handover...")
+
+# Step 3a: Move in X direction (keep high z for safety)
+mid_x_pos = np.array([0.60, grasp_pos[1], 0.25])
+joints = solve_ik_arm0(mid_x_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Moved to x=0.60")
+
+# Step 3b: Continue in X and adjust Y
+step2_pos = np.array([handover_x, handover_y, 0.25])
+joints = solve_ik_arm0(step2_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Moved to ({handover_x}, {handover_y})")
+
+# Step 3c: Lower to handover z
+joints = solve_ik_arm0(handover_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Lowered to handover z={handover_z}")
+
+# ============================================================
+# PHASE 4: Arm 1 grasps the handle
+# ============================================================
+print("Phase 4: Arm 1 grasping handle...")
+
+# After rotation, handle extends toward +X from the grasp point
+# Grasp was 0.03m toward head from center, so handle end is at:
+# handover_x + (hammer_length/2 - 0.03) = 0.81 + (0.1025 - 0.03) = 0.81 + 0.0725
+# Arm 1 grasps on the handle, about 0.10m from Arm 0's position
+arm1_grasp_x = handover_x + 0.10
+arm1_grasp_pos = np.array([arm1_grasp_x, handover_y, handover_z])
+print(f"  Arm 1 target: {arm1_grasp_pos}")
+print(f"  Distance between grippers: {arm1_grasp_x - handover_x:.3f}m")
+
+# 4a: Arm 1 approaches from above
+open_gripper_arm1()
+arm1_approach = np.array([arm1_grasp_x, handover_y, 0.35])
+joints = solve_ik_arm1(arm1_approach, q_arm1_open_y)
+move_to_joints_arm1(joints)
+print(f"  Arm 1 above handle at z=0.35")
+
+# 4b: Arm 1 lowers to grasp
+joints = solve_ik_arm1(arm1_grasp_pos, q_arm1_open_y)
+move_to_joints_arm1(joints)
+print(f"  Arm 1 at grasp position")
+
+# 4c: Close Arm 1 gripper
+close_gripper_arm1()
+print("  Arm 1 gripper closed")
+
+# ============================================================
+# PHASE 5: Arm 0 releases and retracts
+# ============================================================
+print("Phase 5: Arm 0 releasing...")
+
+open_gripper_arm0()
+print("  Arm 0 gripper opened")
+
+# Retract Arm 0 (move back and up)
+retract_pos = np.array([handover_x - 0.25, handover_y, 0.30])
+joints = solve_ik_arm0(retract_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Arm 0 retracted to {retract_pos}")
+
+print(f"\n=== HANDOVER COMPLETE ===")
+print(f"Hammer z at handover: {handover_z} (required: 0.15-0.20)")
+```
+
+Wait, I need to double-check the distance between grippers. Arm 0 is at x=0.81, Arm 1 is at x=0.91. Distance = 0.10m = 10cm > 8cm. Good.
+
+But I also need to make sure Arm 1 can actually reach x=0.91. Arm 1 starts at x≈1.18, so x=0.91 is within its workspace (it's moving toward the center).
+
+Also, I should verify that the hammer handle is actually at x=0.91 when Arm 0 is at x=0.81. The hammer is 0.205m long. If Arm 0 grasps at a point 0.03m toward the head from center, then:
+- The center of the hammer is at the grasp point + 0.03m toward +Y (before rotation) = +X (after rotation)
+- Wait, no. If we grasp 0.03m toward the head (-Y), then the center is 0.03m toward +Y from the grasp point. After rotation (Y→X), the center is 0.03m toward +X from the grasp point.
+- The handle end is at center + 0.1025m toward +X = grasp_point + 0.03 + 0.1025 = grasp_point + 0.1325m toward +X
+
+So the handle end is at x = 0.81 + 0.1325 = 0.9425. Arm 1 grasping at x=0.91 is on the handle (between center at 0.84 and handle end at 0.94). Good.
+
+Actually wait, I'm confusing myself. Let me be more careful.
+
+Before rotation:
+- Hammer is along Y, handle toward +Y
+- Grasp point is at hammer_center + (0, -0.03, 0) = 0.03m toward head from center
+- Handle end is at hammer_center + (0, +0.1025, 0)
+- Distance from grasp to handle end = 0.03 + 0.1025 = 0.1325m
+
+After rotation (90° around Z, Y→X):
+- Hammer is along X, handle toward +X
+- Grasp point (where Arm 0's gripper is) is at handover_pos = (0.81, 0, 0.175)
+- Handle end is at (0.81 + 0.1325, 0, 0.175) = (0.9425, 0, 0.175)
+- Head end is at (0.81 - 0.0725, 0, 0.175) = (0.7375, 0, 0.175)
+
+Arm 1 grasps at x=0.91, which is between the center (0.84) and handle end (0.9425). That's on the handle. ✓
+
+Distance between grippers: 0.91 - 0.81 = 0.10m = 10cm > 8cm. ✓
+
+This looks good. Let me finalize the solution.
+
+One more thing: I should make sure the approach for Arm 1 doesn't collide with Arm 0. Arm 1 approaches from above (z=0.35) and then lowers. At z=0.35, it's well above Arm 0 (which is at z=0.175), so no collision. When it lowers to z=0.175, it's at x=0.91, which is 10cm from Arm 0 at x=0.81. That should be fine.
+
+I'm satisfied with this solution. Let me write it up cleanly.
+
+
+============================================================
+OUTPUT
+============================================================
+
+
+Looking at the candidates, I need to identify the key issues:
+
+1. **Candidate 2** uses wrong initial grasp orientation (opening along Y when hammer is along Y - fingers would be parallel to the object)
+2. **Candidate 5** has only 7cm between grippers (violates 8cm minimum)
+3. **Candidate 1** tries to rotate the hammer vertical, which is unnecessarily complex and risky
+4. **Candidates 3 and 4** have the right general approach but differ in details
+
+My synthesis combines:
+- Correct initial grasp (opening along X, perpendicular to hammer along Y)
+- Slerp for smooth 90° Z-rotation (from Candidate 3)
+- Arm 1 grasps at 10cm from Arm 0 (from Candidate 4, safely above 8cm buffer)
+- Grasp slightly toward head end to give more handle length for Arm 1
+- Stepwise translation for collision avoidance
+
+REGENERATE
+```python
+import numpy as np
+
+# Helper: slerp for smooth quaternion interpolation
+def slerp(q1, q2, t):
+    q1 = q1 / np.linalg.norm(q1)
+    q2 = q2 / np.linalg.norm(q2)
+    dot = np.clip(np.dot(q1, q2), -1.0, 1.0)
+    if dot < 0:
+        q2 = -q2
+        dot = -dot
+    if dot > 0.9999:
+        return (q1 + t * (q2 - q1)) / np.linalg.norm(q1 + t * (q2 - q1))
+    theta_0 = np.arccos(dot)
+    theta = theta_0 * t
+    s1 = np.cos(theta) - dot * np.sin(theta) / np.sin(theta_0)
+    s2 = np.sin(theta) / np.sin(theta_0)
+    return s1 * q1 + s2 * q2
+
+# Constants from previous step
+hammer_center = np.array([0.34935842, 0.04449645, -0.08605274])
+hammer_extent = np.array([0.20457902, 0.07897013, 0.04390533])
+table_z = -0.1080
+hammer_top_z = hammer_center[2] + hammer_extent[2] / 2  # ~-0.064
+hammer_half_len = hammer_extent[0] / 2.0  # ~0.102m
+
+# Grasp point: slightly toward head end (-Y) to leave more handle for Arm 1
+grasp_offset_y = -0.03
+grasp_pos = np.array([hammer_center[0], hammer_center[1] + grasp_offset_y, hammer_top_z])
+print(f"Grasp position: {grasp_pos}")
+
+# Handover position: midpoint between arms, z in [0.15, 0.20]
+handover_x = 0.81
+handover_y = 0.0
+handover_z = 0.175
+handover_pos = np.array([handover_x, handover_y, handover_z])
+
+# Quaternions (w, x, y, z)
+q_arm0_open_x = np.array([0, 0.707, 0.707, 0])  # facing down, opening along X (perp to hammer along Y)
+q_arm0_open_y = np.array([0, 1, 0, 0])           # facing down, opening along Y (after 90 deg Z rotation)
+q_arm1_open_y = np.array([0, 0, 1, 0])           # facing down, opening along Y (perp to hammer along X)
+
+# ============================================================
+# PHASE 1: Arm 0 picks up the hammer
+# ============================================================
+open_gripper_arm0()
+print("Phase 1: Arm 0 picking up hammer...")
+
+# 1a: Approach from above
+approach_pos = np.array([grasp_pos[0], grasp_pos[1], 0.15])
+joints = solve_ik_arm0(approach_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Above hammer at z=0.15")
+
+# 1b: Lower to grasp height
+joints = solve_ik_arm0(grasp_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Lowered to grasp: {grasp_pos}")
+
+# 1c: Close gripper
+close_gripper_arm0()
+print("  Gripper closed")
+
+# 1d: Lift well above table (clear any table edge/gap)
+lift_pos = np.array([grasp_pos[0], grasp_pos[1], 0.25])
+joints = solve_ik_arm0(lift_pos, q_arm0_open_x)
+move_to_joints_arm0(joints)
+print(f"  Lifted to z=0.25")
+
+# ============================================================
+# PHASE 2: Rotate hammer 90 deg around Z (handle from +Y to +X)
+# Using slerp for smooth, collision-free rotation
+# ============================================================
+print("Phase 2: Rotating hammer 90 deg around Z...")
+n_rot_steps = 5
+for i in range(1, n_rot_steps + 1):
+    t = i / n_rot_steps
+    q_rot = slerp(q_arm0_open_x, q_arm0_open_y, t)
+    q_rot = q_rot / np.linalg.norm(q_rot)
+    joints = solve_ik_arm0(lift_pos, q_rot)
+    if not np.any(np.isnan(joints)):
+        move_to_joints_arm0(joints)
+print("  Rotation complete: handle now points +X (toward Arm 1)")
+
+# ============================================================
+# PHASE 3: Move to handover position (stepwise for safety)
+# ============================================================
+print("Phase 3: Moving to handover position...")
+
+# Step 3a: Move in X direction at safe height
+mid_x_pos = np.array([0.60, grasp_pos[1], 0.25])
+joints = solve_ik_arm0(mid_x_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Intermediate: x=0.60, z=0.25")
+
+# Step 3b: Continue to handover x,y at safe height
+step2_pos = np.array([handover_x, handover_y, 0.25])
+joints = solve_ik_arm0(step2_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  At ({handover_x}, {handover_y}), z=0.25")
+
+# Step 3c: Lower to handover z (within required range)
+joints = solve_ik_arm0(handover_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Lowered to handover z={handover_z}")
+
+# ============================================================
+# PHASE 4: Arm 1 approaches and grasps the handle
+# ============================================================
+print("Phase 4: Arm 1 grasping handle...")
+
+# After rotation, handle extends toward +X from Arm 0's grip
+# Distance from grip to handle end = 0.03 + 0.102 = 0.132m
+# Arm 1 grasps at 0.10m from Arm 0 (on the handle, >8cm buffer)
+arm1_grasp_x = handover_x + 0.10
+arm1_grasp_pos = np.array([arm1_grasp_x, handover_y, handover_z])
+gripper_dist = arm1_grasp_x - handover_x
+print(f"  Arm 1 target: {arm1_grasp_pos}")
+print(f"  Gripper separation: {gripper_dist:.3f}m (min 0.08m)")
+
+# 4a: Arm 1 approaches from above (well clear of Arm 0)
+open_gripper_arm1()
+arm1_approach = np.array([arm1_grasp_x, handover_y, 0.35])
+joints = solve_ik_arm1(arm1_approach, q_arm1_open_y)
+move_to_joints_arm1(joints)
+print(f"  Arm 1 above handle at z=0.35")
+
+# 4b: Arm 1 lowers to grasp the handle
+joints = solve_ik_arm1(arm1_grasp_pos, q_arm1_open_y)
+move_to_joints_arm1(joints)
+print(f"  Arm 1 at grasp position")
+
+# 4c: Close Arm 1 gripper on the handle
+close_gripper_arm1()
+print("  Arm 1 gripper closed on handle")
+
+# ============================================================
+# PHASE 5: Arm 0 releases and retracts safely
+# ============================================================
+print("Phase 5: Arm 0 releasing and retracting...")
+
+open_gripper_arm0()
+print("  Arm 0 gripper opened (releasing)")
+
+# Retract: move back toward Arm 0 side and up
+retract_pos = np.array([handover_x - 0.25, handover_y, 0.30])
+joints = solve_ik_arm0(retract_pos, q_arm0_open_y)
+move_to_joints_arm0(joints)
+print(f"  Arm 0 retracted to {retract_pos}")
+
+print(f"\n=== HANDOVER COMPLETE ===")
+print(f"Hammer z at handover: {handover_z} (required: 0.15-0.20)")
+```
