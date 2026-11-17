@@ -1101,15 +1101,15 @@ def episode_summary_at(
         episode_json, error, episode_st = read_json_at(directory, EPISODE_FILE)
         heartbeat_st = directory.file_stat(HEARTBEAT_FILE)
         events_st = directory.file_stat(EVENTS_FILE)
+    first_event = None
     if episode_json is not None and not isinstance(episode_json, dict):
         episode_json, error = None, "not_an_object"
     age = now - heartbeat_st.st_mtime if heartbeat_st is not None else None
-    status, detail = derive_status(episode_json, age)
+    status, _detail = derive_status(episode_json, age)
     gaps = _lookup(episode_json, "gaps")
     needs_hook_evidence = status == "ended_with_gaps" and isinstance(gaps, list) and any(
         isinstance(gap, dict) and gap.get("code") == "hook_install_failed" for gap in gaps
     )
-    first_event = None
     if (
         start_event
         and directory is not None
@@ -1125,6 +1125,40 @@ def episode_summary_at(
                 first_event = _first_event_fd(fd)
             finally:
                 close_quietly(fd)
+    return episode_summary_from_metadata(
+        run_id, episode_id, episode_json, episode_json_error=error,
+        episode_mtime=episode_st.st_mtime if episode_st else None,
+        heartbeat_mtime=heartbeat_st.st_mtime if heartbeat_st else None,
+        events_mtime=events_st.st_mtime if events_st else None,
+        events_bytes=events_st.st_size if events_st else None,
+        first_event=first_event, now=now,
+    )
+
+
+def episode_summary_from_metadata(
+    run_id: str, episode_id: str, episode_json: Any, *,
+    episode_json_error: str | None = None,
+    episode_mtime: float | None = None,
+    heartbeat_mtime: float | None = None,
+    events_mtime: float | None = None,
+    events_bytes: int | None = None,
+    first_event: dict[str, Any] | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Build the local episode summary shape from file metadata or a remote listing."""
+    now = time.time() if now is None else now
+    if episode_json is not None and not isinstance(episode_json, dict):
+        episode_json, episode_json_error = None, "not_an_object"
+    age = now - heartbeat_mtime if heartbeat_mtime is not None else None
+    status, detail = derive_status(episode_json, age)
+    gaps = _lookup(episode_json, "gaps")
+    needs_hook_evidence = status == "ended_with_gaps" and isinstance(gaps, list) and any(
+        isinstance(gap, dict) and gap.get("code") == "hook_install_failed" for gap in gaps
+    )
+    # Match episode_summary_at's lazy first-line read, including explicit nulls:
+    # a complete set of start fields needs no fallback unless hook evidence is missing.
+    if not needs_hook_evidence and all(_has_field(episode_json, key) for key in _FIRST_EVENT_FIELDS):
+        first_event = None
     summary: dict[str, Any] = {"run_id": run_id, "episode_id": episode_id}
     for key in SUMMARY_FIELDS:
         value = _lookup(episode_json, key)
@@ -1146,20 +1180,18 @@ def episode_summary_at(
                     for entry in failures
                 ],
             }
-    mtimes = [
-        st.st_mtime for st in (events_st, episode_st, heartbeat_st) if st is not None
-    ]
+    mtimes = [mtime for mtime in (events_mtime, episode_mtime, heartbeat_mtime) if mtime is not None]
     summary.update(
         {
             "status": status,
             "status_detail": detail,
             "recorded_status": episode_json.get("status") if isinstance(episode_json, dict) else None,
             "heartbeat_age_s": round(age, 3) if age is not None else None,
-            "liveness_source": "heartbeat" if heartbeat_st is not None else "none",
+            "liveness_source": "heartbeat" if heartbeat_mtime is not None else "none",
             "last_modified": max(mtimes) if mtimes else None,
-            "events_bytes": events_st.st_size if events_st else None,
+            "events_bytes": events_bytes,
             "episode": episode_json,
-            "episode_json_error": error,
+            "episode_json_error": episode_json_error,
         }
     )
     return summary

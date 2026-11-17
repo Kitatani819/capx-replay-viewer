@@ -1,4 +1,4 @@
-"""Read-only FastAPI server for CaP-X traces."""
+"""FastAPI server for local CaP-X traces and optional GMO imports."""
 from __future__ import annotations
 
 import argparse
@@ -63,7 +63,7 @@ def _frontend_file_response(path: Path) -> FileResponse:
 
 def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None,
                expose_traces: bool = False, runner_roots: Sequence[str | Path] | None = None,
-               frontend_dist: str | Path | None = None) -> FastAPI:
+               frontend_dist: str | Path | None = None, gmo: bool = False) -> FastAPI:
     if not viewer_only:
         raise ValueError('The standalone server supports viewer-only mode')
     require_supported_backend()
@@ -78,6 +78,17 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
     app.state.viewer_only = True
     app.state.trace_root = trace_dir
     app.include_router(create_trace_router(trace_dir, viewer_only=True, expose=expose_traces, runner_roots=roots))
+    if gmo:
+        from capx_trace_viewer.gmo_api import GmoService, create_gmo_router
+        gmo_service = GmoService(trace_dir)
+        app.state.gmo_service = gmo_service
+        app.include_router(create_gmo_router(gmo_service))
+        app.router.add_event_handler('shutdown', gmo_service.close)
+
+    @app.api_route('/api/gmo', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+    @app.api_route('/api/gmo/{path:path}', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+    async def gmo_not_found(path: str = ''):
+        return JSONResponse({'detail': 'Not Found'}, status_code=404)
 
     @app.get('/')
     async def redirect_to_traces():
@@ -116,13 +127,15 @@ def main() -> None:
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8290)
     parser.add_argument('--expose-traces', action='store_true')
+    parser.add_argument('--gmo', action='store_true', help='Enable the loopback-only GMO import API')
     parser.add_argument('--frontend-dist', help='Directory containing the built frontend index.html and assets')
     args = parser.parse_args()
     dist = _cli_path(args.frontend_dist) if args.frontend_dist is not None else _DEFAULT_FRONTEND_DIST
     roots = [root for group in args.runner_root for root in group]
     try:
         app = create_app(trace_root=args.trace_root, runner_roots=roots or None,
-                         expose_traces=args.expose_traces, frontend_dist=args.frontend_dist)
+                         expose_traces=args.expose_traces, frontend_dist=args.frontend_dist,
+                         gmo=args.gmo)
     except UnsupportedBackendPlatform as exc:
         parser.error(str(exc))
     if not (dist / 'index.html').is_file():

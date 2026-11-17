@@ -86,9 +86,12 @@ fi
 # Check the real filesystem capabilities before copying files or starting HTTP.
 "$python_bin" -c 'from capx_trace_viewer.platform_support import require_supported_backend; require_supported_backend()'
 if [[ -n "$from_gmo" ]]; then
-    # Copies new or changed runs from GMO into the trace root; stops the launch on failure.
-    "$python_bin" scripts/fetch_gmo.py --dest "$trace_root"
+    # Prefetch only mine; a missing configuration is a warning, not a launch failure.
+    "$python_bin" -c 'import sys; from pathlib import Path; from capx_trace_viewer.gmo import prefetch_mine; sys.exit(prefetch_mine(Path(sys.argv[1])))' "$trace_root"
 fi
 printf 'Replay viewer: http://127.0.0.1:%s/traces\n' "$port"
-exec "$python_bin" -m capx_trace_viewer.server --viewer-only --host 127.0.0.1 --port "$port" \
-    --trace-root "$trace_root" --runner-root "$runner_root"
+server_args=(--viewer-only --host 127.0.0.1 --port "$port" --trace-root "$trace_root" --runner-root "$runner_root")
+if [[ -n "$from_gmo" ]]; then
+    server_args+=(--gmo)
+fi
+exec "$python_bin" -m capx_trace_viewer.server "${server_args[@]}"
