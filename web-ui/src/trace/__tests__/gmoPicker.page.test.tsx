@@ -1,0 +1,410 @@
+/** GMO picker flows against the API contract, with a virtual polling clock. */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Picker } from '../components/Picker';
+import { GmoPicker } from '../components/GmoPicker';
+import { SmallButton } from '../components/common';
+import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
+import type { GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings } from '../api';
+import { advance, findAll, net, resetBrowser, type FakeElement } from './harness/browser';
+import { mount } from './harness/fakeReact';
+
+const browserFetch = globalThis.fetch;
+interface SentRequest { path: string; method: string; headers: Headers; body: unknown }
+function settings(overrides: Partial<GmoSettings> = {}): GmoSettings {
+  return { host: 'gmo', port: null, identity_file: null, mine: ['/mine/traces'], team: ['/team/traces'], interval_s: 120, ...overrides };
+}
+function config(configured = true): GmoConfigResponse {
+  return { enabled: true, configured, settings: configured ? settings() : settings({ host: '', mine: [], team: [] }), dest: '/local/traces', config_path: '/config/gmo.json' };
+}
+function episode(id: string, overrides: Partial<GmoEpisodeSummary> = {}): GmoEpisodeSummary {
+  return { run_id: `run_${id}`, episode_id: id, owner: 'alice', mine: true, size_bytes: 2048,
+    local_state: 'remote', conflict: false, task: `task_${id}`, seed: 7, status: 'ended',
+    start_wall_time: 1790000000, end_reason: 'completed', episode: { harness_summary: { task_completed: true, sandbox_rc: 0 } }, ...overrides };
+}
+function job(row: GmoEpisodeSummary, overrides: Partial<GmoJob> = {}): GmoJob {
+  return { job_id: 'job_1', run_id: row.run_id, episode_id: row.episode_id, state: 'queued', bytes: 0,
+    error: null, note: null, started_at: null, finished_at: null, ...overrides };
+}
+function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
+  resetBrowser();
+  const state = { config: config(configured), disabled: false, rows, jobs: [] as GmoJob[],
+    check: { ok: true, mine_episodes: 2, team_episodes: 3, error: null as string | null },
+    saveError: '', fetchError: '', fetchStatus: 502, sent: [] as SentRequest[] };
+  let nextJob = 1;
+  globalThis.fetch = (input, init) => {
+    const path = new URL(String(input), 'http://localhost').pathname;
+    state.sent.push({ path, method: init?.method ?? 'GET', headers: new Headers(init?.headers), body: init?.body ? JSON.parse(String(init.body)) as unknown : null });
+    return browserFetch(input, init);
+  };
+  net.handler = req => {
+    const sent = state.sent[state.sent.length - 1];
+    if (req.path === '/api/traces/runs') return { json: { runs: [] } };
+    if (!req.path.startsWith('/api/gmo/')) return null;
+    if (state.disabled) return { status: 404, json: { detail: 'Not Found' } };
+    if (req.path === '/api/gmo/config') {
+      if (sent.method === 'PUT') {
+        if (state.saveError) return { status: 400, json: { detail: state.saveError } };
+        const saved = sent.body as GmoSettings;
+        state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.mine.length || saved.team.length)) };
+      }
+      return { json: state.config };
+    }
+    if (req.path === '/api/gmo/check') return { json: state.check };
+    if (req.path === '/api/gmo/episodes') return { json: state.rows };
+    if (req.path === '/api/gmo/jobs') return { json: state.jobs };
+    if (req.path === '/api/gmo/fetch') {
+      if (state.fetchError) return { status: state.fetchStatus, json: { detail: state.fetchError } };
+      const body = sent.body as { run_id: string; episode_id: string };
+      const row = state.rows.find(item => item.run_id === body.run_id && item.episode_id === body.episode_id)!;
+      state.jobs = [job(row, { job_id: `job_${nextJob++}` }), ...state.jobs].slice(0, 50);
+      return { json: { job_id: state.jobs[0].job_id } };
+    }
+    return null;
+  };
+  return state;
+}
+function text(node: unknown): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(text).join('');
+  if (typeof node === 'object' && 'props' in node) return text((node as FakeElement).props.children);
+  return '';
+}
+function button(node: unknown, label: string): FakeElement {
+  const result = [...findAll(node, SmallButton), ...findAll(node, 'button')].find(el => text(el.props.children) === label);
+  assert.ok(result, `button ${label} exists`);
+  return result!;
+}
+function click(node: unknown, label: string): void {
+  const el = button(node, label);
+  assert.notEqual(el.props.disabled, true, `${label} is enabled`);
+  (el.props.onClick as (event: unknown) => void)({ stopPropagation() {}, preventDefault() {} });
+}
+function change(node: unknown, label: string, value: string): void {
+  const inputs = ['input', 'select', 'textarea'].flatMap(type => findAll(node, type));
+  let input = inputs.find(el => el.props['aria-label'] === label);
+  if (!input) {
+    const fieldLabel = findAll(node, 'label').find(el => text(el).trim() === label || text(el).startsWith(label));
+    input = fieldLabel && (inputs.find(el => el.props.id === fieldLabel.props.htmlFor) ?? ['input', 'select', 'textarea'].flatMap(type => findAll(fieldLabel, type))[0]);
+  }
+  assert.ok(input, `field ${label} has a label`);
+  (input!.props.onChange as (event: unknown) => void)({ target: { value } });
+}
+function rowFor(node: unknown, task: string): FakeElement {
+  const row = findAll(node, 'tr').find(el => text(el).includes(task));
+  assert.ok(row, `row for ${task} exists`);
+  return row!;
+}
+function rowsOf(node: unknown): FakeElement[] { return findAll(node, 'tbody').flatMap(body => findAll(body, 'tr')); }
+function mountGmo(initialConfig: GmoConfigResponse | null, onPick: (run: string, episode: string) => void = () => {}, configError: string | null = null) {
+  return mount(GmoPicker, { initialConfig, configError, onConfigChange: () => {}, onRetryConfig: () => {}, onDisabled: () => {}, onPick });
+}
+function assertGmoHeaders(sent: SentRequest[]): void {
+  const requests = sent.filter(req => req.path.startsWith('/api/gmo/'));
+  assert.ok(requests.length > 0);
+  for (const req of requests) {
+    assert.equal(req.headers.get('X-CapX-Request'), 'gmo', `${req.method} ${req.path}`);
+    if (req.method === 'POST' || req.method === 'PUT') {
+      assert.equal(req.headers.get('Content-Type'), 'application/json');
+      assert.ok(req.body && typeof req.body === 'object');
+    }
+  }
+}
+
+test('GMO tab is hidden when the integration is disabled, and shown when enabled', async () => {
+  const state = setup(); state.disabled = true;
+  const props = { config: null, configError: null, currentRun: null, currentEpisode: null, onPick: () => {}, onPickLegacy: () => {} };
+  const disabled = mount(Picker, props); await advance(100);
+  assert.equal(findAll(disabled.output, SmallButton).some(el => text(el) === 'GMO'), false);
+  assertGmoHeaders(state.sent); disabled.unmount();
+  state.disabled = false;
+  const enabled = mount(Picker, props); await advance(100);
+  click(enabled.output, 'GMO'); await advance(0);
+  assert.equal(findAll(enabled.output, GmoPicker).length, 1);
+  enabled.unmount();
+});
+
+test('unconfigured GMO opens the labelled connection settings without listing remotely', async () => {
+  const state = setup([], false);
+  const page = mountGmo(state.config); await advance(100);
+  for (const label of ['接続先', 'ポート', '鍵ファイル', '自分の記録の場所', 'チームの記録の場所']) {
+    assert.ok(text(page.output).includes(label), label);
+  }
+  assert.ok(button(page.output, '保存して確かめる'));
+  assert.match(text(page.output), /~\/\.ssh\/config/);
+  assert.match(text(page.output), /ssh-agent/);
+  assert.match(text(page.output), /パスフレーズ/);
+  assert.equal(findAll(page.output, 'select').some(el => el.props['aria-label'] === '自動取り込みの間隔'), false);
+  assert.match(text(page.output), /自動取り込みは未対応/);
+  assert.equal(state.sent.some(req => req.path === '/api/gmo/episodes'), false);
+  page.unmount();
+});
+
+test('GMO lists local state, result, owner and size and filters scope, outcome, task, seed and owner', async () => {
+  const state = setup([
+    episode('mine'),
+    episode('team', { mine: false, owner: 'bob', seed: 42, local_state: 'local', episode: { harness_summary: { task_completed: false, sandbox_rc: 0 } } }),
+    episode('stale', { local_state: 'stale', status: 'running' }),
+  ]);
+  const page = mountGmo(state.config); await advance(100);
+  assert.equal(rowsOf(page.output).length, 3);
+  assert.match(text(rowFor(page.output, 'task_mine')), /未取得.*task_mine.*7.*自分/);
+  assert.match(text(rowFor(page.output, 'task_mine')), /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.*2\.0 KB/);
+  assert.match(text(rowFor(page.output, 'task_team')), /取り込み済み.*bob/);
+  assert.match(text(rowFor(page.output, 'task_stale')), /更新あり/);
+  assert.equal(findAll(rowFor(page.output, 'task_mine'), TaskOutcomeBadge)[0].props.verdict, 'success');
+  assert.equal(findAll(rowFor(page.output, 'task_team'), TaskOutcomeBadge)[0].props.verdict, 'failure');
+  assert.equal(findAll(rowFor(page.output, 'task_stale'), TaskOutcomeBadge)[0].props.verdict, 'running');
+  assert.match(text(page.output), /一覧の更新時刻/);
+  change(page.output, 'GMO の範囲', 'mine'); await advance(0);
+  assert.equal(rowsOf(page.output).length, 2);
+  change(page.output, 'GMO の範囲', 'team'); await advance(0);
+  assert.equal(rowsOf(page.output).length, 1);
+  assert.match(text(rowsOf(page.output)[0]), /task_team/);
+  change(page.output, 'GMO の範囲', 'all'); await advance(0);
+  change(page.output, 'GMO の結果で絞り込み', 'failure'); await advance(0);
+  assert.equal(rowsOf(page.output).length, 1);
+  change(page.output, 'GMO の結果で絞り込み', 'all'); await advance(0);
+  for (const query of ['task_team', '42', 'BOB']) {
+    change(page.output, 'GMO の試行を検索', query); await advance(0);
+    assert.equal(rowsOf(page.output).length, 1, query);
+    assert.match(text(rowsOf(page.output)[0]), /task_team/);
+  }
+  change(page.output, 'GMO の試行を検索', 'no-such-task'); await advance(0);
+  assert.equal(rowsOf(page.output).length, 0);
+  click(page.output, '一覧を更新'); await advance(100);
+  assert.ok(net.log.some(req => req.path === '/api/gmo/episodes' && req.query.get('refresh') === '1'));
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO imports, polls once a second while active, reloads on completion and opens with existing onPick', async () => {
+  const row = episode('fetch'); const state = setup([row]); const picked: string[] = [];
+  const page = mountGmo(state.config, (run, ep) => picked.push(`${run}/${ep}`)); await advance(100);
+  const initialJobs = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2100);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, initialJobs, 'idle jobs are not polled');
+  click(rowFor(page.output, row.task!), '取り込む'); await advance(100);
+  assert.equal(state.sent.find(req => req.path === '/api/gmo/fetch')?.method, 'POST');
+  assert.deepEqual(state.sent.find(req => req.path === '/api/gmo/fetch')?.body, { run_id: row.run_id, episode_id: row.episode_id });
+  assert.equal(button(rowFor(page.output, row.task!), '取り込み中…').props.disabled, true);
+  state.jobs[0] = { ...state.jobs[0], state: 'running' };
+  const beforeTick = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(800);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, beforeTick, 'the next poll waits one second');
+  await advance(300);
+  const activePolls = net.log.filter(req => req.path.endsWith('/jobs'));
+  assert.ok(activePolls.length >= initialJobs + 1);
+  state.rows = [{ ...row, local_state: 'local' }];
+  state.jobs[0] = { ...state.jobs[0], state: 'done', note: '実行中のファイルを除外しました', bytes: 2048, finished_at: '2026-11-17T00:00:00Z' };
+  const beforeReload = state.sent.filter(req => req.path.endsWith('/episodes')).length;
+  await advance(1100);
+  assert.ok(state.sent.filter(req => req.path.endsWith('/episodes')).length > beforeReload);
+  assert.match(text(rowFor(page.output, row.task!)), /取り込み済み.*実行中のファイルを除外しました/);
+  assert.deepEqual(picked, [], 'a completed import waits for the user to open it');
+  click(rowFor(page.output, row.task!), '開く');
+  assert.deepEqual(picked, [`${row.run_id}/${row.episode_id}`]);
+  const finishedPolls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2500);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, finishedPolls, 'finished jobs stop polling');
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO reconciles an initially fetching row when the first jobs response is already complete', async () => {
+  const row = episode('finished_elsewhere', { local_state: 'fetching' });
+  const state = setup([row]);
+  state.jobs = [job(row, { state: 'done', bytes: 2048, finished_at: '2026-11-17T00:00:00Z' })];
+  const handler = net.handler;
+  let listings = 0;
+  net.handler = req => {
+    const answer = handler(req);
+    if (req.path === '/api/gmo/episodes' && listings++ === 0) state.rows = [{ ...row, local_state: 'local' }];
+    return answer;
+  };
+  const page = mountGmo(state.config); await advance(100);
+  assert.ok(listings >= 2, 'a completed transfer refreshes the stale fetching snapshot');
+  assert.notEqual(button(rowFor(page.output, row.task!), '開く').props.disabled, true);
+  const polls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2100);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, polls);
+  page.unmount();
+});
+
+test('GMO refresh discovers an import started elsewhere and resumes polling until it completes', async () => {
+  const row = episode('external'); const state = setup([row]);
+  const page = mountGmo(state.config); await advance(100);
+  state.rows = [{ ...row, local_state: 'fetching' }]; state.jobs = [job(row, { state: 'running' })];
+  const initialPolls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  click(page.output, '一覧を更新'); await advance(100);
+  assert.equal(button(rowFor(page.output, row.task!), '取り込み中…').props.disabled, true);
+  await advance(1100);
+  assert.ok(state.sent.filter(req => req.path.endsWith('/jobs')).length > initialPolls, 'fetching rows resume job polling');
+  state.rows = [{ ...row, local_state: 'local' }];
+  state.jobs = [job(row, { state: 'done', bytes: 2048, finished_at: '2026-11-17T00:00:00Z' })];
+  await advance(1100);
+  assert.notEqual(button(rowFor(page.output, row.task!), '開く').props.disabled, true);
+  page.unmount();
+});
+
+test('GMO reconciles pending imports evicted from the latest 50 jobs without releasing an active transfer', async () => {
+  const rows = Array.from({ length: 51 }, (_, index) => episode(`evicted_${index}`));
+  const state = setup(rows);
+  const handler = net.handler;
+  net.handler = req => {
+    const answer = handler(req);
+    if (req.path === '/api/gmo/fetch') {
+      const current = state.jobs[0];
+      state.rows = state.rows.map(row => row.episode_id === current.episode_id ? { ...row, local_state: 'fetching' } : row);
+    }
+    return answer;
+  };
+  const page = mountGmo(state.config); await advance(100);
+  for (const row of rows) {
+    click(rowFor(page.output, row.task!), '取り込む'); await advance(10);
+  }
+  assert.equal(state.jobs.length, 50);
+  assert.equal(state.jobs.some(entry => entry.episode_id === rows[0].episode_id), false);
+  assert.equal(button(rowFor(page.output, rows[0].task!), '取り込み中…').props.disabled, true, 'eviction alone does not finish a transfer');
+  assert.equal(net.log.some(req => req.path.endsWith('/episodes') && req.query.get('refresh') === '1'), false, 'active evicted jobs reuse the cached remote listing');
+  state.rows = state.rows.map((row, index) => index === 0 ? { ...row, local_state: 'local' } : row);
+  await advance(1100);
+  assert.notEqual(button(rowFor(page.output, rows[0].task!), '開く').props.disabled, true, 'the list releases a finished evicted job');
+  assert.equal(button(rowFor(page.output, rows[1].task!), '取り込み中…').props.disabled, true);
+  state.rows = state.rows.map(row => ({ ...row, local_state: 'local' }));
+  state.jobs = state.jobs.map(entry => ({ ...entry, state: 'done' }));
+  await advance(1100);
+  const polls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2100);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, polls, 'all finished imports stop polling');
+  page.unmount();
+});
+
+test('GMO reconciles a fetching row whose externally started job is outside the history', async () => {
+  const row = episode('external_evicted', { local_state: 'fetching' });
+  const state = setup([row]);
+  const page = mountGmo(state.config); await advance(100);
+  assert.equal(button(rowFor(page.output, row.task!), '取り込み中…').props.disabled, true);
+  state.rows = [{ ...row, local_state: 'stale' }];
+  await advance(1100);
+  assert.notEqual(button(rowFor(page.output, row.task!), '更新を取り込む').props.disabled, true);
+  const polls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2100);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, polls);
+  page.unmount();
+});
+
+test('closing the GMO picker stops polling active imports', async () => {
+  const row = episode('background', { local_state: 'fetching' }); const state = setup([row]);
+  state.jobs = [job(row, { state: 'running' })];
+  const page = mountGmo(state.config); await advance(1100);
+  const polls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  assert.ok(polls >= 2);
+  page.unmount(); await advance(2500);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, polls);
+});
+
+test('GMO shows job and enqueue failures on their row, and allows retry', async () => {
+  const row = episode('failure'); const state = setup([row]);
+  const page = mountGmo(state.config); await advance(100);
+  state.fetchError = 'SSH 接続が切れました';
+  click(rowFor(page.output, row.task!), '取り込む'); await advance(100);
+  assert.match(text(rowFor(page.output, row.task!)), /SSH 接続が切れました/);
+  state.fetchError = '';
+  click(rowFor(page.output, row.task!), '取り込む'); await advance(100);
+  state.jobs[0] = { ...state.jobs[0], state: 'failed', error: '空き容量が足りません', finished_at: '2026-11-17T00:00:00Z' };
+  await advance(1100);
+  assert.match(text(rowFor(page.output, row.task!)), /空き容量が足りません/);
+  assert.notEqual(button(rowFor(page.output, row.task!), '取り込む').props.disabled, true);
+  const polls = state.sent.filter(req => req.path.endsWith('/jobs')).length;
+  await advance(2100);
+  assert.equal(state.sent.filter(req => req.path.endsWith('/jobs')).length, polls);
+  page.unmount();
+});
+
+test('GMO keeps the tab and reports an episode deleted after listing as a row error', async () => {
+  const row = episode('deleted'); const state = setup([row]);
+  let disabled = false;
+  const page = mount(GmoPicker, { initialConfig: state.config, configError: null, onConfigChange: () => {}, onRetryConfig: () => {}, onDisabled: () => { disabled = true; }, onPick: () => {} });
+  await advance(100);
+  state.fetchStatus = 404;
+  state.fetchError = 'Episode not found on GMO';
+  click(rowFor(page.output, row.task!), '取り込む'); await advance(100);
+  assert.equal(disabled, false);
+  assert.match(text(rowFor(page.output, row.task!)), /Episode not found on GMO/);
+  assert.notEqual(button(rowFor(page.output, row.task!), '取り込む').props.disabled, true);
+  page.unmount();
+});
+
+test('GMO disables conflicts but lets the server limit changed files for large imports and opens large local episodes', async () => {
+  const state = setup([
+    episode('conflict', { conflict: true }), episode('large', { size_bytes: 1024 ** 3 }),
+    episode('stale', { size_bytes: 1100 * 1024 ** 2, local_state: 'stale' }),
+    episode('local', { size_bytes: 2 * 1024 ** 3, local_state: 'local' }),
+  ]);
+  const picked: string[] = [];
+  const page = mountGmo(state.config, (run, ep) => picked.push(`${run}/${ep}`)); await advance(100);
+  assert.match(text(rowFor(page.output, 'task_conflict')), /同じ|重複|複数/);
+  assert.equal(button(rowFor(page.output, 'task_conflict'), '取り込む').props.disabled, true);
+  click(rowFor(page.output, 'task_stale'), '更新を取り込む'); await advance(100);
+  assert.deepEqual(state.sent.find(req => req.path.endsWith('/fetch'))?.body, { run_id: 'run_stale', episode_id: 'stale' });
+  click(rowFor(page.output, 'task_local'), '開く');
+  assert.deepEqual(picked, ['run_local/local']);
+  click(rowFor(page.output, 'task_large'), '取り込む'); await advance(100);
+  state.jobs[0] = { ...state.jobs[0], state: 'failed', error: '1 GiB exceeds the 1 GiB transfer limit' };
+  await advance(1100);
+  assert.match(text(rowFor(page.output, 'task_large')), /exceeds the 1 GiB transfer limit/);
+  assert.notEqual(button(rowFor(page.output, 'task_large'), '取り込む').props.disabled, true);
+  page.unmount();
+});
+
+async function saveForm(output: unknown): Promise<void> {
+  const form = findAll(output, 'form')[0];
+  if (form?.props.onSubmit) (form.props.onSubmit as (event: unknown) => void)({ preventDefault() {} });
+  else click(output, '保存して確かめる');
+  await advance(100);
+}
+
+test('GMO saves labelled settings as JSON then checks and reports counts', async () => {
+  const state = setup([], false);
+  state.config.settings.interval_s = 300;
+  const page = mountGmo(state.config); await advance(100);
+  change(page.output, '接続先', 'user@gmo.example'); await advance(0);
+  change(page.output, 'ポート', '8822'); await advance(0);
+  change(page.output, '鍵ファイル', '~/.ssh/gmo_key'); await advance(0);
+  change(page.output, '自分の記録の場所', ' /mine/a/traces \n\n/mine/b/traces\n'); await advance(0);
+  change(page.output, 'チームの記録の場所', '/team/*/traces'); await advance(0);
+  await saveForm(page.output);
+  const writes = state.sent.filter(req => req.method !== 'GET');
+  assert.deepEqual(writes.map(req => [req.method, req.path]), [['PUT', '/api/gmo/config'], ['POST', '/api/gmo/check']]);
+  assert.deepEqual(writes[0].body, settings({ host: 'user@gmo.example', port: 8822, identity_file: '~/.ssh/gmo_key', mine: ['/mine/a/traces', '/mine/b/traces'], team: ['/team/*/traces'], interval_s: 300 }));
+  assert.deepEqual(writes[1].body, {});
+  assert.match(text(page.output), /接続できました：自分 2 件、チーム 3 件/);
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO keeps settings errors visible and does not check after a failed save', async () => {
+  const state = setup(); const page = mountGmo(state.config); await advance(100);
+  click(page.output, '接続設定'); await advance(0);
+  state.saveError = '接続先の形式が正しくありません';
+  await saveForm(page.output);
+  assert.match(text(page.output), /接続先の形式が正しくありません/);
+  assert.equal(state.sent.some(req => req.path.endsWith('/check')), false);
+  state.saveError = ''; state.check = { ok: false, mine_episodes: 0, team_episodes: 0, error: 'Permission denied (publickey)' };
+  await saveForm(page.output);
+  assert.match(text(page.output), /Permission denied \(publickey\)/);
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO can repair an unreadable configuration by saving editable connection settings', async () => {
+  const state = setup([], false);
+  const page = mountGmo(null, () => {}, 'Invalid JSON in GMO settings'); await advance(100);
+  assert.match(text(page.output), /Invalid JSON in GMO settings/);
+  assert.notEqual(findAll(page.output, 'fieldset')[0].props.disabled, true, 'failed GET /config does not prevent repair');
+  change(page.output, '接続先', 'gmo'); await advance(0);
+  change(page.output, '自分の記録の場所', '/mine/traces'); await advance(0);
+  await saveForm(page.output);
+  assert.deepEqual(state.sent.filter(req => req.method !== 'GET').map(req => [req.method, req.path]), [['PUT', '/api/gmo/config'], ['POST', '/api/gmo/check']]);
+  assert.match(text(page.output), /接続できました：自分 2 件、チーム 3 件/);
+  assert.doesNotMatch(text(page.output), /Invalid JSON in GMO settings/);
+  assertGmoHeaders(state.sent); page.unmount();
+});

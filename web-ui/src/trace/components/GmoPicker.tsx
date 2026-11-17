@@ -1,0 +1,297 @@
+/** GMO discovery and imports inside the trial picker. Transfers stay on the server. */
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { GmoDisabledError, errorText, gmoApi, type GmoConfigResponse, type GmoJob, type GmoScope, type GmoSettings } from '../api';
+import { fmtBytes, fmtWall } from '../format';
+import { useAsync, useInterval } from '../hooks';
+import { episodeVerdict, VERDICT_LABELS, type TaskVerdict } from '../outcome';
+import { Badge, ErrorText, SmallButton, Spinner } from './common';
+import { TaskOutcomeBadge } from './TaskOutcomeBadge';
+
+interface GmoPickerProps {
+  initialConfig: GmoConfigResponse | null;
+  configError: string | null;
+  onConfigChange: () => void;
+  onRetryConfig: () => void;
+  onDisabled: () => void;
+  onPick: (runId: string, episodeId: string) => void;
+}
+
+interface SettingsDraft {
+  host: string;
+  port: string;
+  identityFile: string;
+  mine: string;
+  team: string;
+}
+
+function settingsDraft(settings?: GmoSettings): SettingsDraft {
+  return {
+    host: settings?.host ?? '', port: settings?.port?.toString() ?? '',
+    identityFile: settings?.identity_file ?? '', mine: settings?.mine.join('\n') ?? '',
+    team: settings?.team.join('\n') ?? '',
+  };
+}
+
+const rowKey = (row: { run_id: string; episode_id: string }) => `${row.run_id}\0${row.episode_id}`;
+const activeJob = (job: GmoJob) => job.state === 'queued' || job.state === 'running';
+const LOCAL_LABELS = { remote: '未取得', local: '取り込み済み', stale: '更新あり', fetching: '取り込み中' };
+const INPUT_CLASS = 'w-full px-2 py-1 bg-surface-sunken border border-surface-border rounded text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent/40';
+
+export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryConfig, onDisabled, onPick }: GmoPickerProps) {
+  const [config, setConfig] = useState(initialConfig);
+  const [settingsOpen, setSettingsOpen] = useState(!initialConfig?.configured);
+  const [draft, setDraft] = useState(() => settingsDraft(initialConfig?.settings));
+  const [saving, setSaving] = useState(false);
+  const [checkMessage, setCheckMessage] = useState<string | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
+  const [scope, setScope] = useState<GmoScope>('all');
+  const [resultFilter, setResultFilter] = useState<TaskVerdict | 'all'>('all');
+  const [query, setQuery] = useState('');
+  // null marks the POST in flight; job ids are reconciled through /jobs or the list.
+  const [pending, setPending] = useState<Record<string, string | null>>({});
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const refreshNext = useRef(false);
+  const seenJobs = useRef(new Map<string, GmoJob['state']>());
+  const reconciledJobs = useRef(new Set<string>());
+  const missingJobs = useRef(new Set<string>());
+  const recheckedSnapshot = useRef<GmoJob[] | null>(null);
+  const actions = useRef(new Set<AbortController>());
+  const savingRef = useRef(false);
+
+  useEffect(() => {
+    if (!initialConfig) return;
+    setConfig(initialConfig);
+    setDraft(settingsDraft(initialConfig.settings));
+    if (!initialConfig.configured) setSettingsOpen(true);
+  }, [initialConfig]);
+  useEffect(() => () => {
+    for (const controller of actions.current) controller.abort();
+    actions.current.clear();
+  }, []);
+
+  const configured = config?.configured === true;
+  const handleError = (error: unknown, signal: AbortSignal) => {
+    if (!signal.aborted && error instanceof GmoDisabledError) onDisabled();
+    throw error;
+  };
+  const listing = useAsync(configured ? async (signal) => {
+    const refresh = refreshNext.current;
+    refreshNext.current = false;
+    // Only a list requested after a job disappeared can release its pending row.
+    const recheckingJobs = new Set(missingJobs.current);
+    try {
+      const rows = await gmoApi.episodes('all', refresh, signal);
+      return { rows, updatedAt: Date.now(), recheckingJobs };
+    } catch (error) { return handleError(error, signal); }
+  } : null, [config?.settings]);
+  const jobs = useAsync(configured ? async (signal) => {
+    try { return await gmoApi.jobs(signal); }
+    catch (error) { return handleError(error, signal); }
+  } : null, [config?.settings]);
+
+  const reloadList = () => { refreshNext.current = true; listing.reload(); };
+  const hasActiveJobs = jobs.data?.some(activeJob) || Object.keys(pending).length > 0 || listing.data?.rows.some(row => row.local_state === 'fetching') === true;
+  useInterval(jobs.poll, 1000, configured && hasActiveJobs);
+  useEffect(() => {
+    if (!jobs.data) return;
+    let finished = false;
+    const completed = new Set<string>();
+    const latest = new Set<string>();
+    const ids = new Set(jobs.data.map(job => job.job_id));
+    const activeKeys = new Set(jobs.data.filter(activeJob).map(rowKey));
+    missingJobs.current = new Set(Object.values(pendingRef.current).filter((id): id is string => id !== null && !ids.has(id)));
+    for (const job of jobs.data) {
+      const key = rowKey(job);
+      const isLatest = !latest.has(key);
+      latest.add(key);
+      if (!activeJob(job)) {
+        const previous = seenJobs.current.get(job.job_id);
+        // The first jobs snapshot can already be terminal even though the list
+        // was read during the transfer. Reconcile that snapshot once as well.
+        const listedFetching = isLatest && listing.data?.rows.some(row => rowKey(row) === key && row.local_state === 'fetching');
+        if (previous === 'queued' || previous === 'running' || Object.values(pendingRef.current).includes(job.job_id) || (listedFetching && !reconciledJobs.current.has(job.job_id))) {
+          finished = true;
+          reconciledJobs.current.add(job.job_id);
+        }
+        completed.add(job.job_id);
+      }
+      seenJobs.current.set(job.job_id, job.state);
+    }
+    if (Object.values(pendingRef.current).some(id => id !== null && completed.has(id))) {
+      setPending(previous => Object.fromEntries(Object.entries(previous).filter(([, id]) => id === null || !completed.has(id))));
+    }
+    // /jobs retains only 50 records; a missing job may still be queued or running.
+    // Even a cached episode list checks the server's full pending set, so a
+    // missing active job does not require a fresh SSH listing on every tick.
+    const needsRecheck = missingJobs.current.size > 0 || listing.data?.rows.some(row => row.local_state === 'fetching' && !activeKeys.has(rowKey(row)));
+    if (finished || (needsRecheck && recheckedSnapshot.current !== jobs.data)) {
+      recheckedSnapshot.current = jobs.data;
+      if (finished) refreshNext.current = true;
+      listing.reload();
+    }
+  }, [jobs.data, listing.data, listing.reload]);
+  useEffect(() => {
+    if (!listing.data?.recheckingJobs.size) return;
+    const { rows, recheckingJobs } = listing.data;
+    const fetching = new Set(rows.filter(row => row.local_state === 'fetching').map(rowKey));
+    if (Object.entries(pendingRef.current).some(([key, id]) => id !== null && recheckingJobs.has(id) && !fetching.has(key))) {
+      setPending(previous => Object.fromEntries(Object.entries(previous).filter(([key, id]) => id === null || !recheckingJobs.has(id) || fetching.has(key))));
+    }
+  }, [listing.data]);
+
+  const latestJobs = useMemo(() => {
+    const result = new Map<string, GmoJob>();
+    // /jobs is newest first, including repeated imports of the same episode.
+    for (const job of jobs.data ?? []) if (!result.has(rowKey(job))) result.set(rowKey(job), job);
+    return result;
+  }, [jobs.data]);
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (listing.data?.rows ?? []).filter(row =>
+      (scope === 'all' || row.mine === (scope === 'mine')) &&
+      (resultFilter === 'all' || episodeVerdict(row) === resultFilter) &&
+      (!q || [row.task, row.seed, row.owner, row.mine ? '自分' : ''].some(value => String(value ?? '').toLowerCase().includes(q))),
+    );
+  }, [listing.data, scope, resultFilter, query]);
+
+  const fetchEpisode = async (runId: string, episodeId: string) => {
+    const key = rowKey({ run_id: runId, episode_id: episodeId });
+    if (Object.hasOwn(pendingRef.current, key)) return;
+    pendingRef.current = { ...pendingRef.current, [key]: null };
+    setPending(pendingRef.current);
+    setRowErrors(previous => { const next = { ...previous }; delete next[key]; return next; });
+    const controller = new AbortController();
+    actions.current.add(controller);
+    try {
+      const { job_id } = await gmoApi.fetch(runId, episodeId, controller.signal);
+      if (controller.signal.aborted) return;
+      setPending(previous => ({ ...previous, [key]: job_id }));
+      jobs.reload();
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof GmoDisabledError) onDisabled();
+      setRowErrors(previous => ({ ...previous, [key]: errorText(error) }));
+      setPending(previous => { const next = { ...previous }; delete next[key]; return next; });
+    } finally { actions.current.delete(controller); }
+  };
+
+  const saveAndCheck = async () => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setCheckMessage(null);
+    setCheckError(null);
+    const controller = new AbortController();
+    actions.current.add(controller);
+    const lines = (text: string) => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+    try {
+      const saved = await gmoApi.saveConfig({
+        host: draft.host.trim(), port: draft.port.trim() ? Number(draft.port) : null,
+        identity_file: draft.identityFile.trim() || null, mine: lines(draft.mine), team: lines(draft.team),
+        interval_s: config?.settings.interval_s ?? 120,
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      setConfig(saved);
+      onConfigChange();
+      const checked = await gmoApi.check(controller.signal);
+      if (controller.signal.aborted) return;
+      if (checked.ok) {
+        setCheckMessage(`接続できました：自分 ${checked.mine_episodes} 件、チーム ${checked.team_episodes} 件`);
+        reloadList();
+      } else setCheckError(checked.error || '接続を確認できませんでした');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof GmoDisabledError) onDisabled();
+      setCheckError(errorText(error));
+    } finally {
+      actions.current.delete(controller);
+      savingRef.current = false;
+      if (!controller.signal.aborted) setSaving(false);
+    }
+  };
+
+  const initialConfigError = !config ? configError : null;
+  const connectionError = checkError || listing.error || initialConfigError;
+  const connectionStatus = saving ? '接続を確認中…' : connectionError ? '接続エラー' : !configured ? '未設定' : listing.data || checkMessage ? '接続できました' : listing.loading ? '接続中…' : '未確認';
+  const updateDraft = (key: keyof SettingsDraft, value: string) => setDraft(previous => ({ ...previous, [key]: value }));
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+      <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
+        <span role="status" className="text-xs text-text-secondary">接続の状態：{connectionStatus}</span>
+        <span className="text-[11px] text-text-tertiary">一覧の更新時刻：{fmtWall(listing.data?.updatedAt)}</span>
+        <div className="ml-auto flex gap-2">
+          <SmallButton onClick={reloadList} disabled={!configured || listing.loading || saving}>一覧を更新</SmallButton>
+          <SmallButton active={settingsOpen} onClick={() => setSettingsOpen(previous => !previous)}>接続設定</SmallButton>
+        </div>
+      </div>
+      {settingsOpen && (
+        <section aria-label="GMO の接続設定" className="flex-shrink-0 px-3 py-3 border-b border-surface-border bg-surface-raised">
+          <h3 className="text-xs font-bold text-text-primary mb-2">GMO の接続設定</h3>
+          {initialConfigError && <div role="alert" className="mb-2"><ErrorText>{initialConfigError}</ErrorText><SmallButton onClick={onRetryConfig}>設定を読み直す</SmallButton></div>}
+          <form onSubmit={event => { event.preventDefault(); void saveAndCheck(); }}>
+            <fieldset disabled={saving} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-text-secondary">
+              <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="gmo または user@host" className={INPUT_CLASS} /></label>
+              <label className="space-y-1">ポート<input aria-label="ポート" name="gmo-port" type="number" min="1" max="65535" step="1" value={draft.port} onChange={event => updateDraft('port', event.target.value)} placeholder="SSH の設定を使う" className={INPUT_CLASS} /></label>
+              <label className="space-y-1">鍵ファイル<input aria-label="鍵ファイル" name="gmo-identity-file" value={draft.identityFile} onChange={event => updateDraft('identityFile', event.target.value)} placeholder="~/.ssh/id_ed25519（省略可）" className={INPUT_CLASS} /></label>
+              <label className="space-y-1">自分の記録の場所<textarea aria-label="自分の記録の場所" name="gmo-mine" rows={3} value={draft.mine} onChange={event => updateDraft('mine', event.target.value)} placeholder="/home/user/outputs/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
+              <label className="space-y-1">チームの記録の場所<textarea aria-label="チームの記録の場所" name="gmo-team" rows={3} value={draft.team} onChange={event => updateDraft('team', event.target.value)} placeholder="/shared/team/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
+              <div className="sm:col-span-2"><button type="submit" className="px-2 py-1 rounded border border-surface-border-light bg-surface-sunken text-xs text-text-secondary hover:text-text-primary disabled:opacity-40">{saving ? '保存して確認中…' : '保存して確かめる'}</button></div>
+            </fieldset>
+          </form>
+          {checkMessage && <p role="status" className="mt-2 text-xs text-nv-green">{checkMessage}</p>}
+          {checkError && <div role="alert" className="mt-2"><ErrorText>{checkError}</ErrorText></div>}
+          <p className="mt-3 text-[11px] text-text-secondary">自動取り込みは未対応です。試行の「取り込む」「更新を取り込む」で取り込んでください。</p>
+          <p className="mt-3 text-[11px] text-text-secondary">鍵は ssh-agent に読み込ませておく必要があります。この画面ではパスフレーズは聞けません。</p>
+          <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host gmo\n  HostName example.com\n  User your-user\n  Port 22\n  IdentityFile ~/.ssh/id_ed25519'}</pre></details>
+        </section>
+      )}
+      {listing.error && <div role="alert" className="px-3 py-2"><ErrorText>一覧を取得できませんでした：{listing.error}</ErrorText></div>}
+      {jobs.error && <div role="alert" className="px-3 py-2"><ErrorText>取り込み状況を確認できませんでした：{jobs.error}</ErrorText><SmallButton onClick={jobs.reload}>取り込み状況を再確認</SmallButton></div>}
+      {configured && <>
+        <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
+          <select aria-label="GMO の範囲" value={scope} onChange={event => setScope(event.target.value as GmoScope)} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
+            <option value="all">すべて</option><option value="mine">自分</option><option value="team">チーム</option>
+          </select>
+          <select aria-label="GMO の結果で絞り込み" value={resultFilter} onChange={event => setResultFilter(event.target.value as TaskVerdict | 'all')} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
+            <option value="all">すべての結果</option>{Object.entries(VERDICT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <input type="search" name="gmo-filter" aria-label="GMO の試行を検索" value={query} onChange={event => setQuery(event.target.value)} placeholder="絞り込み（task / seed / 実行者）" className={`${INPUT_CLASS} flex-1 min-w-40`} />
+        </div>
+        {listing.loading && <div className="p-3"><Spinner label="一覧を読み込み中" /></div>}
+        <div className="min-h-0 overflow-x-auto">
+          <table aria-label="GMO の試行" className="w-full text-xs">
+            <thead className="sticky top-0 bg-surface-raised"><tr className="text-left text-text-tertiary border-b border-surface-border">
+              {['手元の状態', '結果', 'task・seed', '実行者', '開始時刻', '大きさ', '操作'].map(label => <th key={label} scope="col" className="py-1.5 px-3 font-normal">{label}</th>)}
+            </tr></thead>
+            <tbody>{rows.map((row, index) => {
+              const key = rowKey(row);
+              const job = latestJobs.get(key);
+              const busy = Object.hasOwn(pending, key) || (job && activeJob(job)) || row.local_state === 'fetching';
+              // Total size cannot predict the changed-file transfer size; the server enforces its limit.
+              const reason = row.conflict ? '同じ run ID が GMO の複数の場所にあるため取り込めません' : null;
+              const localState = busy ? 'fetching' : row.local_state;
+              const error = rowErrors[key] || (!busy && job?.state === 'failed' ? job.error || '取り込みに失敗しました' : null);
+              return <tr key={`${key}\0${index}`} className="border-b border-surface-border/50 align-top">
+                <td className="py-2 px-3"><Badge tone={localState === 'local' ? 'green' : localState === 'stale' ? 'amber' : localState === 'fetching' ? 'gold' : 'neutral'}>{LOCAL_LABELS[localState]}</Badge></td>
+                <td className="py-2 px-3"><TaskOutcomeBadge verdict={episodeVerdict(row)} /></td>
+                <td className="py-2 px-3"><div>{row.task ?? '—'} · seed {row.seed ?? '—'}</div><div className="text-[11px] text-text-tertiary font-mono break-all">{row.run_id} / {row.episode_id}</div></td>
+                <td className="py-2 px-3">{row.mine ? '自分' : row.owner || '—'}</td>
+                <td className="py-2 px-3 whitespace-nowrap">{fmtWall(row.start_wall_time)}</td>
+                <td className="py-2 px-3 whitespace-nowrap">{fmtBytes(row.size_bytes)}</td>
+                <td className="py-2 px-3"><SmallButton disabled={!!reason || !!busy} title={reason ?? undefined} onClick={() => row.local_state === 'local' ? onPick(row.run_id, row.episode_id) : void fetchEpisode(row.run_id, row.episode_id)}>{busy ? '取り込み中…' : row.local_state === 'local' ? '開く' : row.local_state === 'stale' ? '更新を取り込む' : '取り込む'}</SmallButton>
+                  {reason && <p className="mt-1 text-[11px] text-text-secondary">{reason}</p>}
+                  {error && <div role="alert" className="mt-1"><ErrorText>{error}</ErrorText></div>}
+                  {job?.note && <p className="mt-1 text-[11px] text-text-tertiary break-all">{job.note}</p>}
+                </td>
+              </tr>;
+            })}</tbody>
+          </table>
+          {listing.data && rows.length === 0 && <p className="p-4 text-xs text-text-tertiary">該当する試行がありません</p>}
+        </div>
+      </>}
+    </div>
+  );
+}

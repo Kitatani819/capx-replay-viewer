@@ -125,6 +125,48 @@ test('更新 re-reads the runner records, and so does opening another episode of
   p.unmount();
 });
 
+for (const status of ['ended', 'incomplete'] as const) {
+  test(`opening the current ${status} episode after an import re-reads events, summary and runner records`, async () => {
+    resetBrowser();
+    const run = makeRun();
+    const start = clock.now / 1000 - 700;
+    const e1 = endedEpisode(run, 'e1', start);
+    e1.summary = { ...e1.summary, status, trace_complete: status === 'ended' };
+    serve(run);
+    const p = open('/traces?view=details&run=r1&episode=e1');
+    await advance(3000);
+    assert.equal(bar(p).reader.count, 2);
+    assert.equal(bar(p).summary?.status, status);
+    assert.equal(bar(p).runnerRecords.length, 0);
+    const before = {
+      events: requests(/\/events$/).sent,
+      summary: requests(/\/episodes\/e1$/).sent,
+      run: requests(RUNS).sent,
+    };
+
+    // The server finishes importing updates while the archived view is idle.
+    e1.events.push(ev('e1', 3, 'trace_warning', { code: 'late_event' }, { late: true }));
+    e1.summary = { ...e1.summary, status: 'ended', trace_complete: true, late_events: 1 };
+    run.records = [recordFor(start, [{ status: 'completed', from: -1, to: 60 }], true)];
+    await advance(5000);
+    assert.equal(requests(/\/events$/).sent, before.events, 'archived events are not being polled');
+    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary, 'archived summaries are not being polled');
+
+    bar(p).onOpenPicker();
+    await advance(50);
+    propsOf<PickerProps>(p.output, Picker).onPick('r1', 'e1');
+    await advance(3000);
+    assert.equal(bar(p).reader.count, 3, 'opening the same episode reads imported events');
+    assert.equal(bar(p).summary?.status, 'ended');
+    assert.equal(bar(p).summary?.late_events, 1, 'the imported summary is shown');
+    assert.equal(bar(p).runnerRecords.length, 1, 'the imported result is shown');
+    assert.equal(requests(/\/events$/).sent, before.events + 1);
+    assert.equal(requests(/\/episodes\/e1$/).sent, before.summary + 1);
+    assert.equal(requests(RUNS).sent, before.run + 1);
+    p.unmount();
+  });
+}
+
 test('while the run still runs and this episode has no record, the records are re-read slowly until it appears', async () => {
   resetBrowser();
   const run = makeRun();
