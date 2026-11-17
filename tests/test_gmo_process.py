@@ -1,6 +1,7 @@
 """GMO settings and subprocess regressions that need no sockets or rsync."""
 from __future__ import annotations
 
+import errno
 import os
 import signal
 import sys
@@ -68,7 +69,9 @@ os._exit(0)
                 pass
 
 
-def test_timeout_cleanup_is_bounded_when_descendant_escapes_group(tmp_path):
+@pytest.mark.parametrize("killpg_errno", [None, errno.EPERM, errno.EIO],
+                         ids=["real-killpg", "eperm", "other-oserror"])
+def test_timeout_cleanup_is_bounded_when_descendant_escapes_group(tmp_path, monkeypatch, killpg_errno):
     pid_file = tmp_path / "escaped.pid"
     code = """
 import os, sys, time
@@ -81,6 +84,25 @@ if child == 0:
     os._exit(0)
 os._exit(0)
 """
+    killpg_calls = []
+    original_killpg = os.killpg
+
+    def killpg(pgid, sig):
+        killpg_calls.append((pgid, sig))
+        if killpg_errno is not None:
+            # Reproduce macOS EPERM for an exited group, and other signal errors.
+            raise OSError(killpg_errno, os.strerror(killpg_errno))
+        original_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    reaped = []
+    original_reap = gmo.ProcessRunner._reap
+
+    def record_reap(proc):
+        original_reap(proc)
+        reaped.append(proc)
+
+    monkeypatch.setattr(gmo.ProcessRunner, "_reap", staticmethod(record_reap))
     runner = gmo.ProcessRunner()
     started = time.monotonic()
     try:
@@ -88,6 +110,10 @@ os._exit(0)
             runner.run([sys.executable, "-c", code, str(pid_file)], timeout=0.2)
         assert time.monotonic() - started < 2.5
         assert pid_file.exists()
+        proc, = reaped
+        assert killpg_calls == [(proc.pid, signal.SIGKILL)]
+        assert proc.returncode == 0
+        assert proc.stdout.closed and proc.stderr.closed
         assert not runner._children
         assert runner.run([sys.executable, "-c", "pass"], timeout=1).returncode == 0
     finally:

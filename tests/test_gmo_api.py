@@ -132,7 +132,12 @@ def test_environment_fallback_and_ssh_argv(tmp_path, monkeypatch):
 def test_config_paths_and_process_timeout(tmp_path, monkeypatch):
     monkeypatch.delenv("CAPX_GMO_CONFIG", raising=False)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    assert gmo.config_path() == tmp_path / "xdg" / "capx-geniac-replay" / "gmo.json"
+    if sys.platform == "darwin":
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+        base = tmp_path / "Library" / "Application Support"
+    else:
+        base = tmp_path / "xdg"
+    assert gmo.config_path() == base / "capx-geniac-replay" / "gmo.json"
     runner = gmo.ProcessRunner()
     start = time.monotonic()
     with pytest.raises(gmo.FetchError, match="timed out"):
