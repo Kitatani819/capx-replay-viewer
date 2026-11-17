@@ -7,6 +7,7 @@ port="${1:-8390}"
 trace_root="${2:-$project_dir/demo/traces}"
 runner_root="${3:-$project_dir/demo/runner}"
 python_bin="${4:-}"
+from_gmo="${5:-}"
 if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
     echo 'Port must be a number from 1 to 65535.' >&2
     exit 2
@@ -82,8 +83,12 @@ else
         fi
     fi
 fi
-# Check the real filesystem capabilities before starting HTTP.
+# Check the real filesystem capabilities before copying files or starting HTTP.
 "$python_bin" -c 'from capx_trace_viewer.platform_support import require_supported_backend; require_supported_backend()'
+if [[ -n "$from_gmo" ]]; then
+    # Copies new or changed runs from GMO into the trace root; stops the launch on failure.
+    "$python_bin" scripts/fetch_gmo.py --dest "$trace_root"
+fi
 printf 'Replay viewer: http://127.0.0.1:%s/traces\n' "$port"
 exec "$python_bin" -m capx_trace_viewer.server --viewer-only --host 127.0.0.1 --port "$port" \
     --trace-root "$trace_root" --runner-root "$runner_root"
