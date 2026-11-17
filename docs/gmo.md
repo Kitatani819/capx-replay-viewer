@@ -8,7 +8,7 @@ viewerをGMOの計算ノードで動かし、SSH転送を通して手元のブ�
 
 ## GMOの記録を手元へ取ってくる
 
-`capx_trace_recorder` がGMO上に書いた記録（トレースのrun）を、手元の `outputs/gmo/traces` へコピーしてから開きます。viewer自身はGMOへ接続しません。コピーには手元の `ssh` と `rsync` を使い、GMO側では `python3` で一覧を作るだけです。2回目以降は、新しいrunと記録中に増えたファイルだけをコピーします。GMOのログインノードでは1GB以上の転送が禁止されているため、コピー量が1GBを超える場合は転送前に止まります。
+`capx_trace_recorder` がGMO上に書いた記録（トレースのrun）を、手元の `outputs/gmo/traces` へコピーしてから開きます。コピーには手元の `ssh` と `rsync` を使い、GMO側では `python3` で一覧を作ります。2回目以降は、変更されたファイルだけをコピーします。1エピソードの転送予定量が1 GiBを超える場合は転送前に止まります。
 
 手元の `~/.ssh/config` に接続先を登録しておくと、指定が短くなります。`USER` と鍵ファイルは自分のものに置き換えてください。
 
@@ -29,6 +29,23 @@ export CAPX_GMO_TRACES='/home/GROUP/USER/replay-*/traces'
 bash Start-Replay.sh --from-gmo
 ```
 
+`--from-gmo` は起動前に自分の記録（`mine`）だけを取り込み、`outputs/gmo/traces` を開いて、サーバーの `--gmo` API を有効にします。設定がなければ警告を1行表示して取り込みを飛ばし、サーバーは起動します。チームの記録（`team`）は API から選んで取り込みます。サーバーを直接起動する場合も `--gmo` を付けると同じ API が使えます。
+
+設定ファイルは Linux では `${XDG_CONFIG_HOME:-~/.config}/capx-geniac-replay/gmo.json`、macOS では `~/Library/Application Support/capx-geniac-replay/gmo.json` です。`CAPX_GMO_CONFIG` で別の場所を指定できます。ファイルがない場合だけ、上の `CAPX_GMO_HOST` と `CAPX_GMO_TRACES` を既定値（`mine`）として使います。設定はディレクトリ 700、ファイル 600 で保存します。
+
+```json
+{
+  "host": "gmo",
+  "port": null,
+  "identity_file": null,
+  "mine": ["/path/to/your/traces"],
+  "team": ["/path/to/team/traces"],
+  "interval_s": 120
+}
+```
+
+`host` は SSH の Host 名または `user@host`、`port` は省略可能なポート番号、`identity_file` は省略可能な鍵のパスです。`mine` と `team` はパターンの配列で、`*` や `?` を使えます。`interval_s` は将来の自動取り込み用の設定で、`0` は無効です。API の SSH 接続は `BatchMode=yes` を使うため、パスフレーズ付きの鍵は事前に `ssh-agent` へ登録してください。パスフレーズなしの鍵も使えます。
+
 コピーだけを行う場合や、runを選ぶ場合は `scripts/fetch_gmo.py` を直接使います。
 
 ```bash
@@ -37,7 +54,7 @@ python3 scripts/fetch_gmo.py --run RUN_ID                 # 指定したrunだ�
 python3 scripts/fetch_gmo.py --ssh "ssh -p 8822 -i ~/.ssh/YOUR_GMO_KEY" --host USER@connect2.gpucloud.gmo
 ```
 
-`~/.ssh/config` を使わない場合は、最後の例のように `--ssh` と `--host`（環境変数では `CAPX_GMO_SSH` と `CAPX_GMO_HOST`）で指定します。鍵のパスフレーズは `ssh` が通常どおり尋ねます。Windowsでは、WSL内で同じコマンドを実行してください。`--from-gmo` はLinux / macOSのランチャーにだけあります。
+`~/.ssh/config` を使わない場合、従来の CLI は最後の例のように `--ssh` と `--host`（環境変数では `CAPX_GMO_SSH` と `CAPX_GMO_HOST`）で指定できます。CLI では鍵のパスフレーズを `ssh` が通常どおり尋ねます。API は設定ファイルの `port` と `identity_file` だけを受け付けます。Windowsでは、WSL内で同じコマンドを実行してください。`--from-gmo` はLinux / macOSのランチャーにだけあります。
 
 GMO上で記録を作る手順はこのリポジトリに含めていません。記録時に `CAPX_TRACE_DIR` で指定したディレクトリが、ここで指定する置き場所です。
 

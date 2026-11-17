@@ -14,9 +14,8 @@ Usage: bash Start-Replay.sh [options]
   --trace-root PATH    Parent of recorded runs/episodes
   --runner-root PATH   Parent of legacy recorded runs
   --python PATH        Use a prepared Python 3.10-3.12 environment
-  --from-gmo           Copy new recordings from GMO first (scripts/fetch_gmo.py,
-                       settings in CAPX_GMO_HOST, CAPX_GMO_TRACES, CAPX_GMO_SSH)
-                       and show outputs/gmo/traces
+  --from-gmo           Prefetch configured mine recordings, show outputs/gmo/traces,
+                       and enable the GMO API (config file or CAPX_GMO_HOST/TRACES)
   --help               Show this help
 
 Build once with: cd web-ui && npm ci && npm run build

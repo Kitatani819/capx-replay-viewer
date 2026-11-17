@@ -1146,6 +1146,21 @@ Endpoints:
 | `GET /api/traces/viser` | `{available, port, reason}` |
 | `GET /api/traces/legacy/runs`, `/legacy/runs/{run_id}`, `/legacy/trials/{run_id}/{task}/{condition}/{trial_dir}`, `/legacy/file/{run_id}/{task}/{condition}/{trial_dir}/{relpath}` | read-only views of runner outputs (section 9.4) |
 
+When the server starts with `--gmo`, it also includes `/api/gmo`. This router always
+requires a loopback peer, local `Host`, and local `Origin` if present, even when
+`--expose-traces` is set. PUT and POST additionally require a loopback `Origin`,
+`X-CapX-Request: gmo`, and `Content-Type: application/json`. Without `--gmo` these
+routes return 404. The episode list is cached for 30 seconds; `refresh=1` reloads it.
+
+| Method and path | Response |
+|---|---|
+| `GET /api/gmo/config` | `{enabled, configured, settings, dest, config_path}` |
+| `PUT /api/gmo/config` | Validate and save settings; same response as GET |
+| `POST /api/gmo/check` | `{ok, mine_episodes, team_episodes, error}`; no copying |
+| `GET /api/gmo/episodes?scope=all\|mine\|team&refresh=0\|1` | Local episode summary fields plus `owner`, `mine`, `size_bytes`, `local_state`, `conflict` |
+| `POST /api/gmo/fetch` | `{job_id}` for `{run_id, episode_id}`; conflict or duplicate active job returns 409 |
+| `GET /api/gmo/jobs` | Last 50 `{job_id, run_id, episode_id, state, bytes, error, started_at, finished_at}` records |
+
 Runs. A directory under the trace root is a run when it holds a regular `run.json` or
 `runner_records.jsonl` (readable or not), an episode directory, an unscoped log or an
 unscoped status file; the list and the detail use the same rule. A run whose `run.json` is
