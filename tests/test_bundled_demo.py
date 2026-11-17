@@ -16,10 +16,14 @@ TEXT_SUFFIXES = {".json", ".jsonl", ".txt", ".py", ".sh"}
 
 def test_launchers_default_to_the_bundled_demo():
     root = DEMO.parent
-    for script in ("Start-Replay.sh", "scripts/serve_replay.sh"):
-        text = (root / script).read_text(encoding="utf-8")
-        assert "demo/traces" in text and "demo/runner" in text, script
-        assert "make_replay_demo" not in text, script
+    launcher = (root / "Start-Replay.sh").read_text(encoding="utf-8")
+    assert 'default_root="$project_dir/demo"' in launcher
+    assert 'trace_root="${trace_root:-$default_root/traces}"' in launcher
+    assert 'runner_root="${runner_root:-$default_root/runner}"' in launcher
+    serve = (root / "scripts/serve_replay.sh").read_text(encoding="utf-8")
+    assert "demo/traces" in serve and "demo/runner" in serve
+    for text in (launcher, serve):
+        assert "make_replay_demo" not in text
     ps1 = (root / "Start-Replay.ps1").read_text(encoding="utf-8")
     assert "'demo/traces'" in ps1 and "'demo/runner'" in ps1
 
