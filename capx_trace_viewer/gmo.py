@@ -346,7 +346,9 @@ class ProcessRunner:
         # The process group can still exist after its original leader has exited.
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except OSError:
+            # macOS may report EPERM for a group whose leader has exited.
+            # Signal failures must not skip bounded pipe cleanup and reaping.
             pass
 
     @staticmethod
