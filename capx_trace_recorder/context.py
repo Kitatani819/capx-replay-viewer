@@ -62,6 +62,8 @@ from capx_trace_recorder.store import EpisodeRecorder, TraceStore, UnscopedLog, 
 from capx_trace_recorder.timeout import is_trial_alarm
 
 _THREAD = threading.local()
+_HTTP_THREAD_CONTEXT = "_capx_trace_http_context"
+_HTTP_CONTEXT_GENERATION = object()
 WEB_EPISODE: contextvars.ContextVar[EpisodeRecorder | None] = contextvars.ContextVar(
     "capx_trace_web_episode", default=None
 )
@@ -136,7 +138,7 @@ class ApiCallCtx(Ctx):
 class ServiceCallCtx(Ctx):
     kind = "service_call"
     __slots__ = ("service", "function", "attempts", "endpoint", "start_mono", "molmo_call",
-                 "molmo_calls")
+                 "molmo_calls", "finished", "__weakref__")
 
     def __init__(self, event_id: str, episode: EpisodeRecorder, service: str, function: str) -> None:
         super().__init__(event_id, episode)
@@ -147,6 +149,7 @@ class ServiceCallCtx(Ctx):
         self.start_mono = time.monotonic()
         self.molmo_call: "LogicalCall | None" = None
         self.molmo_calls: list[str] = []
+        self.finished = False
 
 
 class LogicalCall(Ctx):
@@ -154,8 +157,8 @@ class LogicalCall(Ctx):
 
     kind = "logical_call"
     __slots__ = ("role", "call_kind", "turn_index", "model", "attempts", "last_request_id",
-                 "last_response_id", "last_status", "segments", "parent", "stream_info",
-                 "start_mono", "origin")
+                 "last_response_id", "last_response_request_id", "last_status", "segments", "parent",
+                 "stream_info", "start_mono", "origin", "finished", "__weakref__")
 
     def __init__(self, event_id: str, episode: EpisodeRecorder, role: str, call_kind: str | None,
                  turn_index: int | None, model: Any, parent: str | None, origin: str) -> None:
@@ -167,12 +170,14 @@ class LogicalCall(Ctx):
         self.attempts = 0
         self.last_request_id: str | None = None
         self.last_response_id: str | None = None
+        self.last_response_request_id: str | None = None
         self.last_status: int | None = None
         self.segments: tuple = ()
         self.parent = parent
         self.stream_info: dict[str, Any] = {}
         self.start_mono = time.monotonic()
         self.origin = origin
+        self.finished = False
 
 
 # ---------------------------------------------------------------------------
@@ -384,9 +389,10 @@ REGISTRY = Registry()
 
 
 def reset_registry_after_fork() -> None:
-    global REGISTRY, _THREAD
+    global REGISTRY, _THREAD, _HTTP_CONTEXT_GENERATION
     REGISTRY = Registry()
     _THREAD = threading.local()
+    _HTTP_CONTEXT_GENERATION = object()
 
 
 if hasattr(os, "register_at_fork"):
@@ -415,7 +421,7 @@ def _pins() -> dict[int, Binding]:
 _POOL_WORKER_MODULES = frozenset({"concurrent.futures.thread", "multiprocessing.pool"})
 
 
-def thread_is_one_job() -> bool:
+def thread_is_one_job(thread: threading.Thread | None = None) -> bool:
     """True for a thread started for one target that is not a pool worker loop.
 
     Such a thread does one piece of work for its whole life, so a pin taken on it
@@ -424,7 +430,8 @@ def thread_is_one_job() -> bool:
     ``threading``) can run several jobs: a pin taken in an earlier job says
     nothing about the current one.
     """
-    thread = threading.current_thread()
+    if thread is None:
+        thread = threading.current_thread()
     try:
         target = thread.__dict__.get("_target")
     except Exception as exc:  # noqa: BLE001
@@ -435,6 +442,24 @@ def thread_is_one_job() -> bool:
         return False
     module = getattr(target, "__module__", None)
     return isinstance(module, str) and module not in _POOL_WORKER_MODULES
+
+
+def prepare_http_thread(thread: threading.Thread) -> None:
+    """Save the initiating call for H1 on an unstarted, single-job thread."""
+    ctx = innermost()
+    if not isinstance(ctx, (LogicalCall, ServiceCallCtx)) or ctx.finished:
+        return
+    if thread.ident is None and thread_is_one_job(thread):
+        thread.__dict__[_HTTP_THREAD_CONTEXT] = (_HTTP_CONTEXT_GENERATION, weakref.ref(ctx))
+
+
+def inherited_http_context() -> LogicalCall | ServiceCallCtx | None:
+    """Find an open call saved by the Thread.start wrapper in this process."""
+    saved = _instance_attr(threading.current_thread(), _HTTP_THREAD_CONTEXT)
+    if saved is None or saved[0] is not _HTTP_CONTEXT_GENERATION:
+        return None
+    ctx = saved[1]()
+    return ctx if ctx is not None and not ctx.finished else None
 
 
 class _Ambiguous:

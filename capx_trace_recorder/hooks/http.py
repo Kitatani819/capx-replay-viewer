@@ -3,7 +3,8 @@
 Every model request leaves through ``Session.send``; there ``PreparedRequest.body``
 is exactly what is sent. The wrapper keeps a reference to that immutable body
 (``str`` or ``bytes``) and never to the headers. Classification uses the
-thread's innermost context:
+thread's innermost context, or the open call saved at ``Thread.start`` for a
+single-job worker with an empty stack:
 
 * a logical model call (H3) -> ``model_request`` / ``model_response`` /
   ``model_error`` for this HTTP attempt;
@@ -12,9 +13,9 @@ thread's innermost context:
 * any other service call -> one HTTP attempt of that call;
 * anything else is ignored.
 
-For ``stream=True`` only the request, the status and the timing are recorded
-here; the body is never touched (``r.content``, ``r.raw``, ``iter_*``). The
-streamed text is recorded by the H3 generator wrapper. For non-streamed
+For ``stream=True`` H1 records the request, status, timing and HTTP attempt
+errors. The body is left to the client; H3 records the answer from yielded
+chunks or the value returned by ``query_model``. For non-streamed
 responses ``Session.send`` has already read the body, so ``r.content`` is the
 cached ``bytes``. Parsing, hashing and file writes happen on the writer thread.
 
@@ -31,11 +32,12 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import threading
 import time
 from typing import Any
 
 from capx_trace_recorder import context as C
-from capx_trace_recorder.hooks.common import add_overhead, guard, mark
+from capx_trace_recorder.hooks.common import add_overhead, guard, mark, patch_attribute
 from capx_trace_recorder.ids import new_event_id, random_hex
 from capx_trace_recorder.payload import (
     Media,
@@ -82,6 +84,8 @@ def new_logical_call_id() -> str:
 
 def _before(request: Any, kwargs: dict[str, Any]) -> _SendInfo | None:
     ctx = C.innermost()
+    if ctx is None:
+        ctx = C.inherited_http_context()
     if ctx is None:
         return None
     if ctx.kind == "logical_call":
@@ -169,6 +173,7 @@ def _after_response(info: _SendInfo, response: Any) -> None:
                                   "error": None if ok else f"HTTP {status}",
                                   "endpoint": info.endpoint.get("url"),
                                   "model_event_id": info.event_id})
+    http_error = isinstance(status, int) and status >= 400
     if info.stream:
         headers = getattr(response, "headers", None)
         content_type = None
@@ -181,18 +186,24 @@ def _after_response(info: _SendInfo, response: Any) -> None:
         lc.stream_info = {"http_status": status, "send_latency_s": latency,
                           "request_event_id": info.event_id, "content_type": content_type,
                           "t_send": info.t_send}
-        return
-    content = getattr(response, "_content", None)
-    if not isinstance(content, bytes):
-        content = None
+        if not http_error:
+            return
     refs = {"logical_call_id": lc.event_id, "http_attempt": lc.attempts,
             "model_event_id": info.event_id}
     if lc.turn_index is not None:
         refs["turn_index"] = lc.turn_index
-    event_id = new_event_id()
     base = {"role": lc.role, "call_kind": lc.call_kind, "logical_call_id": lc.event_id,
             "http_attempt": lc.attempts, "http_status": status, "latency_s": round(latency, 6)}
-    if isinstance(status, int) and status >= 400:
+    if info.stream:
+        base.update({"scope": "attempt", "error_type": "HTTPError", "message": f"HTTP {status}",
+                     "body_excerpt": None, "reason": "stream_body_not_read"})
+        ep.emit("model_error", status="error", data=base, parent=info.event_id, refs=refs)
+        return
+    content = getattr(response, "_content", None)
+    if not isinstance(content, bytes):
+        content = None
+    event_id = new_event_id()
+    if http_error:
         builder = functools.partial(_build_http_error, content=content)
         base.update({"scope": "attempt", "error_type": "HTTPError", "message": f"HTTP {status}"})
         ep.emit("model_error", status="error", data=base, parent=info.event_id, refs=refs,
@@ -203,6 +214,7 @@ def _after_response(info: _SendInfo, response: Any) -> None:
     ep.emit("model_response", status="ok", data=base, parent=info.event_id, refs=refs,
             builder=builder, event_id=event_id, nbytes=len(content or b""), keep_payload=True)
     lc.last_response_id = event_id
+    lc.last_response_request_id = info.event_id
 
 
 RAW_ERROR = "_raw_error"  # an attempt's error text before redaction (never written; see services.py)
@@ -504,4 +516,23 @@ def install(sessions_module: Any) -> str | None:
     return None
 
 
-__all__ = ["install", "make_send_wrapper", "new_logical_call_id", "fill_message", "RAW_ERROR"]
+def _make_thread_start_wrapper(original: Any) -> Any:
+    @functools.wraps(original)
+    def start(self: threading.Thread) -> Any:
+        guard(C.prepare_http_thread, self)
+        return original(self)
+
+    return mark(start, original)
+
+
+def install_thread_start() -> str | None:
+    """Install the stdlib helper for H1 on HTTP worker threads."""
+    try:
+        return patch_attribute(threading.Thread, "start", _make_thread_start_wrapper)
+    except Exception as exc:  # noqa: BLE001 - the recorder cannot block thread startup
+        if is_trial_alarm(exc):
+            raise
+        return f"Thread.start: {type(exc).__name__}"
+
+
+__all__ = ["install", "install_thread_start", "make_send_wrapper", "new_logical_call_id", "fill_message", "RAW_ERROR"]

@@ -31,7 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pytest
 
-from capx_trace_recorder import context as C
+from capx_trace_recorder import bootstrap, context as C
 from capx_trace_recorder.hooks import env as ENV
 from capx_trace_recorder.hooks import web as WEB
 from capx_trace_recorder.ids import join_id
@@ -424,6 +424,58 @@ def test_h4_duplicate_ids_keep_the_trial_tail(rec, monkeypatch, tmp_path):
 
     TRIAL.make_run_single_trial_wrapper(_run_single_trial)(Env(), 1, None, {"output_dir": str(output_dir)})
     assert len(seen["id"]) == 200 and seen["id"].endswith("__s1__i1__a1__dup2")
+
+
+@pytest.mark.parametrize(("legacy", "missing_required"), [
+    ("absent", False), ("present", False), ("not_callable", False), ("absent", True),
+])
+def test_launch_utils_hook_status_in_fake_trial(rec, monkeypatch, legacy, missing_required):
+    from capx_trace_recorder.hooks import trial as TRIAL
+    from trace_reader import load_episode
+
+    for field in ("hooks_installed", "hooks_failed", "hooks_skipped"):
+        monkeypatch.setattr(C.REGISTRY, field, [])
+    module = types.ModuleType("capx.utils.launch_utils")
+    legacy_symbol = "_build_multi_turn_decision_prompt_legacy"
+    symbols = {
+        "_build_multi_turn_decision_prompt": "H5",
+        "_parse_multi_turn_decision": "H6",
+        "_extract_code": "H6",
+    }
+    if missing_required:
+        del symbols["_extract_code"]
+    if legacy == "present":
+        symbols[legacy_symbol] = "H5"
+    if legacy == "not_callable":
+        setattr(module, legacy_symbol, 3)
+    for name in symbols:
+        setattr(module, name, lambda: None)
+    bootstrap._patch_launch_utils(module)
+
+    assert all(getattr(module, name).__capx_trace_wrapper__ for name in symbols)
+    assert set(C.REGISTRY.hooks_installed) == {f"{hook}:{module.__name__}.{name}" for name, hook in symbols.items()}
+    skipped = [{"hook": "H5/H6", "target": module.__name__, "reason": f"{legacy_symbol}: not found"}] if legacy == "absent" else []
+    failures = []
+    if missing_required:
+        failures.append({"hook": "H5/H6", "target": module.__name__, "reason": "_extract_code: not found"})
+    if legacy == "not_callable":
+        failures.append({"hook": "H5/H6", "target": module.__name__, "reason": f"{legacy_symbol}: not callable"})
+    assert C.REGISTRY.hooks_skipped == skipped
+    assert C.REGISTRY.hooks_failed == failures
+
+    def _run_single_trial(env, trial, args, config):
+        return "summary"
+
+    assert TRIAL.make_run_single_trial_wrapper(_run_single_trial)(Env(), 1, None, {}) == "summary"
+    rec.flush()
+    episode_dir, = [path for path in (rec.root / "run").iterdir() if path.is_dir()]
+    doc, events = load_episode(episode_dir)
+    start, = by_type(events, "episode_start")
+    end, = by_type(events, "episode_end")
+    assert start["data"]["tracer"]["hooks_failed"] == failures
+    assert start["data"]["tracer"]["hooks_skipped"] == skipped
+    assert doc["trace_complete"] is end["data"]["trace_complete"] is (not failures)
+    assert doc["gaps"] == ([{"code": "hook_install_failed", "count": 1, "first_seq": start["seq"]}] if failures else [])
 
 
 def test_late_events_after_the_release_carry_no_clock(rec):
