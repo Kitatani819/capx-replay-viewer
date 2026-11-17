@@ -1,10 +1,10 @@
 /**
  * Windowed list with variable row heights, for timelines with thousands of
- * events (docs/trace-format.md 9.3, left pane). Only rows near the viewport
- * are mounted; the rest are replaced by two spacers whose heights use
- * measured row heights where known and estimates elsewhere. Rows are measured
- * with one shared ResizeObserver. Native scroll anchoring keeps the view
- * steady when rows above the viewport change height.
+ * events (docs/trace-format.md 9.3, left pane). Short lists use the rows' own
+ * heights. In long lists, two spacers stand in for offscreen rows using
+ * measured heights where known and estimates elsewhere. One ResizeObserver
+ * measures rows. Native scroll anchoring keeps the view steady when rows
+ * above the viewport change height.
  *
  * Related: Timeline.tsx.
  */
@@ -26,6 +26,7 @@ interface VirtualListProps<T> {
 
 /** How long a scroll-to-row request keeps correcting for rows that change height. */
 const SCROLL_SETTLE_MS = 1500;
+const MAX_STATIC_ROWS = 64;
 
 function lowerBound(arr: Float64Array, v: number): number {
   let lo = 0;
@@ -49,10 +50,11 @@ export function VirtualList<T>({
   className = '',
   empty,
 }: VirtualListProps<T>) {
+  const windowed = items.length > MAX_STATIC_ROWS;
   const containerRef = useRef<HTMLDivElement>(null);
   const heights = useRef(new Map<string, number>());
   const [version, setVersion] = useState(0);
-  const [view, setView] = useState({ top: 0, height: 800 });
+  const [view, setView] = useState({ top: 0, height: 800, scrollable: false });
   const rafRef = useRef<number | null>(null);
   const bumpRef = useRef<number | null>(null);
 
@@ -93,6 +95,8 @@ export function VirtualList<T>({
       observer?.disconnect();
       if (bumpRef.current !== null) window.cancelAnimationFrame(bumpRef.current);
       if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
+      bumpRef.current = null;
+      rafRef.current = null;
     },
     [observer],
   );
@@ -100,11 +104,17 @@ export function VirtualList<T>({
   const readView = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    setView((v) => (v.top === el.scrollTop && v.height === el.clientHeight ? v : { top: el.scrollTop, height: el.clientHeight }));
+    const top = el.scrollTop;
+    const height = el.clientHeight;
+    const scrollable = el.scrollHeight > height;
+    setView((v) => v.top === top && v.height === height && v.scrollable === scrollable ? v : { top, height, scrollable });
   }, []);
 
   useLayoutEffect(() => {
     readView();
+  }, [readView, offsets]);
+
+  useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => readView());
@@ -171,22 +181,25 @@ export function VirtualList<T>({
 
   const n = items.length;
   const total = offsets[n];
-  const start = Math.max(0, lowerBound(offsets, view.top - overscanPx) - 1);
-  const end = Math.min(n, lowerBound(offsets, view.top + view.height + overscanPx) + 1);
+  const start = windowed ? Math.max(0, lowerBound(offsets, view.top - overscanPx) - 1) : 0;
+  const end = windowed ? Math.min(n, lowerBound(offsets, view.top + view.height + overscanPx) + 1) : n;
 
   return (
     <div
       ref={containerRef}
-      onScroll={onScroll}
+      onScroll={windowed ? onScroll : undefined}
       onWheel={cancelPending}
       onTouchStart={cancelPending}
       onPointerDown={cancelPending}
       onKeyDown={cancelPending}
+      role="region"
+      aria-label="タイムラインのイベント"
+      tabIndex={0}
       className={`overflow-y-auto ${className}`}
-      style={{ overflowAnchor: 'auto' }}
+      style={{ overflowAnchor: 'auto', overscrollBehaviorY: view.scrollable ? 'contain' : 'auto' }}
     >
       {n === 0 && empty}
-      <div style={{ height: offsets[start] }} />
+      {windowed && <div style={{ height: offsets[start] }} />}
       {items.slice(start, end).map((item, i) => {
         const key = keys[start + i];
         return (
@@ -195,7 +208,7 @@ export function VirtualList<T>({
           </MeasuredRow>
         );
       })}
-      <div style={{ height: Math.max(0, total - offsets[end]) }} />
+      {windowed && <div style={{ height: Math.max(0, total - offsets[end]) }} />}
     </div>
   );
 }

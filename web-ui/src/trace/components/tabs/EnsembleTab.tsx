@@ -42,6 +42,10 @@ export function EnsembleTab({ mode = 'all', onTurnSelect, ...props }: TabProps &
     }));
     return new Map(entries);
   },[props.ep.runId,props.ep.episodeId,props.ep.generation,signature]);
+  const oracle = dataOf(props.model.episodeStart, 'episode_start').config_flags?.use_oracle_code === true;
+  if (oracle && !props.model.calls.some(call => call.callKind === 'ensemble_member' || call.callKind === 'ensemble_synthesis')) {
+    return <Notice>Oracleの既定コードで実行した試行です。モデルによる候補生成・統合はありません。</Notice>;
+  }
   const evidence = loaded.data ?? new Map<string,EnsembleEvidence>();
   const groups: {key:string; calls:LogicalCall[]}[] = [];
   for (const member of members) {

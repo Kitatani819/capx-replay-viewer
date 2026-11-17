@@ -16,7 +16,7 @@
  * Related: tabs/*.tsx, TraceViewerPage.tsx.
  */
 
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { dataAssetRef, pendingAsset, type DataAssetState } from '../dataAsset';
 import { LABELS } from '../labels';
 import type { EpisodeModel, Selection, TNode } from '../model';
@@ -56,7 +56,6 @@ export interface TabProps {
 
 interface DetailTabsProps extends Omit<TabProps, 'selection'> {
   apiPythonMode?: boolean;
-  revealPrompt?: boolean;
   selection: Selection | null;
   tab: number;
   onTab: (i: number) => void;
@@ -134,28 +133,8 @@ export function DataAssetNotice({
   return rows.length ? <div className="space-y-1 mb-2">{rows}</div> : null;
 }
 
-export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, revealPrompt = false, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
-  // A new tab or a new event starts at the top. (Runs before the children's passive
-  // effects, so a range focus or a marked line can still scroll itself into view.)
-  const panelRef = useRef<HTMLDivElement>(null);
+export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
   const eventId = selection?.eventId ?? null;
-  useLayoutEffect(() => {
-    if (panelRef.current) panelRef.current.scrollTop = 0;
-  }, [tab, eventId, apiPythonMode]);
-  useLayoutEffect(() => {
-    const panel = panelRef.current;
-    if (!panel || !revealPrompt || tab !== 0 || apiPythonMode) return;
-    const reveal = () => {
-      const target = panel.querySelector<HTMLElement>('[data-playback-input]');
-      if (!target) return false;
-      panel.scrollTop += target.getBoundingClientRect().top - panel.getBoundingClientRect().top;
-      return true;
-    };
-    if (reveal()) return;
-    const observer = new MutationObserver(() => { if (reveal()) observer.disconnect(); });
-    observer.observe(panel, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [tab, eventId, revealPrompt, apiPythonMode]);
   let body: ReactNode;
   if (!selection) {
     body = (
@@ -181,7 +160,7 @@ export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, revea
     }
   }
   return (
-    <div className="replay-inspector flex flex-col h-full min-h-0 bg-surface-raised">
+    <div className="replay-inspector bg-surface-raised">
       <div role="tablist" aria-label="処理の詳細" className="replay-tabs flex-shrink-0 flex items-end border-b border-surface-border overflow-x-auto">
         {LABELS.replayTabs.map((label, i) => (
           <button
@@ -198,7 +177,7 @@ export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, revea
           </button>
         ))}
       </div>
-      <div ref={panelRef} role="tabpanel" data-selected-event={eventId ?? undefined} className="replay-detail-body flex-1 min-h-0 overflow-y-auto">
+      <div role="tabpanel" data-selected-event={eventId ?? undefined} className="replay-detail-body">
         {selection && <DataAssetNotice events={selection.node.events} related={assetEvents} states={assetStates} onRetry={onRetryAsset} />}
         <ErrorBoundary key={`${tab}|${eventId ?? ''}`} label={`「${LABELS.replayTabs[tab] ?? ''}」タブ`}>
           {body}

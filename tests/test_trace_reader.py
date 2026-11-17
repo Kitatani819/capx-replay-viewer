@@ -570,6 +570,29 @@ def test_run_listing_needs_only_the_status(tmp_path: Path, monkeypatch: pytest.M
     assert reader.run_detail(root, "r1")["episodes"][0]["task"] == "from_event"
 
 
+@pytest.mark.parametrize("event_run", ["run", "another_run"])
+def test_run_detail_includes_matching_startup_hook_failures(tmp_path: Path, event_run: str) -> None:
+    episode = {
+        "status": "ended", "trace_complete": False,
+        "gaps": [{"code": "hook_install_failed", "count": 1, "first_seq": 1}],
+        "source": "envs.runner", "task": "t", "condition": None, "condition_label": None,
+        "seed": 301, "attempt_index": 1, "runner_invocation": None, "started_wall_time": 1.0,
+        "env": {"viser_port": None}, "pid": 3, "host": "h",
+    }
+    ep = _episode(tmp_path, "ep", episode_json=episode, heartbeat_age=None)
+    failure = {"hook": "H5/H6", "target": "capx.utils.launch_utils", "reason": "_build_multi_turn_decision_prompt_legacy: not found"}
+    start = {"event_type": "episode_start", "seq": 1, "run_id": event_run, "episode_id": "ep",
+             "data": {"tracer": {"hooks_failed": [{**failure, "other": "not part of the summary"}]}}}
+    _write(ep / "events.jsonl", json.dumps(start).encode() + b"\n")
+
+    summary, = reader.run_detail(tmp_path, "run")["episodes"]
+    assert summary["status"] == "ended_with_gaps" and summary["gaps"] == episode["gaps"]
+    if event_run == "run":
+        assert summary["startup_hook_failures"] == {"seq": 1, "failures": [failure]}
+    else:
+        assert "startup_hook_failures" not in summary
+
+
 @pytest.mark.parametrize("content", [b"", b'{"run_id": "r1", "created_at": "2026-09'])
 def test_run_with_a_damaged_run_json_is_listed_and_detailed(tmp_path: Path, content: bytes) -> None:
     root = tmp_path / "traces"

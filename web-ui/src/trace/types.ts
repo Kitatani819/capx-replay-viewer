@@ -44,6 +44,8 @@ export interface Artifact {
   reason?: string | null;
   name?: string | null;
   turn_index?: number | null;
+  assembled_from_stream?: boolean | null;
+  assembled_from_return_value?: boolean | null;
 }
 
 export interface EventRefs {
@@ -243,6 +245,12 @@ export interface Gap {
   first_seq?: number | null;
 }
 
+/** Startup hook failures from the first event, included when a summary reports a hook gap. */
+export interface StartupHookFailures {
+  seq: number;
+  failures: unknown[];
+}
+
 // ---------------------------------------------------------------------------
 // 5.2 Data per event type
 // ---------------------------------------------------------------------------
@@ -368,6 +376,8 @@ export interface ModelResponseData {
   response_model?: string | null;
   response_id?: string | null;
   payload_path?: string | null;
+  body_captured?: boolean | null;
+  source?: string | null;
 }
 
 export interface ModelErrorData {
@@ -383,6 +393,7 @@ export interface ModelErrorData {
   message_redacted?: boolean | null;
   body_excerpt?: TextValue | null;
   body_excerpt_redacted?: boolean | null;
+  reason?: string | null;
   latency_s?: number | null;
   /** Streamed calls (web trial hook): the text received before the error or the stop (GeneratorExit). */
   streamed?: boolean | null;
@@ -625,6 +636,8 @@ export interface TraceWarningData {
   candidates?: string[] | null;
   /** False for warnings that are not a recording gap (ambiguous_episode, stale_context at episode start). */
   counts_as_gap?: boolean | null;
+  /** The writer already counted this gap before emitting the warning. */
+  writer_generated?: boolean | null;
   /** hook_install_failed in a run's unscoped log: a failure of the whole process, not of one episode. */
   run_level?: boolean | null;
   /** internal_error of recorder code that ran outside any episode (unscoped log). */
@@ -738,6 +751,7 @@ export interface EpisodeSummary {
   end_reason?: string | null;
   trace_complete?: boolean | null;
   gaps?: Gap[] | null;
+  startup_hook_failures?: StartupHookFailures | null;
   dropped_events?: number | null;
   late_events?: number | null;
   n_warnings?: number | null;

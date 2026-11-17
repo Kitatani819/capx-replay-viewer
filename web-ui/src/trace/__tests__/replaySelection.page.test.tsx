@@ -42,6 +42,159 @@ function player(props:PlayerProps) {
   return {page,media,video,metadata,current};
 }
 
+function watchProcessScroll(p: ReturnType<typeof player>): number[] {
+  const list = findAll(p.page.output, 'div').find(el => el.props['aria-label'] === '記録された処理');
+  if (!list) throw new Error('missing process list');
+  const positions: number[] = [];
+  (list.props.ref as { current: unknown }).current = {
+    set scrollTop(value: number) { positions.push(value); },
+    querySelector: (selector: string) => selector === '[data-current="true"]' && p.current().length > 0
+      ? { offsetTop: 90, clientHeight: 20 } : null,
+    clientHeight: 100,
+  };
+  return positions;
+}
+
+async function changeSelect(p: ReturnType<typeof player>, label: string, value: string) {
+  const select = findAll(p.page.output, 'select').find(el => el.props['aria-label'] === label);
+  if (!select) throw new Error(`missing select: ${label}`);
+  (select.props.onChange as (event: { target: { value: string } }) => void)({ target: { value } });
+  await advance(0);
+}
+
+test('the process list centers on selection, mode, turn and visibility changes while preserving manual scroll on trace updates', async () => {
+  resetBrowser();
+  const rec = recording();
+  const p = player({ model: rec.model, videos: [{ name: 'video_combined.mp4', url: '/video' }],
+    ep: { runId: 'run', episodeId: 'ep' }, initialKey: rec.sam.key, logPanel: 'recorded logs', onSelect: () => {} });
+  const positions = watchProcessScroll(p);
+  const toggleLogs = async (label: string) => {
+    const button = findAll(p.page.output, 'button').find(el => el.props.children === label);
+    if (!button) throw new Error(`missing button: ${label}`);
+    (button.props.onClick as () => void)();
+    await advance(0);
+  };
+  try {
+    await p.metadata();
+    assert.deepEqual(positions, [50]);
+
+    const warning = { ...rec.tail.primary, event_id: 'extra-warning', seq: rec.tail.seq + 1, event_type: 'trace_warning' };
+    const model = buildEpisodeModel([...rec.model.events, warning]);
+    p.page.update({ ...p.page.props, model });
+    await advance(0);
+    assert.equal(positions.length, 1, 'a trace update with the same selection leaves the list where the user scrolled');
+
+    p.page.update({ ...p.page.props, initialKey: rec.code.key });
+    await advance(0);
+    assert.equal(positions.length, 2);
+    await changeSelect(p, '表示する処理', 'all');
+    assert.equal(positions.length, 3);
+    await changeSelect(p, 'リプレイのターン', '1');
+    assert.equal(positions.length, 4);
+    await toggleLogs('詳細ログ');
+    assert.equal(positions.length, 4);
+    await toggleLogs('処理タイムライン');
+    assert.equal(positions.length, 5);
+    await changeSelect(p, '表示する処理', 'api-python');
+    assert.equal(positions.length, 5);
+    await changeSelect(p, '表示する処理', 'all');
+    assert.equal(positions.length, 6);
+  } finally {
+    p.page.unmount();
+  }
+});
+
+test('a selected process row that appears after video metadata is centered once', async () => {
+  resetBrowser();
+  const rec = recording();
+  const p = player({ model: rec.model, videos: [{ name: 'video_combined.mp4', url: '/video' }], onSelect: () => {} });
+  const positions = watchProcessScroll(p);
+  try {
+    p.page.update({ ...p.page.props, initialKey: rec.sam.key });
+    await advance(0);
+    assert.equal(p.current().length, 0);
+    assert.equal(positions.length, 0);
+    await p.metadata();
+    assert.equal(p.current()[0].props['data-replay-key'], rec.sam.key);
+    assert.deepEqual(positions, [50]);
+  } finally {
+    p.page.unmount();
+  }
+});
+
+function turnRecording() {
+  const rec = new Rec();
+  rec.episodeStart();
+  rec.blockStart(null, 'x = 0', { block_index: 0, turn_index: 0 });
+  rec.blockStart(null, 'x = 1', { block_index: 1, turn_index: 1 });
+  const videos = [0, 1].map(turnIndex => ({ name: `video_turn_0${turnIndex}.mp4`, url: `/turn${turnIndex}`, turnIndex }));
+  return { model: buildEpisodeModel(rec.events), videos };
+}
+
+test('selecting a turn with a recorded process keeps automatic recording selection available', async () => {
+  resetBrowser();
+  const { model, videos } = turnRecording();
+  const [first, second] = model.blocks;
+  const selections: string[] = [];
+  const p = player({ model, videos, initialKey: first.key, onSelect: node => selections.push(node.key) });
+  try {
+    await p.metadata();
+    await changeSelect(p, 'リプレイのターン', '1');
+    assert.deepEqual(selections, [second.key]);
+    p.page.update({ ...p.page.props, initialKey: second.key });
+    await advance(0);
+    assert.equal(p.video().props.src, '/turn1');
+
+    // A selection from a detail link or URL goes through the same parent prop.
+    p.page.update({ ...p.page.props, initialKey: first.key });
+    await advance(0);
+    assert.equal(p.video().props.src, '/turn0');
+  } finally {
+    p.page.unmount();
+  }
+});
+
+test('selecting a turn with no matching process still opens its recording', async () => {
+  resetBrowser();
+  const { model, videos } = turnRecording();
+  const selections: string[] = [];
+  const p = player({ model, videos, initialKey: model.blocks[0].key, processMode: 'prompts',
+    onSelect: node => selections.push(node.key) });
+  try {
+    await changeSelect(p, 'リプレイのターン', '1');
+    assert.deepEqual(selections, []);
+    assert.equal(p.video().props.src, '/turn1');
+  } finally {
+    p.page.unmount();
+  }
+});
+
+test('the process list waits for combined video metadata and shows unsynced rows for an unknown duration', async () => {
+  resetBrowser();
+  const { model } = recording();
+  const p = player({ model, videos: [{ name: 'video_combined.mp4', url: '/video' }], onSelect: () => {} });
+  const status = () => findAll(p.page.output, 'div').find(el => el.props.role === 'status')?.props.children;
+  const unsyncedRows = () => findAll(p.page.output, 'button').filter(el => el.props['data-replay-sync'] === 'unmapped');
+  const hasEmptyMessage = () => findAll(p.page.output, 'p').some(el => el.props.children === 'この表示条件に該当する処理の記録はありません。');
+  try {
+    assert.equal(status(), '動画を読み込み中です。');
+    assert.equal(unsyncedRows().length, 0);
+    p.media.duration = NaN;
+    await p.metadata();
+    assert.equal(status(), '動画を読み込み中です。');
+    assert.equal(unsyncedRows().length, 0);
+    assert.equal(hasEmptyMessage(), false);
+
+    p.media.duration = Infinity;
+    await p.metadata();
+    assert.match(String(status()), /同期情報なし.*動画の長さ/);
+    assert.doesNotMatch(String(status()), /読み込み中/);
+    assert.ok(unsyncedRows().length > 0);
+  } finally {
+    p.page.unmount();
+  }
+});
+
 test('archived replay initializes the parent with the current-position cue, never a local-only highlight',async()=>{
   resetBrowser();const rec=recording();const chosen:string[]=[];
   const props:PlayerProps={model:rec.model,videos:[{name:'video_combined.mp4',url:'/video'}],initialKey:null,

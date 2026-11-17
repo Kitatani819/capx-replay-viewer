@@ -22,6 +22,7 @@ import { codePointToUtf16 } from '../../offsets';
 import { dataOf, type OutputSlice, type TextValue } from '../../types';
 import { Badge, EventLink, KV, Notice, NotRecorded, SectionTitle, Spinner } from '../common';
 import { CodeView } from '../CodeView';
+import { UnavailableEventData } from '../DataAssetState';
 import { TextView, type HighlightRange } from '../TextView';
 import { roleTone } from '../Timeline';
 import { ArgUnits, ReturnUnits, ValueView, type EpisodeRef } from '../ValueView';
@@ -91,7 +92,7 @@ function StreamWithSlice({ ep, value, slice, stream, title }: { ep: EpisodeRef; 
   );
 }
 
-function ApiCallLog({ model, ep, onSelect, node }: TabProps & { node: TNode }) {
+function ApiCallLog({ model, ep, onSelect, node, assetStates, onRetryAsset }: TabProps & { node: TNode }) {
   const d = dataOf(node.primary, 'api_call_start');
   const endEv = node.end;
   const ed = endEv ? dataOf(endEv, 'api_call_end') : null;
@@ -131,7 +132,7 @@ function ApiCallLog({ model, ep, onSelect, node }: TabProps & { node: TNode }) {
       <SectionTitle>引数</SectionTitle>
       {argsTruncated !== undefined && <div className="text-[11px] text-amber-300">要約の上限に達したため、以降の引数は省略されています（{String(argsTruncated)}）</div>}
       {args === undefined ? (
-        <NotRecorded />
+        <UnavailableEventData ev={node.primary} assetStates={assetStates} onRetryAsset={onRetryAsset}/>
       ) : argEntries ? (
         argEntries.length === 0 ? (
           <div className="text-xs text-text-tertiary">引数なし</div>
@@ -163,7 +164,7 @@ function ApiCallLog({ model, ep, onSelect, node }: TabProps & { node: TNode }) {
               <ReturnUnits units={units} value={ed.return} />
             </>
           ) : (
-            <NotRecorded />
+            <UnavailableEventData ev={endEv} assetStates={assetStates} onRetryAsset={onRetryAsset}/>
           )}
         </>
       )}
@@ -337,7 +338,7 @@ function BlockLog({ ep, onSelect, block }: TabProps & { block: TNode }) {
   );
 }
 
-function ServiceLog({ ep, node }: TabProps & { node: TNode }) {
+function ServiceLog({ ep, node, assetStates, onRetryAsset }: TabProps & { node: TNode }) {
   const sd = dataOf(node.primary, 'service_call_start');
   const ed = node.end ? dataOf(node.end, 'service_call_end') : null;
   // The recorder learns the endpoint from the HTTP attempt, so it is on the end event.
@@ -352,7 +353,7 @@ function ServiceLog({ ep, node }: TabProps & { node: TNode }) {
       {budget > 0 && <Notice tone="amber">{arrayBudgetLabel(budget)}。該当する値は「未取得（array_budget）」と表示されます。</Notice>}
       {node.degraded && (
         <Notice tone="amber">
-          degraded: HTTP の試行が失敗しましたが、関数は値を返しました（SAM3 と Molmo は通信エラーを内部で握りつぶします）。
+          HTTPの試行に失敗があり、サービスは値を返しました。
           {ed?.degraded_reason ? `（記録: ${ed.degraded_reason}）` : ''}
         </Notice>
       )}
@@ -362,16 +363,16 @@ function ServiceLog({ ep, node }: TabProps & { node: TNode }) {
           ['service', `${sd.service ?? ed?.service ?? '?'}.${sd.function ?? ed?.function ?? ''}`],
           ['endpoint', endpoint || '—'],
           ['latency', fmtDuration(ed?.latency_s ?? null)],
-          ['状態', node.open ? '終了イベントなし' : node.end?.event_type === 'service_call_error' ? `エラー ${ed?.error_type ?? ''}` : 'ok'],
+          ['状態', node.open ? '終了イベントなし' : node.end?.event_type === 'service_call_error' ? `エラー ${ed?.error_type ?? ''}` : node.degraded ? '通信失敗あり（degraded）' : 'ok'],
         ]}
       />
       {node.end?.event_type === 'service_call_error' && ed && (
         <ExceptionMessage ep={ep} type={ed.error_type ?? null} message={ed.message ?? null} alarm={false} redacted={ed.message_redacted === true} cut={ed.message_cut === true} />
       )}
       <SectionTitle>リクエストの要約</SectionTitle>
-      {sd.request_summary === undefined ? <NotRecorded /> : <ValueView value={sd.request_summary} ep={ep} />}
+      {sd.request_summary === undefined ? <UnavailableEventData ev={node.primary} assetStates={assetStates} onRetryAsset={onRetryAsset}/> : <ValueView value={sd.request_summary} ep={ep} />}
       <SectionTitle>レスポンスの要約</SectionTitle>
-      {ed?.response_summary === undefined ? <NotRecorded /> : <ValueView value={ed.response_summary} ep={ep} />}
+      {ed?.response_summary === undefined ? <UnavailableEventData ev={node.end} assetStates={assetStates} onRetryAsset={onRetryAsset}/> : <ValueView value={ed.response_summary} ep={ep} />}
       <SectionTitle>HTTP 試行</SectionTitle>
       {attempts.length === 0 && <div className="text-xs text-text-tertiary">記録なし</div>}
       {attempts.map((a, i) => (

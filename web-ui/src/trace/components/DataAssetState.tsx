@@ -15,8 +15,22 @@
 import { pendingAsset, type DataAssetState } from '../dataAsset';
 import { LABELS } from '../labels';
 import type { TraceEvent } from '../types';
+import { NotRecorded } from './common';
 
 export const NO_ASSET_STATES: ReadonlyMap<string, DataAssetState> = new Map();
+
+export interface EventDataAccess {
+  assetStates?: ReadonlyMap<string, DataAssetState>;
+  onRetryAsset?: (ev: TraceEvent) => void;
+}
+
+export function UnavailableEventData({ ev, assetStates = NO_ASSET_STATES, onRetryAsset, reason }: EventDataAccess & {
+  ev: TraceEvent | null | undefined;
+  reason?: string;
+}) {
+  if (ev && pendingAsset(ev, assetStates)) return <DataAssetInline ev={ev} states={assetStates} onRetry={onRetryAsset}/>;
+  return <NotRecorded reason={reason}/>;
+}
 
 export function DataAssetInline({
   ev,

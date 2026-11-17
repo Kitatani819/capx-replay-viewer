@@ -15,7 +15,7 @@
  * Related: model.ts (keyFramesOf, framesAround), TraceImage.tsx.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { episodeFileUrl } from '../api';
 import { fmtBytes, shortSha } from '../format';
 import { LABELS, frameOffsetLabel } from '../labels';
@@ -35,6 +35,7 @@ import {
 } from '../model';
 import { dataOf, type ImageInfo } from '../types';
 import { Badge, DebugFrameChip, SentToModelChip, SmallButton } from './common';
+import type { EventDataAccess } from './DataAssetState';
 import { TraceImage } from './TraceImage';
 import { VideoPlayback, type ReplayProcessMode, type ReplaySeek } from './VideoPlayback';
 import type { TrialVideo } from '../playback';
@@ -43,7 +44,7 @@ import type { EpisodeRef } from './ValueView';
 
 export type { Live3dState } from '../live';
 
-interface MediaPaneProps {
+interface MediaPaneProps extends EventDataAccess {
   logPanel?: ReactNode;
   seekRequest?: ReplaySeek | null;
   videos?: TrialVideo[];
@@ -64,7 +65,7 @@ interface MediaPaneProps {
   follow: boolean;
 }
 
-export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, processMode, onProcessModeChange, onApiPythonModeChange }: MediaPaneProps) {
+export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, processMode, onProcessModeChange, onApiPythonModeChange, assetStates, onRetryAsset }: MediaPaneProps) {
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -83,7 +84,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
   }, [live3d.available, tab]);
 
   return (
-    <div className="replay-media flex flex-col h-full min-h-0">
+    <div className="replay-media flex flex-col min-w-0">
       <div className="replay-media-tools">
         <label>表示 <select aria-label="動画・記録フレーム" value={tab} onChange={e=>setTab(e.target.value as 'video'|'recorded'|'live')}>
           {videos.length>0 && <option value="video">動画</option>}
@@ -110,18 +111,19 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
         )}
       </div>
       {tab === 'video' ? (
-        <div className="replay-video flex-1 min-h-0">
+        <div className="replay-video min-w-0">
           <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} ep={ep} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} onClearSelection={onPlaybackClear} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} onApiPythonModeChange={onApiPythonModeChange}
             processMode={processMode} onProcessModeChange={onProcessModeChange}
+            assetStates={assetStates} onRetryAsset={onRetryAsset}
             selectionFromPlayback={selectionFromPlayback} liveMode={replayLive} allowInitialSelection={allowReplayInitialSelection} onInteract={onReplayInteract}/>
         </div>
       ) : tab === 'live' && live3d.available ? (
-        <div className="flex-1 min-h-0 flex flex-col">
+        <div className="flex flex-col">
           <div className="flex-shrink-0 px-3 py-1 text-[11px] text-amber-200 bg-amber-500/10 border-b border-amber-500/30">{LABELS.live3dCaption}</div>
-          <iframe src="/viser-proxy/" title={LABELS.live3dCaption} className="flex-1 w-full border-0 bg-surface-sunken" allow="fullscreen" />
+          <iframe src="/viser-proxy/" title={LABELS.live3dCaption} className="h-[60dvh] w-full border-0 bg-surface-sunken" allow="fullscreen" />
         </div>
       ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3">
+        <div className="p-3 space-y-3">
           {!node && <div className="text-xs text-text-tertiary">イベントを選択すると、対応する画像とフレームを表示します。</div>}
           {node?.kind === 'model_call' && node.call && <ModelImages ep={ep} selection={selection!} model={model} />}
           {node && (node.kind === 'code_block' || node.kind === 'api_call') && <KeyFrames ep={ep} kf={kf} camera={cam} endMissing={node.end === null} />}
@@ -133,7 +135,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
           )}
         </div>
       )}
-      {tab !== 'video' && logPanel && <div className="h-[40%] min-h-0 border-t border-surface-border">{logPanel}</div>}
+      {tab !== 'video' && logPanel && <div className="border-t border-surface-border">{logPanel}</div>}
     </div>
   );
 }
@@ -302,7 +304,7 @@ function FlipbookSection({ model, ep, selection, camera, follow }: { model: Epis
   const { frames, start } = useMemo(() => framesAround(model, selection.node, camera), [model, selection.node, camera]);
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex flex-wrap items-center gap-2 mb-2">
         <span className="text-[11px] font-bold font-display uppercase tracking-widest text-text-tertiary">記録フレーム（イベント前後）</span>
         <DebugFrameChip />
       </div>
@@ -324,6 +326,8 @@ export function Flipbook({ frames, startIndex, ep, follow = false }: { frames: F
   const [idx, setIdx] = useState(Math.min(startIndex, frames.length - 1));
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
+  const [zoomed, setZoomed] = useState(false);
+  const viewport = useRef<HTMLDivElement>(null);
   // Live: show the newest frame as frames arrive (unless the viewer is playing).
   useEffect(() => {
     if (follow && !playing) setIdx(frames.length - 1);
@@ -331,6 +335,13 @@ export function Flipbook({ frames, startIndex, ep, follow = false }: { frames: F
   const i = Math.min(idx, frames.length - 1);
   const f = frames[i];
   const url = (fr: FrameRec | undefined) => (fr && fr.written && fr.path ? episodeFileUrl(ep, fr.path) : null);
+  const src = url(f);
+
+  useEffect(() => {
+    const view = viewport.current;
+    if (!zoomed || !view) return;
+    view.scrollLeft = (view.scrollWidth - view.clientWidth) / 2;
+  }, [zoomed]);
 
   useEffect(() => {
     if (!playing) return;
@@ -358,17 +369,6 @@ export function Flipbook({ frames, startIndex, ep, follow = false }: { frames: F
 
   return (
     <div className="space-y-1.5">
-      <TraceImage
-        src={url(f)}
-        alt={`frame ${f.camera} e${f.epoch} #${f.bufferIndex}`}
-        provenance="debug_frame"
-        className="h-56 w-full"
-        meta={
-          <span>
-            camera {f.camera} · epoch {f.epoch} · buffer_index {f.bufferIndex} · sim_step {f.simStep ?? '不明'} · {f.reason} · seq {f.event.seq}
-          </span>
-        }
-      />
       <div className="flex flex-wrap items-center gap-1">
         <SmallButton onClick={() => setIdx(0)} title="最初">⏮</SmallButton>
         <SmallButton onClick={() => setIdx(Math.max(0, i - 1))} title="1 フレーム戻る">◀</SmallButton>
@@ -392,6 +392,10 @@ export function Flipbook({ frames, startIndex, ep, follow = false }: { frames: F
             ))}
           </select>
         </label>
+        <SmallButton onClick={() => setZoomed((value) => !value)} active={zoomed} disabled={!src && !zoomed}
+          title={zoomed ? 'フレーム全体に戻す' : '拡大してスクロール'}>
+          {zoomed ? '全体表示' : '拡大'}
+        </SmallButton>
         <span className="ml-auto text-[11px] text-text-tertiary font-mono">
           {i + 1}/{frames.length}
         </span>
@@ -409,6 +413,21 @@ export function Flipbook({ frames, startIndex, ep, follow = false }: { frames: F
         className="w-full accent-[#D4A017]"
         aria-label="フレーム位置"
       />
+      <div ref={viewport} className="replay-recorded-frame-viewport" data-zoomed={zoomed}
+        role="region" aria-label="記録フレームの画像" tabIndex={zoomed ? 0 : undefined}>
+        <TraceImage
+          src={src}
+          alt={`frame ${f.camera} e${f.epoch} #${f.bufferIndex}`}
+          provenance="debug_frame"
+          compact
+          className="replay-recorded-frame"
+          meta={
+            <span>
+              camera {f.camera} · epoch {f.epoch} · buffer_index {f.bufferIndex} · sim_step {f.simStep ?? '不明'} · {f.reason} · seq {f.event.seq}
+            </span>
+          }
+        />
+      </div>
       <div className="text-[10px] text-text-tertiary font-mono">
         sim_step {f.simStep ?? '不明'} · e{f.epoch} #{f.bufferIndex} · {f.reason}
         {f.forEventId ? ` · for ${f.forEventId}` : ''}

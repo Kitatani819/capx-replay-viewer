@@ -9,13 +9,64 @@ from playwright.sync_api import expect, sync_playwright
 from check_api_python import check_api_python
 
 
+def check_recorded_frame_scroll(page, url: str, event_id: str):
+    page.goto(url + "&event=" + event_id)
+    page.get_by_label("動画・記録フレーム", exact=True).select_option("recorded")
+    frame = page.get_by_role("region", name="記録フレームの画像", exact=True)
+    frame.locator("img").evaluate("img => img.decode()")
+    log = page.get_by_role("region", name="タイムラインのイベント", exact=True)
+    expect(log).to_be_visible()
+
+    def position():
+        return log.evaluate("""async el => {
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            return {page: window.scrollY, log: el.scrollTop, height: el.scrollHeight, width: el.offsetWidth};
+        }""")
+
+    page.evaluate("window.scrollTo(0, document.scrollingElement.scrollHeight - innerHeight - 100)")
+    before = position()
+    box = log.bounding_box()
+    y = box["y"] + 100
+    page.mouse.move(box["x"] + 100, y)
+    page.mouse.wheel(0, 720)
+    after = position()
+    assert after["log"] > before["log"], (before, after)
+    assert after["page"] == before["page"] and after["height"] == before["height"], (before, after)
+
+    log.evaluate("el => el.scrollTop = el.scrollHeight")
+    end = position()
+    page.mouse.wheel(0, 150)
+    assert position() == end
+    page.mouse.move(box["x"] / 2, y)
+    page.mouse.wheel(0, 150)
+    assert position()["page"] > end["page"]
+
+    log.evaluate("el => el.scrollTop = 180")
+    before = position()
+    thumb = log.evaluate("""el => {
+        const rect = el.getBoundingClientRect();
+        return {
+            x: rect.right - (el.offsetWidth - el.clientWidth) / 2,
+            y: rect.top + (el.scrollTop + el.clientHeight / 2) * el.clientHeight / el.scrollHeight,
+        };
+    }""")
+    page.mouse.move(thumb["x"], thumb["y"])
+    page.mouse.down()
+    page.mouse.move(thumb["x"], thumb["y"] + 100, steps=10)
+    page.mouse.up()
+    after = position()
+    assert after["log"] > before["log"], (before, after)
+    assert after["page"] == before["page"] and after["width"] == before["width"], (before, after)
+    expect(page.get_by_role("tabpanel")).to_have_attribute("data-selected-event", event_id)
+
+
 def check(base_url: str, root: Path, output: Path):
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     output.mkdir(parents=True, exist_ok=True)
     errors, passed, observations = [], [], {}
     url = base_url + "/traces?" + urlencode({"view": "details", "run": manifest["run"], "episode": manifest["episode"]})
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(headless=True, ignore_default_args=["--hide-scrollbars"])
         page = browser.new_page(viewport={"width": 1600, "height": 1000})
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.set_default_timeout(12000)
@@ -346,6 +397,9 @@ def check(base_url: str, root: Path, output: Path):
             passed.append('Simulated running trace: polls new events without video overriding Live; playback or external URL enters Browse; re-enabling Live pauses video and follows appended events')
 
             passed.extend(check_api_python(page, url, recorded_events, output))
+
+            check_recorded_frame_scroll(page, url, manifest["events"]["block_0"])
+            passed.append("Recorded frames: log wheel and scrollbar stay in the log, and the page scrolls outside it")
 
             legacy = manifest["legacy"]
             page.goto(base_url + "/traces?" + urlencode({"view": "details", "legacy_run": legacy["run"],

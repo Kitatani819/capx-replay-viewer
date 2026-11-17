@@ -33,7 +33,7 @@ body {
 
 #root {
   height: 100vh;
-  width: 100vw;
+  width: 100%;
 }
 
 /* Custom scrollbar — dark with gold accent on hover */
@@ -142,10 +142,9 @@ details[open] summary::before {
   max-width: calc(100% - 424px);
 }
 @media (max-width: 900px) {
-  .replay-layout { flex-direction: column; overflow-y: auto; }
+  .replay-layout { flex-direction: column; }
   .replay-layout > [role="separator"] { display: none; }
-  .replay-left { width: 100% !important; max-width: none !important; height: 640px; flex-shrink: 0; }
-  .replay-details { min-height: 580px; flex-shrink: 0; }
+  .replay-left { width: 100% !important; max-width: none !important; }
 }
 [data-replay-event][data-current="true"],
 [data-timeline-event][aria-pressed="true"] {

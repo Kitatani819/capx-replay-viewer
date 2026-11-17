@@ -1,16 +1,18 @@
 /** Bidirectional, frame-based replay using the existing native video player. */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { apiDefinition } from '../apiDefinitions';
 import { enclosingBlock, nodeTitle, type EpisodeModel, type TNode } from '../model';
-import { cameraVideos, chooseExecutionVideo, cueAt, groupCues, playbackMap, primaryPlaybackCues, type TrialVideo, type PlaybackCue } from '../playback';
+import { cameraVideos, chooseExecutionVideo, cueAt, groupCues, isPrimaryReplayNode, playbackMap, primaryPlaybackCues, type TrialVideo, type PlaybackCue } from '../playback';
 import { processLabel, processTitle, recordedTurns, turnOf } from '../replay';
 import { SmallButton } from './common';
 import { ApiPythonPanel } from './ApiPythonPanel';
+import type { EventDataAccess } from './DataAssetState';
 import type { EpisodeRef } from './ValueView';
 
 export interface ReplaySeek { key: string; token: number }
 export type ReplayProcessMode = 'main' | 'all' | 'prompts' | 'actions' | 'api-python';
 
-export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRequest, initialKey, selectionFromPlayback = false, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract, ep, processMode, onProcessModeChange, onApiPythonModeChange}: {
+export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRequest, initialKey, selectionFromPlayback = false, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract, ep, processMode, onProcessModeChange, onApiPythonModeChange, assetStates, onRetryAsset}: EventDataAccess & {
   ep?: EpisodeRef;
   processMode?: ReplayProcessMode;
   onProcessModeChange?: (mode: ReplayProcessMode) => void;
@@ -33,7 +35,8 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const initialNode=model.allNodes.find(n=>n.key===initialKey);
   const initialBlock=initialNode ? enclosingBlock(model,initialNode) ?? initialNode.call?.producedBlocks[0] : undefined;
   const preferred=combined.length===0 && initialBlock ? chooseExecutionVideo(initialBlock,videos).video : undefined;
-  const chosen=videos.find(v=>v.name===name) ?? preferred ?? videos[0];
+  const selectedRecording=videos.find(v=>v.name===name);
+  const chosen=selectedRecording ?? preferred ?? videos[0];
   const [duration,setDuration]=useState(0);
   const [time,setTime]=useState(0);
   const [follow,setFollow]=useState(false);
@@ -47,6 +50,7 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const [turn,setTurn]=useState<number|null>(null);
   const video=useRef<HTMLVideoElement>(null);
   const list=useRef<HTMLDivElement>(null);
+  const lastCentered=useRef<string|null>(null);
   const selected=useRef<string|null>(null);
   const observedSelection=useRef(initialKey ?? null);
   // Updated synchronously with user intent so an effect from the previous
@@ -63,14 +67,23 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const apiPanelVisible=Boolean(chosen && ep && apiMode && !showLogs && !simple);
   const cues=apiMode ? apiCues : mode==='main' ? mainCues : map[mode];
   const initialCues=apiMode && apiCues.length ? apiCues : mainCues;
+  const withoutTime = useMemo(() => map.unsynced.filter(node => {
+    if (mode === 'main') return isPrimaryReplayNode(node);
+    if (mode === 'api-python') return node.kind === 'api_call';
+    if (mode === 'prompts') return node.kind === 'model_call';
+    if (mode === 'actions') return node.kind !== 'model_call';
+    return true;
+  }).sort((a, b) => a.seq - b.seq), [map, mode]);
   useEffect(()=>{onApiPythonModeChange?.(apiPanelVisible);},[apiPanelVisible,onApiPythonModeChange]);
   useEffect(()=>()=>onApiPythonModeChange?.(false),[onApiPythonModeChange]);
   // A paused player must never invent a selected row from its initial time=0.
   // The same parent selection drives both the row and the right-hand inspector.
-  const current=map.all.find(c=>c.node.key===initialKey) ?? null;
   const playbackCurrent=cueAt(cues,time);
   const visible=cues.filter(c=>turn===null || turnOf(c.node)===turn);
   const groups=groupCues(visible);
+  const showProcessRows = !map.pending || mediaError;
+  const visibleWithoutTime = !apiMode && showProcessRows
+    ? withoutTime.filter(node => turn === null || turnOf(node) === turn) : [];
   useEffect(()=>{setDuration(0);setTime(0);setMediaError(false);setPlaying(false);setPlayError(false);following.current=false;setFollow(false);selected.current=null;appliedSeek.current=null;initialized.current=false;programmaticSeek.current=null;},[chosen?.url]);
   useEffect(()=>{
     if(liveMode){video.current?.pause();following.current=false;setFollow(false);selected.current=null;}
@@ -137,12 +150,21 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
     if(turn!==null)setTurn(turnOf(playbackCurrent.node));
     onSelect(playbackCurrent.node);
   },[playbackCurrent,follow,onSelect,turn,liveMode,apiMode,map.reason,initialKey,onClearSelection]);
-  useEffect(()=>{
-    const row=list.current?.querySelector<HTMLElement>('[data-current="true"]');
-    if(row && list.current) list.current.scrollTop=row.offsetTop-list.current.clientHeight/2+row.clientHeight/2;
-  },[current?.node.key]);
+  useEffect(() => {
+    if (showLogs || apiMode) {
+      lastCentered.current = null;
+      return;
+    }
+    const key = `${initialKey}|${mode}|${turn}`;
+    if (lastCentered.current === key) return;
+    const pane = list.current;
+    const row = pane?.querySelector<HTMLElement>('[data-current="true"]');
+    if (!pane || !row) return;
+    pane.scrollTop = row.offsetTop - (pane.clientHeight - row.clientHeight) / 2;
+    lastCentered.current = key;
+  }, [initialKey, map, mode, turn, showLogs, apiMode, showProcessRows]);
   const jump=(cue:PlaybackCue, alignTurn=turn!==null)=>{seek(cue,alignTurn);onSelect(cue.node,true);};
-  const selectApiOrBlock=(node:TNode)=>{
+  const selectRecordedNode=(node:TNode)=>{
     const cue=map.all.find(c=>c.node.key===node.key);
     if(cue){jump(cue);return;}
     video.current?.pause();following.current=false;setFollow(false);
@@ -173,8 +195,23 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const clock=(seconds:number)=>Number.isFinite(seconds)?`${Math.floor(seconds/60)}:${(seconds%60).toFixed(2).padStart(5,'0')}`:'0:00';
   // A range with centisecond steps can round the last selectable value.
   const sliderEnd = Number.isFinite(duration) && duration > 0 ? Math.max(.01, Number(duration.toFixed(2))) : 0;
-  return <div className={`replay-player h-full min-h-0 flex flex-col${apiPanelVisible ? ' replay-api-python' : ''}`}>
-    {(map.reason || mediaError) && <div role="status" className="replay-sync-warning">同期情報なし · {mediaError?'動画を読み込めません。':map.reason}</div>}
+  const syncMessage = mediaError ? '動画を読み込めません。' : map.reason && (map.pending ? map.reason : `同期情報なし · ${map.reason}`);
+  const eventRow = (node: TNode, cue?: PlaybackCue) => {
+    const active = node.key === initialKey;
+    const description = apiDefinition(node)?.summaryJa;
+    return <button key={node.key} data-current={active} data-replay-key={node.key} data-replay-event={node.primary.event_id}
+      data-replay-sync={cue ? 'synced' : 'unmapped'} aria-pressed={active} onClick={() => cue ? jump(cue) : selectRecordedNode(node)}
+      className="replay-event-row" title={`${nodeTitle(node)} · 記録順 #${node.seq}${cue?.positionSource === 'turn_synthesis' ? ' · 同じターンの統合位置を参照' : ''}`}>
+      <span className="replay-event-time">{cue ? cue.time.toFixed(2) : '同期なし'}</span>
+      <span className="replay-event-name">{processTitle(node)}
+        {description && <small>{description}</small>}
+        {cue?.positionSource === 'turn_synthesis' && <small>同じターンの統合位置を参照</small>}
+      </span>
+      <span className="replay-event-kind">{cue?.candidateCount !== undefined ? `候補生成（${cue.candidateCount}件）` : processLabel(node) || '記録'}</span>
+    </button>;
+  };
+  return <div className={`replay-player flex flex-col${simple ? ' h-full min-h-0' : ''}${apiPanelVisible ? ' replay-api-python' : ''}`}>
+    {syncMessage && <div role="status" className="replay-sync-warning">{syncMessage}</div>}
     <video key={chosen.url} ref={video} src={chosen.url} controls={simple} preload="metadata" aria-label="試行の録画" className={`replay-film ${simple ? 'h-full' : ''}`}
       onLoadedMetadata={e=>{setDuration(e.currentTarget.duration);e.currentTarget.playbackRate=0.5;}}
       onPlay={()=>{setPlaying(true);setPlayError(false);resumeFollow();}}
@@ -201,35 +238,30 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
         <span className="replay-time">{clock(time)} / {clock(duration)}</span>
       </div>
       {playError && <p role="status" className="replay-warning">再生できませんでした。もう一度「再生」を押してください。</p>}
-      <div data-replay-log-panel="" className="replay-process-log flex-1 min-h-0 flex flex-col">
+      <div data-replay-log-panel="" className="replay-process-log">
         <div className="replay-log-heading">
           <span>この試行の流れ</span>
           <label>ターン <select aria-label="リプレイのターン" value={turn??'all'} onChange={e=>{
             const next=e.target.value==='all'?null:Number(e.target.value);setTurn(next);
             const cue=cues.find(c=>next===null || turnOf(c.node)===next);
-            if(cue)jump(cue,next!==null);
-            else {
-              video.current?.pause();following.current=false;setFollow(false);
-              const block=model.blocks.find(b=>turnOf(b)===next);
-              if(combined.length===0 && block){const v=chooseExecutionVideo(block,videos).video;if(v)setName(v.name);}
-              const node=model.allNodes.find(n=>next!==null && turnOf(n)===next);if(node)onSelect(node);
+            if (cue) {
+              jump(cue, next !== null);
+              return;
+            }
+            const node = withoutTime.find(n => next === null || turnOf(n) === next);
+            if (node) {
+              selectRecordedNode(node);
+              return;
+            }
+            video.current?.pause();following.current=false;setFollow(false);
+            const block = model.blocks.find(b => turnOf(b) === next);
+            if (combined.length === 0 && block) {
+              const recording = chooseExecutionVideo(block, videos).video;
+              if (recording) setName(recording.name);
             }
           }}><option value="all">すべて</option>{turns.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
         </div>
-        <div hidden={!showLogs} className="flex-1 min-h-0">{logPanel}</div>
-        {apiPanelVisible && ep && <ApiPythonPanel model={model} ep={ep} apiCues={apiCues} selectedKey={initialKey??null} onSelect={selectApiOrBlock} turn={turn}/>}
-        <div ref={list} hidden={showLogs || apiMode} className="replay-event-list relative flex-1 min-w-0 overflow-y-auto" aria-label="動画に対応するイベント">
-          {groups.map(g=><section key={g.time} data-replay-time={g.time}>
-            {g.cues.map(c=><button key={c.node.key} data-current={current?.node.key===c.node.key} data-replay-key={c.node.key} data-replay-event={c.node.primary.event_id} aria-pressed={current?.node.key===c.node.key} onClick={()=>jump(c)} className="replay-event-row" title={`${nodeTitle(c.node)} · 記録順 #${c.node.seq}${c.positionSource==='turn_synthesis'?' · 同じターンの統合位置を参照':''}`}>
-              <span className="replay-event-time">{c.time.toFixed(2)}</span>
-              <span className="replay-event-name">{processTitle(c.node)}{c.positionSource==='turn_synthesis'&&<small>同じターンの統合位置を参照</small>}</span>
-              <span className="replay-event-kind">{c.candidateCount!==undefined ? `候補生成（${c.candidateCount}件）` : processLabel(c.node) || (c.node.kind==='api_call'?'API':'記録')}</span>
-            </button>)}
-          </section>)}
-          {!map.reason && visible.length===0 && <p className="p-3 text-sm">対応する処理は未記録です。「詳細ログ」から記録を確認できます。</p>}
-          {map.reason && <p className="p-3 text-sm">処理の対応位置は未確認です。「詳細ログ」で保存済みの記録を確認できます。</p>}
-        </div>
-        <div className="replay-log-footer">
+        <div className="replay-log-tools">
           {logPanel && <button className="replay-text-button" onClick={()=>setShowLogs(!showLogs)}>{showLogs?'処理タイムライン':'詳細ログ'}</button>}
           {!showLogs && <select aria-label="表示する処理" value={mode} onChange={e=>changeMode(e.target.value as ReplayProcessMode)}>
             <option value="main">主要な処理</option><option value="all">すべての処理</option><option value="prompts">モデル呼び出し</option><option value="actions">コード・API</option>
@@ -240,8 +272,24 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
             <label>速度 <select aria-label="動画の再生速度" defaultValue="0.5" onChange={e=>{if(video.current)video.current.playbackRate=Number(e.target.value);}}>{[0.25,0.5,1,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label>
             {videos.length > 1 && <label>録画 <select aria-label="録画カメラ" value={chosen.name} onChange={e=>setName(e.target.value)}>{videos.map(v=><option key={v.url}>{v.name}</option>)}</select></label>}
             <label><input type="checkbox" checked={follow} onChange={e=>{if(e.target.checked)resumeFollow();else{selected.current=null;following.current=false;setFollow(false);}}}/> 再生位置に追従</label>
-            <span className="text-xs">{map.reason?'MP4のみ再生できます。':'フレーム記録から同期（間は補間）。同じ位置の処理は記録順です。'}</span>
+            <span className="text-xs">{map.reason ? '動画位置を特定できない処理も記録順に確認できます。' : 'フレーム記録から同期（間は補間）。同じ位置の処理は記録順です。'}</span>
           </div></details>
+        </div>
+        <div hidden={!showLogs}>{logPanel}</div>
+        {apiPanelVisible && ep && <ApiPythonPanel model={model} ep={ep} apiCues={apiCues} selectedKey={initialKey??null} onSelect={selectRecordedNode} turn={turn} assetStates={assetStates} onRetryAsset={onRetryAsset}/>}
+        <div ref={list} hidden={showLogs || apiMode} className="replay-event-list replay-process-scroll relative"
+          role="region" aria-label="記録された処理" tabIndex={0}>
+          {groups.map(g=><section key={g.time} data-replay-time={g.time}>
+            {g.cues.map(c => eventRow(c.node, c))}
+          </section>)}
+          {visibleWithoutTime.length > 0 && <section aria-label="動画位置を特定できない処理">
+            <p className="p-3 text-sm">動画位置を特定できない処理。{combined.length === 0 && !selectedRecording
+              ? '選んだ処理を含む実行の録画があれば切り替えます。'
+              : '選ぶと動画は現在位置で停止します。'}</p>
+            {visibleWithoutTime.map(node => eventRow(node))}
+          </section>}
+          {showProcessRows && visible.length === 0 && visibleWithoutTime.length === 0 &&
+            <p className="p-3 text-sm">この表示条件に該当する処理の記録はありません。</p>}
         </div>
       </div>
     </>}

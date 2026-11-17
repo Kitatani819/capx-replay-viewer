@@ -82,6 +82,73 @@ function player(rec: ReturnType<typeof recording>) {
   return { page, media, video, mode, panel, selections, modes, accept, metadata, changeMode, moveTime };
 }
 
+test('a recorded evaluation beyond the final frame stays selectable without changing the video position', async () => {
+  resetBrowser();
+  const rec = recording();
+  const last = rec.events.at(-1)!;
+  const evaluation: TraceEvent = {
+    ...last, event_id: 'final-evaluation', event_type: 'evaluator_result', seq: last.seq + 1,
+    sim_step: 120, sim_epoch: 0, data: { scope: 'episode', reward: 1, task_completed: true },
+  };
+  const events = [...rec.events, evaluation];
+  const p = player({ ...rec, events, model: buildEpisodeModel(events) });
+  await p.metadata();
+  await p.changeMode('all');
+  await p.media.play();
+  await p.moveTime(3.25);
+  const row = () => findAll(p.page.output, 'button').find(button => button.props['data-replay-event'] === evaluation.event_id)!;
+  assert.equal(row().props['data-replay-sync'], 'unmapped');
+  (row().props.onClick as Function)();
+  await p.accept();
+  assert.equal(p.media.currentTime, 3.25);
+  assert.equal(p.media.paused, true);
+  assert.equal(p.selections.at(-1)?.node.primary.event_id, evaluation.event_id);
+  assert.equal(row().props['aria-pressed'], true);
+  p.page.unmount();
+});
+
+test('unsynced process rows switch turn recordings and remain selectable before video metadata', async () => {
+  resetBrowser();
+  const rec = recording();
+  const p = player(rec);
+  p.page.update({ ...p.page.props, videos: [
+    { name: 'video_turn_00.mp4', url: '/turn0', turnIndex: 0 },
+    { name: 'video_turn_01.mp4', url: '/turn1', turnIndex: 1 },
+  ] });
+  await p.metadata();
+  await p.changeMode('all');
+  await p.moveTime(1.25);
+  const explanation = () => findAll(p.page.output, 'p').flatMap(el => el.props.children).join(' ');
+  const choose = async (node: TNode) => {
+    const row = findAll(p.page.output, 'button').find(button => button.props['data-replay-event'] === node.primary.event_id);
+    if (!row) throw new Error('the unsynced process is missing while waiting for metadata');
+    assert.equal(row.props['data-replay-sync'], 'unmapped');
+    (row.props.onClick as () => void)();
+    await p.accept();
+    assert.equal(p.selections.at(-1)?.node.key, node.key);
+  };
+  try {
+    await choose(rec.later);
+    assert.equal(p.video().props.src, '/turn1');
+    const slider = findAll(p.page.output, 'input').find(input => input.props['aria-label'] === '動画の再生位置');
+    assert.equal(slider?.props.disabled, true, 'the newly selected video has not loaded metadata');
+    assert.match(explanation(), /実行の録画があれば切り替えます/);
+    await choose(rec.first);
+    assert.equal(p.video().props.src, '/turn0');
+
+    const recordingSelect = findAll(p.page.output, 'select').find(select => select.props['aria-label'] === '録画カメラ');
+    if (!recordingSelect) throw new Error('missing recording select');
+    (recordingSelect.props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'video_turn_01.mp4' } });
+    await advance(0);
+    await choose(rec.later);
+    await choose(rec.first);
+    assert.equal(p.video().props.src, '/turn1', 'an explicitly selected recording stays pinned');
+    assert.match(explanation(), /現在位置で停止します/);
+  } finally {
+    p.page.unmount();
+  }
+});
+
 test('entering API/Python while playing selects the API at this position without pausing or seeking', async () => {
   resetBrowser(); const rec = recording(); const p = player(rec);
   await p.metadata(); await p.media.play(); await p.moveTime(.75);
@@ -209,6 +276,7 @@ test('page forwards API/Python mode and preserves API selection and seek state w
   const api = media().model.nodeOfEvent.get(rec.same.primary.event_id)!;
   media().onPlaybackSelect!(api, true); await advance(0);
   assert.equal(details().selection?.eventId, api.primary.event_id);
+  assert.equal(media().selectionFromPlayback, true, 'a player selection stays tagged as the parent reflects it');
   assert.equal(media().seekRequest, null, 'playback selections do not create a manual seek token');
   const inspector = mount(DetailTabs, details());
   assert.equal(propsOf<Parameters<typeof ApiTurnModelTab>[0]>(inspector.output, ApiTurnModelTab).selection.node.key, api.key);
@@ -222,5 +290,8 @@ test('page forwards API/Python mode and preserves API selection and seek state w
   }
   media().onApiPythonModeChange!(false); await advance(0);
   assert.equal(details().apiPythonMode, false);
+  details().onSelect(api); await advance(0);
+  assert.equal(media().selectionFromPlayback, false);
+  assert.equal(media().seekRequest?.key, api.key, 'an external event click still requests a seek');
   inspector.unmount(); page.unmount();
 });
