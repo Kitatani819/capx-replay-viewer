@@ -4,8 +4,8 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$project_dir"
 port="${1:-8390}"
-trace_root="${2:-$project_dir/outputs/geniac_demo/traces}"
-runner_root="${3:-$project_dir/outputs/geniac_demo/runner}"
+trace_root="${2:-$project_dir/demo/traces}"
+runner_root="${3:-$project_dir/demo/runner}"
 python_bin="${4:-}"
 if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
     echo 'Port must be a number from 1 to 65535.' >&2
@@ -82,11 +82,8 @@ else
         fi
     fi
 fi
-# Check the real filesystem capabilities before generating files or starting HTTP.
+# Check the real filesystem capabilities before starting HTTP.
 "$python_bin" -c 'from capx_trace_viewer.platform_support import require_supported_backend; require_supported_backend()'
-if [[ "$trace_root" == "$project_dir/outputs/geniac_demo/traces" && "$runner_root" == "$project_dir/outputs/geniac_demo/runner" && ( ! -d "$trace_root" || ! -d "$runner_root" ) ]]; then
-    "$python_bin" scripts/make_replay_demo.py
-fi
 printf 'Replay viewer: http://127.0.0.1:%s/traces\n' "$port"
 exec "$python_bin" -m capx_trace_viewer.server --viewer-only --host 127.0.0.1 --port "$port" \
     --trace-root "$trace_root" --runner-root "$runner_root"

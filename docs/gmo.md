@@ -50,14 +50,13 @@ Python 3.10～3.12、Node.js、npmが必要です。未導入の場合は計算�
 
 ## 3. 録画とログを指定して起動
 
-まず合成デモで画面まで確認する場合:
+まず同梱のデモ記録で画面まで確認する場合:
 
 ```bash
-.venv/bin/python scripts/make_replay_demo.py --out outputs/geniac_demo
 .venv/bin/python -m capx_trace_viewer.server --viewer-only \
   --host 127.0.0.1 --port 8390 \
-  --trace-root outputs/geniac_demo/traces \
-  --runner-root outputs/geniac_demo/runner
+  --trace-root demo/traces \
+  --runner-root demo/runner
 ```
 
 実験の記録を開く場合は、一度 `Ctrl+C` で止め、同じ試行の記録が入るルートを指定します。

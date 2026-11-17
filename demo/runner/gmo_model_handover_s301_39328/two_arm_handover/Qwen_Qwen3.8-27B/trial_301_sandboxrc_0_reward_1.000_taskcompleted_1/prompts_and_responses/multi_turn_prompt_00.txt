@@ -1,0 +1,425 @@
+You are controlling a two-arm Franka Emika robot system with API described below.
+Goal: Arm 0 should pick up the hammer, lift it, and hand it over to Arm 1. Arm 1 should then grasp the hammer handle (not hammer head). The z-value of hammer must be between 0.15 and 0.20 during the handover to count as a success.
+
+Coordinate system:
+- All pose functions accept positions in robot0's base frame (same coordinate system as returned/used by get_object_pose/goto_pose_arm*).
+- The table surface is not necessarily at z=0.
+- The coordinate axis follows these conventions:
+  - Z-axis: up (positive) and down (negative)
+  - X-axis: right (positive) and left (negative) 
+  - Y-axis: forward (positive) and backward (negative)
+
+Environment details:
+- Arm 0 (left) and Arm 1 (right) are positioned on opposite sides of the table. 
+- The hammer handle length is randomized between 0.15m and 0.25m.
+- The hammer initially lies flat on the table, aligned along the Y-axis, with the handle toward +Y and the hammer head toward -Y
+
+Critical information:
+- Handover must occur near the midpoint of the initial gripper positions. Reason about the best handover hammer orientation that allows collision-free transfer to Arm 1.
+- The table does not span the entire region between the two arms. If the hammer falls in the central gap it will drop to the floor, making the task UNRECOVERABLE
+- AVOID COLLISIONS. You must decompose movements into rotation and translation components, moving stepwise. Reason about the optimal sequence of waypoints to safely avoid collisions.
+- Arm links have volume, and intermediate motions are not collision-checked. Keep a minimum 8cm buffer between grippers
+
+Reference quaternions:
+- Arm0 gripper facing down opening along X-axis: [0, 0.707, 0.707, 0].
+- Arm0 gripper facing down opening along Y-axis: [0, 1, 0, 0].
+- Arm1 gripper facing down opening along Y-axis: [0, 0, 1, 0].
+
+Arm gripper approximate initial starting positions (robot0 frame). These values are rough and may vary by a few centimeters each trial:
+- Arm0: x ≈ 0.44. y ≈ 0.0
+- Arm1: x ≈ 1.18. y ≈ 0.0
+
+You may write python code comments for reasoning but ONLY write the executable Python code and do not write it in code fences.
+After this code executes, you will receive the current console stdout and stderr (any errors or print statements made in the code). You will then have the chance to write new code to query the environment state and/or complete the task.
+The functions (APIs) below are already imported to the environment. If you want to use numpy, you need to import it explicitly.
+
+APIs:
+
+get_observation() -> dict[str, typing.Any]
+  Doc:
+    Get the observation of the environment.
+    Returns:
+        observation:
+            A dictionary containing the observation of the environment.
+            The dictionary contains the following keys:
+            - ["robot0_robotview"]["images"]["rgb"]: Current color camera image as a numpy array of shape (H, W, 3), dtype uint8.
+            - ["robot0_robotview"]["images"]["depth"]: Current depth camera image as a numpy array of shape (H, W), dtype float32.
+            - ["robot0_robotview"]["intrinsics"]: Camera intrinsic matrix as a numpy array of shape (3, 3), dtype float64.
+            - ["robot0_robotview"]["pose_mat"]: Camera extrinsic matrix as a numpy array of shape (4, 4), dtype float64.
+
+point_prompt_molmo(image: numpy.ndarray, text_prompt: str) -> dict[str, tuple[int | None, int | None]]
+  Doc:
+    Use Molmo to point to a coordinate in the image based on a text prompt.
+    
+    Args:
+        image: np.ndarray: The RGB image to process. Shape: (H, W, 3), dtype uint8.
+        text_prompt: str: The text prompt to point to.
+    
+    Returns:
+        dict[str, tuple[int | None, int | None]]: Pixel coordinates for each
+        object query; (None, None) if parsing failed.
+
+segment_sam3_text_prompt(rgb: numpy.ndarray, text_prompt: str) -> list[dict[str, typing.Any]]
+  Doc:
+    Run SAM3 segmentation on an RGB image conditioned on a text prompt.
+    
+    Args:
+        rgb:
+            RGB image array of shape (H, W, 3), dtype uint8.
+        text_prompt:
+            Text prompt for SAM3 segmentation.
+    
+    Returns:
+        masks:
+            A list of dictionaries. Each dict may contain:
+    
+              - "mask":  np.ndarray of shape (H, W), dtype bool,
+                          where True means the pixel belongs to the instance.
+              - "box": list [x1, y1, x2, y2] in pixel coordinates.
+              - "score": float confidence score.
+    
+    Example:
+        >>> rgb = obs["robot0_robotview"]["images"]["rgb"]
+        >>> masks = segment_sam3(rgb, text_prompt="red mug")
+
+segment_sam3_point_prompt(rgb: numpy.ndarray, point_coords: tuple[float, float]) -> list[dict[str, typing.Any]]
+  Doc:
+    Run SAM3 segmentation on an RGB image, optionally conditioned on an image coordinate point prompt.
+    
+    Args:
+        rgb:
+            RGB image array of shape (H, W, 3), dtype uint8.
+        point_coords:
+            (x, y) pixel coordinates of the point prompt.
+    
+    Returns:
+        masks:
+            A list of dictionaries. Each dict may contain:
+    
+              - "mask":  np.ndarray of shape (H, W), dtype bool,
+                          where True means the pixel belongs to the instance.
+              - "score": float confidence score.
+    
+    Example:
+        >>> rgb = obs["robot0_robotview"]["images"]["rgb"]
+        >>> masks = segment_sam3_point_prompt(rgb, (100, 100))
+
+plan_grasp(depth: numpy.ndarray, intrinsics: numpy.ndarray, segmentation: numpy.ndarray) -> tuple[numpy.ndarray, numpy.ndarray]
+  Doc:
+    Plan grasp candidates using Contact-GraspNet for a single instance.
+    
+    This is a thin wrapper around the Contact-GraspNet planner. It does not
+    apply any camera/world transforms or TCP offsets: the caller is
+    responsible for transforming the resulting grasp poses into the desired
+    frame and applying TCP offsets if necessary.
+    
+    Args:
+        depth:
+            Depth image in meters.
+            Shape: (H, W), dtype float32/float64.
+        intrinsics:
+            Camera intrinsic matrix.
+            Shape: (3, 3), dtype float64.
+        segmentation:
+            Instance segmentation map where each integer > 0 corresponds to a
+            unique object instance ID.
+            Shape: (H, W) or (H, W, 1), dtype int32/int64.
+    
+    Returns:
+        grasp_poses:
+            np.ndarray of shape (K, 4, 4), dtype float64.
+            Homogeneous transforms for each candidate grasp IN THE CAMERA FRAME.
+        grasp_scores:
+            np.ndarray of shape (K,), dtype float64.
+            Confidence score for each candidate grasp.
+    
+    Example:
+        >>> cam = obs["robot0_robotview"]
+        >>> rgb = cam["images"]["rgb"]
+        >>> depth = cam["images"]["depth"]
+        >>> sam3_results = sam3_seg_fn(rgb, text_prompt="red mug")
+        >>> best = max(sam3_results, key=lambda d: d["score"])
+        >>> mask = best["mask"]
+        >>> K = cam["intrinsics"]
+        >>> grasp_poses, grasp_scores = plan_grasp(
+        ...     depth=depth,
+        ...     intrinsics=K,
+        ...     segmentation=mask,
+        ... )
+        >>> best_idx = grasp_scores.argmax()
+        >>> best_T = grasp_poses[best_idx]  # (4, 4)
+        >>> camera_extrinsics = cam["pose_mat"]
+        >>> grasp_sample_world_frame = camera_extrinsics @ best_T
+
+get_oriented_bounding_box_from_3d_points(points: numpy.ndarray) -> dict[str, typing.Any]
+  Doc:
+    Get the oriented bounding box from 3D points.
+    
+    Args:
+        points: np.ndarray: The 3D points to get the oriented bounding box from.
+            Shape: (N, 3), dtype float64.
+    
+    Returns:
+        dict[str, Any]: The oriented bounding box. The dictionary contains the following keys:
+            - "center": np.ndarray: The center of the oriented bounding box in point cloud frame.
+            - "extent": np.ndarray: The extent of the oriented bounding box.
+            - "R": np.ndarray: The rotation matrix of the oriented bounding box in point cloud frame.
+    
+    Example:
+        >>> points = np.random.randn((100, 3))
+        >>> obb = get_oriented_bounding_box_from_3d_points(points)
+
+solve_ik_arm0(position: numpy.ndarray, quaternion_wxyz: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Solve inverse kinematics for the panda_hand link for Arm 0 (robot0).
+
+solve_ik_arm1(position: numpy.ndarray, quaternion_wxyz: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Solve inverse kinematics for the panda_hand link for Arm 1 (robot1).
+
+move_to_joints_both(joints0: numpy.ndarray, joints1: numpy.ndarray) -> None
+  Doc:
+    Move the arms 0 and 1 to a given joint configuration in a blocking manner simultaneously.
+    
+    Args:
+        joints0:
+            Target joint angles for the 7-DoF Franka arm 0.
+            Shape: (7,), dtype float64.
+        joints1:
+            Target joint angles for the 7-DoF Franka arm 1.
+            Shape: (7,), dtype float64.
+
+move_to_joints_arm0(joints: numpy.ndarray) -> None
+  Doc:
+    Move the robot arm 0 to a given joint configuration in a blocking manner.
+    
+    Args:
+        joints:
+            Target joint angles for the 7-DoF Franka arm 0.
+            Shape: (7,), dtype float64.
+
+move_to_joints_arm1(joints: numpy.ndarray) -> None
+  Doc:
+    Move the robot arm 1 to a given joint configuration in a blocking manner.
+    
+    Args:
+        joints:
+            Target joint angles for the 7-DoF Franka arm 1.
+            Shape: (7,), dtype float64.
+
+open_gripper_arm0() -> None
+  Doc:
+    Open gripper fully for Arm 0 (robot0).
+    Args:
+        None
+    Returns:
+        None
+
+close_gripper_arm0() -> None
+  Doc:
+    Close gripper fully for Arm 0 (robot0).
+    Args:
+        None
+    Returns:
+        None
+
+open_gripper_arm1() -> None
+  Doc:
+    Open gripper fully for Arm 1 (robot1).
+    Args:
+        None
+    Returns:
+        None
+
+close_gripper_arm1() -> None
+  Doc:
+    Close gripper fully for Arm 1 (robot1).
+    Args:
+        None
+    Returns:
+        None
+
+rotation_matrix_to_quaternion(R: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Convert a 3x3 rotation matrix to a unit quaternion [w, x, y, z].
+    
+    Implements the robust Sheppard's method (checking trace and diagonal elements)
+    to avoid numerical instability when the trace is close to zero.
+    
+    Args:
+        R: (3, 3) rotation matrix.
+    
+    Returns:
+        np.array: [w, x, y, z] unit quaternion.
+
+decompose_transform(T: numpy.ndarray) -> tuple[numpy.ndarray, numpy.ndarray]
+  Doc:
+    Decompose a 4x4 homogeneous transformation matrix into position and quaternion.
+    
+    Args:
+        T: (4, 4) homogeneous transformation matrix.
+    
+    Returns:
+        tuple:
+            - position: (3,) np.array
+            - quaternion: (4,) np.array [w, x, y, z]
+
+depth_to_point_cloud(depth_img: numpy.ndarray, intrinsics: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Convert a depth image to a 3D point cloud in the Camera Frame.
+    
+    Args:
+        depth_img: (H, W) depth map in meters.
+        intrinsics: (3, 3) camera intrinsic matrix.
+    
+    Returns:
+        np.array: (H, W, 3) image of 3D coordinates.
+
+mask_to_world_points(mask: numpy.ndarray, depth: numpy.ndarray, intrinsics: numpy.ndarray, extrinsics: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Convert specific pixels defined by a binary mask into 3D points in the World Frame.
+    
+    Args:
+        mask: (H, W) binary mask (0 or 1).
+        depth: (H, W) depth map.
+        intrinsics: (3, 3) camera intrinsics.
+        extrinsics: (4, 4) camera-to-world pose matrix.
+    
+    Returns:
+        np.array: (N, 3) array of valid 3D points in world coordinates.
+
+pixel_to_world_point(u: int, v: int, z: float, intrinsics: numpy.ndarray, extrinsics: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Deproject a single pixel to a 3D world point.
+    
+    Args:
+        u, v: Pixel coordinates (col, row).
+        z: Depth at that pixel.
+        intrinsics: (3, 3) matrix.
+        extrinsics: (4, 4) matrix.
+    
+    Returns:
+        np.array: [x, y, z] in world frame.
+
+transform_points(points: numpy.ndarray, transform_matrix: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Apply a 4x4 homogeneous transform to a set of 3D points.
+    
+    Args:
+        points: (N, 3) or (H, W, 3) array of points.
+        transform_matrix: (4, 4) homogeneous transformation matrix.
+    
+    Returns:
+        np.array: Transformed points with same shape as input.
+
+interpolate_segment(p1: numpy.ndarray, p2: numpy.ndarray, step: float = 0.03) -> list[numpy.ndarray]
+  Doc:
+    Generate waypoints along a line segment between two 3D points.
+    
+    Args:
+        p1: Start point (3,).
+        p2: End point (3,).
+        step: Distance between waypoints in meters.
+    
+    Returns:
+        list[np.ndarray]: List of points including p1 and p2.
+
+normalize_vector(v: numpy.ndarray) -> numpy.ndarray
+  Doc:
+    Normalize a vector to unit length.
+    
+    Args:
+        v: (3,) vector.
+    
+    Returns:
+        np.array: (3,) unit vector.
+
+select_top_down_grasp(grasps: numpy.ndarray, scores: numpy.ndarray, cam_to_world: numpy.ndarray, vertical_threshold: float = 0.8) -> tuple
+  Doc:
+    Selects the best grasp that aligns the gripper vertically (Top-Down).
+    
+    Args:
+        grasps: (N, 4, 4) Grasp poses in camera frame.
+        scores: (N,) Grasp scores.
+        cam_to_world: (4, 4) Extrinsics matrix.
+        vertical_threshold: Dot product threshold (1.0 is perfectly vertical).
+    
+    Returns:
+        tuple: (best_grasp_world_matrix, best_score) or (None, -inf)
+The following code blocks were just executed:
+```python
+import numpy as np
+
+# ============================================================
+# STEP 1: Locate the hammer
+# ============================================================
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, text_prompt="hammer")
+if not masks:
+    masks = segment_sam3_text_prompt(rgb, text_prompt="hammer on table")
+if not masks:
+    masks = segment_sam3_text_prompt(rgb, text_prompt="wooden hammer")
+
+best_mask = max(masks, key=lambda m: m['score'])
+mask = best_mask['mask']
+print(f"Hammer segment score: {best_mask['score']:.3f}, pixels: {mask.sum()}")
+
+# Get 3D world points
+world_points = mask_to_world_points(mask, depth, intrinsics, extrinsics)
+print(f"Hammer world points: {len(world_points)}")
+
+# Get oriented bounding box
+obb = get_oriented_bounding_box_from_3d_points(world_points)
+hammer_center = obb['center']
+hammer_extent = obb['extent']
+hammer_R = obb['R']
+print(f"Hammer center: {hammer_center}")
+print(f"Hammer extent: {hammer_extent}")
+
+# The hammer is aligned along Y-axis, handle toward +Y
+# Estimate table surface z (hammer lies flat, so table z ≈ center_z - half thickness)
+# The thickness is the smallest extent
+thickness_idx = np.argmin(hammer_extent)
+table_z = hammer_center[2] - hammer_extent[thickness_idx] / 2.0
+print(f"Estimated table z: {table_z:.4f}")
+```
+The current console stdout is:
+```
+Hammer segment score: 0.781, pixels: 528
+Hammer world points: 528
+Hammer center: [ 0.34935842  0.04449645 -0.08605274]
+Hammer extent: [0.20457902 0.07897013 0.04390533]
+Estimated table z: -0.1080
+
+```
+The current console stderr is:
+```
+
+```
+If there were no errors during compilation or execution, the console stderr will be empty. If there were errors, consider regenerating the code.
+Consider querying the environment state through perception-based tool calls and prints to see if the task is completed.
+Please respond with EXACTLY ONE of the following:
+- The word 'REGENERATE' followed immediately by new Python code in a fenced code block (```python...```) if you want to modify the code.
+- The word 'FINISH' if the task appears to be complete
+
+Included below is the observed differences between the current state of the environment (afer the code above was executed) and the previous state of the environment (before the code above was executed):
+
+
+There is no observable difference between the current state and the previous state. Both images show:
+
+- Arm 0 (left) in the same position, hovering over the white table
+- The hammer lying flat on the table in the same orientation (handle pointing toward +Y, head toward -Y)
+- Arm 1 (right) in the same resting position
+- No movement or gripper action has occurred
+
+The task has not been initiated. The hammer remains on the table and no handover has taken place.
+Based on the code output, potential error messages, and the observation made above, carefully reason about the following:
+Please respond with EXACTLY ONE of the following:
+- The word 'REGENERATE' followed immediately by new Python code in a fenced code block (```python...```) if you want to modify the code.
+- The word 'FINISH' if the task appears to be complete

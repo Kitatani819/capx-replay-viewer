@@ -3,8 +3,8 @@
 set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 port=8390
-trace_root="$project_dir/outputs/geniac_demo/traces"
-runner_root="$project_dir/outputs/geniac_demo/runner"
+trace_root="$project_dir/demo/traces"
+runner_root="$project_dir/demo/runner"
 python_bin=''
 usage() {
     cat <<'USAGE'
@@ -16,7 +16,7 @@ Usage: bash Start-Replay.sh [options]
   --help               Show this help
 
 Build once with: cd web-ui && npm ci && npm run build
-Without custom roots, a synthetic demo is created on the first launch.
+Without custom roots, the bundled GMO recording in demo/ is shown.
 Relative data/Python paths are resolved from this repository.
 The server listens on 127.0.0.1 only. Stop it with Ctrl+C.
 USAGE

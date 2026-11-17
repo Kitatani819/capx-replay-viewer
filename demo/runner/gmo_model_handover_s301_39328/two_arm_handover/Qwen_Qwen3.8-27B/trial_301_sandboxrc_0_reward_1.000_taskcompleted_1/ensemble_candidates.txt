@@ -1,0 +1,262 @@
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.9
+Success: True
+============================================================
+
+
+import numpy as np
+
+# First, let's get the current observation to understand the environment state
+obs = get_observation()
+print("Observation keys:", obs.keys())
+print("Robot view keys:", obs["robot0_robotview"].keys())
+print("Image shape:", obs["robot0_robotview"]["images"]["rgb"].shape)
+print("Depth shape:", obs["robot0_robotview"]["images"]["depth"].shape)
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.5
+Success: True
+============================================================
+
+
+```python
+import numpy as np
+
+# First, let's get the observation to understand the scene
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print("Image shape:", rgb.shape)
+print("Depth shape:", depth.shape)
+print("Intrinsics:\n", intrinsics)
+print("Extrinsics:\n", extrinsics)
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.3
+Success: True
+============================================================
+
+
+Looking at this task, I need to:
+1. Find the hammer's position
+2. Have Arm 0 grasp the handle, lift it, rotate it for handover
+3. Move to the handover position (near midpoint, z between 0.15-0.20)
+4. Have Arm 1 grasp the handle
+
+Let me start by getting the observation and finding the hammer.
+
+```python
+import numpy as np
+
+# Get observation to find the hammer
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, text_prompt="hammer")
+print(f"Number of segments found: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.8
+Success: True
+============================================================
+
+
+```python
+import numpy as np
+
+# First, let's get the observation to understand the scene
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Try to segment the hammer
+masks = segment_sam3_text_prompt(rgb, text_prompt="hammer")
+print(f"Number of segments found: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"  Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.7
+Success: True
+============================================================
+
+
+Let me start by getting the observation and finding the hammer's position.
+
+```python
+import numpy as np
+
+# Get observation
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, text_prompt="hammer")
+print(f"Number of segments found: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"  Segment {i}: score={m['score']:.3f}, mask size={m['mask'].sum()}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.4
+Success: True
+============================================================
+
+
+Let me start by getting the observation and understanding the scene.
+
+```python
+import numpy as np
+
+# Get initial observation
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, "hammer")
+print(f"Number of segments: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.6
+Success: True
+============================================================
+
+
+```python
+import numpy as np
+
+# Step 1: Get observation and locate the hammer
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, text_prompt="hammer")
+print(f"Found {len(masks)} hammer segments")
+for i, m in enumerate(masks):
+    print(f"  Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.2
+Success: True
+============================================================
+
+
+Looking at this task, I need to:
+1. Find the hammer's position
+2. Pick it up with Arm 0
+3. Move to handover position with proper orientation
+4. Have Arm 1 grasp the handle
+
+Let me start by getting the observation and locating the hammer.
+
+```python
+import numpy as np
+
+# Get observation
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, "hammer")
+print(f"Number of segments: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```
+
+============================================================
+Model: Qwen/Qwen3.8-27B
+Temperature: 0.1
+Success: True
+============================================================
+
+
+Looking at this task, I need to:
+1. First observe the environment to locate the hammer
+2. Plan the pick-and-handover sequence
+
+Let me start by getting the observation and finding the hammer's position.
+
+```python
+import numpy as np
+
+# Get initial observation
+obs = get_observation()
+rgb = obs["robot0_robotview"]["images"]["rgb"]
+depth = obs["robot0_robotview"]["images"]["depth"]
+intrinsics = obs["robot0_robotview"]["intrinsics"]
+extrinsics = obs["robot0_robotview"]["pose_mat"]
+
+print(f"Image shape: {rgb.shape}")
+print(f"Depth shape: {depth.shape}")
+print(f"Intrinsics:\n{intrinsics}")
+print(f"Extrinsics:\n{extrinsics}")
+
+# Segment the hammer
+masks = segment_sam3_text_prompt(rgb, "hammer")
+print(f"Number of segments found: {len(masks)}")
+for i, m in enumerate(masks):
+    print(f"  Segment {i}: score={m['score']:.3f}, box={m.get('box', 'N/A')}")
+```

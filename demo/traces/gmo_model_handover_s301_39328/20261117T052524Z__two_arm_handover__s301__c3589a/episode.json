@@ -1,0 +1,132 @@
+{
+  "schema_version": "capx-trace/1",
+  "tracer_version": "1.0.0",
+  "run_id": "gmo_model_handover_s301_39328",
+  "episode_id": "20261117T052524Z__two_arm_handover__s301__c3589a",
+  "status": "ended",
+  "episode_end_written": true,
+  "trace_complete": true,
+  "video_copy_pending": false,
+  "gaps": [],
+  "dropped_events": 0,
+  "late_events": 0,
+  "n_warnings": 0,
+  "n_events": 331,
+  "last_seq": 331,
+  "events_bytes": 654241,
+  "heartbeat_interval_s": 10.0,
+  "updated_wall_time": 1794893740.0531971,
+  "host": "gmo-compute-node",
+  "source": "envs.runner",
+  "task": "two_arm_handover",
+  "condition": null,
+  "seed": 301,
+  "attempt_index": 1,
+  "runner_invocation": null,
+  "condition_label": null,
+  "models": {
+    "code_generator": {
+      "model": "Qwen/Qwen3.8-27B",
+      "endpoint": {
+        "url": "http://127.0.0.1:39328/v1/chat/completions",
+        "host": "127.0.0.1",
+        "port": 39328,
+        "path": "/v1/chat/completions",
+        "known_proxy": false
+      },
+      "oracle_code": false
+    },
+    "vdm": {
+      "model": "Qwen/Qwen3.8-27B",
+      "endpoint": {
+        "url": "http://127.0.0.1:39328/v1/chat/completions",
+        "host": "127.0.0.1",
+        "port": 39328,
+        "path": "/v1/chat/completions",
+        "known_proxy": false
+      }
+    }
+  },
+  "config_flags": {
+    "multi_turn": true,
+    "use_visual_feedback": false,
+    "use_img_differencing": true,
+    "use_video_differencing": false,
+    "use_wrist_camera": false,
+    "use_parallel_ensemble": true,
+    "use_multimodel": false,
+    "record_video": true,
+    "use_oracle_code": false,
+    "use_legacy_multi_turn_decision_prompt": null
+  },
+  "env": {
+    "class": "capx.envs.tasks.franka.two_arm_handover.TwoArmHandoverCodeEnv",
+    "low_level_class": "capx.envs.simulators.robosuite_handover.RobosuiteHandoverEnv",
+    "apis": [
+      "FrankaControlApiReducedSkillLibraryBimanualHandover"
+    ],
+    "privileged": false,
+    "viser_port": null
+  },
+  "started_wall_time": 1794893124.956858,
+  "pid": 2478234,
+  "apis_wrapped": [
+    {
+      "api": "FrankaControlApiReducedSkillLibraryBimanualHandover",
+      "class": "FrankaControlApiReducedSkillLibrary",
+      "wrapped": [
+        "get_observation",
+        "point_prompt_molmo",
+        "segment_sam3_text_prompt",
+        "segment_sam3_point_prompt",
+        "plan_grasp",
+        "get_oriented_bounding_box_from_3d_points",
+        "solve_ik_arm0",
+        "solve_ik_arm1",
+        "move_to_joints_both",
+        "move_to_joints_arm0",
+        "move_to_joints_arm1",
+        "open_gripper_arm0",
+        "close_gripper_arm0",
+        "open_gripper_arm1",
+        "close_gripper_arm1",
+        "rotation_matrix_to_quaternion",
+        "decompose_transform",
+        "depth_to_point_cloud",
+        "mask_to_world_points",
+        "pixel_to_world_point",
+        "transform_points",
+        "interpolate_segment",
+        "normalize_vector",
+        "select_top_down_grasp"
+      ],
+      "services": [
+        "sam3_seg_fn",
+        "sam3_point_prompt_fn",
+        "molmo_point_fn",
+        "grasp_net_plan_fn",
+        "ik_solve_fn",
+        "trajopt_plan_fn"
+      ],
+      "installed_in_this_episode": true
+    }
+  ],
+  "ended_wall_time": 1794893740.0314608,
+  "end_reason": "completed",
+  "duration_s": 615.078911,
+  "alarm_seen": false,
+  "n_code_blocks": 2,
+  "n_model_calls": 22,
+  "n_http_attempts": 22,
+  "tracer_overhead_s": 0.074693,
+  "harness_summary": {
+    "reward": 1.0,
+    "task_completed": true,
+    "sandbox_rc": 0,
+    "success": true,
+    "num_code_blocks": 2,
+    "num_regenerations": 1,
+    "num_finishes": 0
+  },
+  "exception": null
+}
