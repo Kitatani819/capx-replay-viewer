@@ -132,18 +132,25 @@ cd ..
 .venv/bin/python -m playwright install chromium
 ```
 
-別端末で `bash Start-Replay.sh --python .venv/bin/python` を起動してから、次を実行します。
+ブラウザ操作の確認は、同梱のデモ記録ではなく合成デモで行います。合成デモを作り、それを指定して起動します（`outputs/geniac_demo` が既にあれば作成は不要です）。
+
+```bash
+.venv/bin/python scripts/make_replay_demo.py --out outputs/geniac_demo
+bash Start-Replay.sh --python .venv/bin/python --trace-root outputs/geniac_demo/traces --runner-root outputs/geniac_demo/runner
+```
+
+起動したまま、別端末で次を実行します。
 
 ```bash
 .venv/bin/python scripts/demo/check_replay_layout.py --base-url http://127.0.0.1:8390
 ```
 
-GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエンドのテストとビルド、合成デモのブラウザ操作を実行します。[2026-11-16のAPI/Python試作の検証結果](https://github.com/Kitatani819/capx-replay-viewer/actions/runs/43729932868)は両OSとも成功です。
+GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエンドのテストとビルド、合成デモのブラウザ操作を実行します。[2026-11-17のデモ記録差し替え時の検証結果](https://github.com/Kitatani819/capx-replay-viewer/actions/runs/44028714381)は両OSとも成功です。
 
 | 環境 | Pythonテスト | フロントテスト / ビルド | ブラウザ操作 |
 |---|---|---|---|
-| Ubuntu（GitHub Actions、x86_64） | 1,491成功・24スキップ | 214成功 / 成功 | 16項目成功・例外0 |
-| macOS 26（GitHub Actions、Apple Silicon） | 1,444成功・71スキップ | 214成功 / 成功 | 16項目成功・例外0 |
+| Ubuntu（GitHub Actions、x86_64） | 1,513成功・26スキップ | 255成功 / 成功 | 19項目成功・例外0 |
+| macOS 26（GitHub Actions、Apple Silicon） | 1,466成功・73スキップ | 255成功 / 成功 | 19項目成功・例外0 |
 
 手元のWSL/Ubuntuでは、今回Linuxブラウザ操作16項目が成功しました。前回のPythonテスト1,491件、初回Python環境作成（通常のvenvとuv）からの起動、Windowsで未対応理由を案内するテストも成功しています。Intel Macと、このPCをデュアルブートのUbuntuで起動した状態の実機確認は未実施です。
 
@@ -153,14 +160,16 @@ GitHub ActionsでLinux・macOSのバックエンドテスト、フロントエ�
 
 - 2026-11-16のAPI/Python試作では `test:trace` 214件、ビルド、WindowsとWSL/Linuxのブラウザ16項目が成功。`goto_pose`と3行目の同時表示、ホバーで位置・選択が変わらないこと、同時刻の個別選択、前後コード、正確な生成元入出力、既存3タブを確認。最初のAPIより前への巻き戻しと、ターンフィルターの選択不一致には回帰テストを追加しています。
 
-- 合成デモで再生・停止、SAM3・VDM・Pythonの入出力、候補・統合結果を確認。GMOから取得済みの記録のローカル表示は前回検証で8項目成功しています。OS別CIには実験データを含めず、合成デモだけを使っています。
+- 合成デモで再生・停止、SAM3・VDM・Pythonの入出力、候補・統合結果を確認。GMOから取得済みの記録のローカル表示は前回検証で8項目成功しています。OS別CIのブラウザ操作には合成デモだけを使います。同梱のデモ記録は、Pythonテストで記録が完全であることと、アカウント名・パス・GMOのホスト名を含まないことを確認しています。
 - 同位置の複数イベント・候補選択、停止位置の保持、マスクの拡大、未記録の表示、MP4のみ、狭幅・動きを減らす設定を確認。
 - モデル呼び出しだけに絞った状態からPythonへ移動すると対象行が隠れる問題と、録画切替後に再生ボタンの状態が残る問題を修正。
 - 一覧から開いた直後のSAM3選択と右欄の一致、イベント指定URL、再生中・Live中の履歴移動、候補9件／3件、デバッグ表示が1組だけになること、注意帯の指定配色（約8.22:1）を確認。
 - OS別検証で見つかった詳細ログのスクロール補正による連続更新を修正し、旧実装では失敗する回帰テストを追加。macOSに存在しない `/proc` に依存していたレコーダーのテストも、ファイルの識別情報を使う方法へ修正。
 - 実行中の応答をブラウザ内で模擬し、Liveの新着追従、再生による閲覧への切り替え、Live再開時の動画停止を確認。実際のGMO上で記録中の試行を使ったLive検証は未実施です。
 
-トレースを記録したGMOの `two_arm_handover`（seed 301、Oracle）で、APIとPythonの同期表示とシーク位置の保持を確認しました。Chromeでseed 302の13.73秒の動画と38行目を同時に表示できることと、seed 301に切り替えても「APIとPython」が維持されることを確認しました。モデルの入出力、候補と統合結果は合成デモで確認しています。呼び出し行には `call_site`、モデル入出力には `source_model_event_id` と要求・回答の記録が必要です。 [操作と検証](docs/replay.md#検証)
+トレースを記録したGMOの `two_arm_handover`（seed 301、Oracle）で、APIとPythonの同期表示とシーク位置の保持を確認しました。Chromeでseed 302の13.73秒の動画と38行目を同時に表示できることと、seed 301に切り替えても「APIとPython」が維持されることを確認しました。
+
+2026-11-17には、GMOでQwen3.8-27Bが生成したコードを実行した `two_arm_handover`（seed 301）を記録し、同梱のデモ記録にしました。モデル呼び出し22件（VDM 2件、候補18件、統合2件）すべての要求と回答、SAM3の50件のマスク、候補・統合結果・ターンごとの入出力を表示できることを確認しています。記録は完全で、欠落はありません。呼び出し行には `call_site`、モデル入出力には `source_model_event_id` と要求・回答の記録が必要です。 [操作と検証](docs/replay.md#検証)
 
 ## 記録形式とライセンス
 
