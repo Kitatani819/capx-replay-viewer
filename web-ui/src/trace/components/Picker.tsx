@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { traceApi } from '../api';
+import { GmoDisabledError, gmoApi, traceApi } from '../api';
 import { fmtBytes, fmtWall } from '../format';
 import { useAsync } from '../hooks';
 import { LABELS, UNSCOPED_STATUS_LABEL, WARNING_CODE_LABELS, episodeStatusLabel, episodeStatusShortLabel } from '../labels';
@@ -25,6 +25,7 @@ import { episodeStatusTone } from './TopBar';
 import { episodeVerdict, VERDICT_LABELS, type TaskVerdict } from '../outcome';
 import { TaskOutcomeBadge } from './TaskOutcomeBadge';
 import { legacyRootsOf, legacyRunsOf, legacyTrialsOf, type LegacyRunRef, type LegacyTrialRef } from './LegacyView';
+import { GmoPicker } from './GmoPicker';
 
 interface PickerProps {
   config: TraceConfigResponse | null;
@@ -37,11 +38,20 @@ interface PickerProps {
 }
 
 export function Picker({ config, configError, currentRun, currentEpisode, onPick, onPickLegacy, onClose }: PickerProps) {
-  const [mode, setMode] = useState<'traced' | 'legacy'>('traced');
+  const [mode, setMode] = useState<'traced' | 'legacy' | 'gmo'>('traced');
+  const [gmoDisabled, setGmoDisabled] = useState(false);
   const [runSel, setRunSel] = useState<string | null>(currentRun);
   const [filter, setFilter] = useState('');
   const [resultFilter, setResultFilter] = useState<TaskVerdict | 'all'>('all');
   const runs = useAsync((s) => traceApi.runs(s), []);
+  const gmoConfig = useAsync(async (signal) => {
+    try {
+      return await gmoApi.config(signal);
+    } catch (error) {
+      if (error instanceof GmoDisabledError) return null;
+      throw error;
+    }
+  }, []);
   const detail = useAsync(runSel && mode === 'traced' ? (s) => traceApi.run(runSel, s) : null, [runSel, mode]);
 
   const episodes = useMemo(() => {
@@ -66,6 +76,9 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
         <SmallButton active={mode === 'legacy'} onClick={() => setMode('legacy')}>
           {LABELS.legacySection}
         </SmallButton>
+        {!gmoDisabled && (gmoConfig.data?.enabled || gmoConfig.error) && (
+          <SmallButton active={mode === 'gmo'} onClick={() => setMode('gmo')}>GMO</SmallButton>
+        )}
         <details data-picker-details="trace" className="min-w-0 text-xs text-text-secondary open:order-last open:basis-full">
           <summary className="cursor-pointer px-2 py-1">一覧の詳細</summary>
           <dl className="mt-2 space-y-2 px-2 pb-2">
@@ -80,11 +93,20 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
         {mode === 'traced' && config?.exists === false && <span role="status" className="text-xs text-text-secondary">トレースの保存先が見つかりません</span>}
         {configError && <div role="alert"><ErrorText>{configError}</ErrorText></div>}
         <div className="ml-auto flex gap-2">
-          <SmallButton onClick={runs.reload}>一覧を更新</SmallButton>
+          {mode !== 'gmo' && <SmallButton onClick={runs.reload}>一覧を更新</SmallButton>}
           {onClose && <SmallButton onClick={onClose}>閉じる</SmallButton>}
         </div>
       </div>
-      {mode === 'legacy' ? (
+      {mode === 'gmo' ? (
+        <GmoPicker
+          initialConfig={gmoConfig.data}
+          configError={gmoConfig.error}
+          onConfigChange={gmoConfig.reload}
+          onRetryConfig={gmoConfig.reload}
+          onDisabled={() => { setGmoDisabled(true); setMode('traced'); }}
+          onPick={onPick}
+        />
+      ) : mode === 'legacy' ? (
         <LegacyPicker config={config} onPickLegacy={onPickLegacy} />
       ) : (
         <div className="flex-1 min-h-0 flex">

@@ -198,6 +198,118 @@ export const traceApi = {
 };
 
 // ---------------------------------------------------------------------------
+// GMO connection settings, remote episodes and queued imports (9.2)
+// ---------------------------------------------------------------------------
+
+export type GmoScope = 'all' | 'mine' | 'team';
+
+export interface GmoSettings {
+  host: string;
+  port: number | null;
+  identity_file: string | null;
+  mine: string[];
+  team: string[];
+  interval_s: number;
+}
+
+export interface GmoConfigResponse {
+  enabled: boolean;
+  configured: boolean;
+  settings: GmoSettings;
+  dest: string;
+  config_path: string;
+}
+
+export interface GmoEpisodeSummary extends EpisodeSummary {
+  run_id: string;
+  owner: string;
+  mine: boolean;
+  size_bytes: number;
+  local_state: 'remote' | 'local' | 'stale' | 'fetching';
+  conflict: boolean;
+}
+
+export interface GmoJob {
+  job_id: string;
+  run_id: string;
+  episode_id: string;
+  state: 'queued' | 'running' | 'done' | 'failed';
+  bytes: number;
+  error: string | null;
+  note: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface GmoCheckResponse {
+  ok: boolean;
+  mine_episodes: number;
+  team_episodes: number;
+  error: string | null;
+}
+
+/** A server started without --gmo has no GMO routes. */
+export class GmoDisabledError extends ApiError {
+  constructor(url: string) {
+    super(404, 'GMO 連携が無効です', url);
+    this.name = 'GmoDisabledError';
+  }
+}
+
+async function gmoJson<T>(path: string, signal?: AbortSignal, method: 'GET' | 'PUT' | 'POST' = 'GET', body?: unknown): Promise<T> {
+  const url = `/api/gmo${path}`;
+  const headers: Record<string, string> = { Accept: 'application/json', 'X-CapX-Request': 'gmo' };
+  if (method !== 'GET') headers['Content-Type'] = 'application/json';
+  const resp = await fetch(url, {
+    method,
+    headers,
+    signal,
+    ...(method !== 'GET' ? { body: JSON.stringify(body ?? {}) } : {}),
+  });
+  if (!resp.ok) {
+    const e = await readError(resp);
+    // server.py uses this route-level response when --gmo is absent. The
+    // enabled router can also return 404 for an episode removed from GMO.
+    if (resp.status === 404 && e.body && typeof e.body === 'object'
+      && (e.body as { detail?: unknown }).detail === 'Not Found') {
+      throw new GmoDisabledError(url);
+    }
+    throw new ApiError(resp.status, e.message, url, e.body);
+  }
+  if (!(resp.headers.get('content-type') ?? '').includes('json')) {
+    throw new ApiError(resp.status, 'GMO から JSON ではない応答が返りました', url);
+  }
+  return (await resp.json()) as T;
+}
+
+export const gmoApi = {
+  config(signal?: AbortSignal): Promise<GmoConfigResponse> {
+    return gmoJson('/config', signal);
+  },
+
+  saveConfig(settings: GmoSettings, signal?: AbortSignal): Promise<GmoConfigResponse> {
+    return gmoJson('/config', signal, 'PUT', settings);
+  },
+
+  check(signal?: AbortSignal): Promise<GmoCheckResponse> {
+    return gmoJson('/check', signal, 'POST');
+  },
+
+  episodes(scope: GmoScope = 'all', refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary[]> {
+    const params = new URLSearchParams({ scope, refresh: refresh ? '1' : '0' });
+    return gmoJson(`/episodes?${params.toString()}`, signal);
+  },
+
+  fetch(runId: string, episodeId: string, signal?: AbortSignal): Promise<{ job_id: string }> {
+    return gmoJson('/fetch', signal, 'POST', { run_id: runId, episode_id: episodeId });
+  },
+
+  jobs(signal?: AbortSignal): Promise<GmoJob[]> {
+    return gmoJson('/jobs', signal);
+  },
+};
+
+// ---------------------------------------------------------------------------
 // Lazy file loading (payloads, text assets, gzip JSON state snapshots)
 // ---------------------------------------------------------------------------
 

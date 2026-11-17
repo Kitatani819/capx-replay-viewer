@@ -363,6 +363,13 @@ export default function TraceViewerPage() {
   };
 
   const pick = (r: string, e: string) => {
+    // A GMO import may have updated the episode already on screen. Its ids do
+    // not change, so opening it again must explicitly read the new local data.
+    if (r === runId && e === episodeId) {
+      events.refresh();
+      summary.reload();
+      runDetail.reload();
+    }
     setPickerOpen(false);
     setLive(true);
     setFocus(null);
