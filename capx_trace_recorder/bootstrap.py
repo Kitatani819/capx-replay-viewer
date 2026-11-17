@@ -47,12 +47,12 @@ _CAPX_FINDER: "_FirstCapxFinder | None" = None
 _PATCH_LOCK = threading.RLock()
 _ACTIVE_RECORDER = "inactive"
 _STAND_DOWN_REASON = ""
-# H2's LIBERO goal helper is absent in CaP-X variants without that task.
-# Its absence does not affect the other trial roles. All other symbols are
-# required once their target module is imported. Experiment modules are
-# optional as modules and are never patched unless imported.
+# Some CaP-X variants omit the LIBERO goal helper or the legacy prompt builder.
+# Other symbols are required once their target module is imported. Experiment
+# modules are optional as modules and are never patched unless imported.
 OPTIONAL_SYMBOLS: dict[tuple[str, str], frozenset[str]] = {
     ("H2", "capx.envs.trial"): frozenset({"_patch_libero_goal"}),
+    ("H5/H6", "capx.utils.launch_utils"): frozenset({"_build_multi_turn_decision_prompt_legacy"}),
 }
 
 
@@ -75,9 +75,13 @@ def _write_status() -> None:
             return
         root = Path(config.trace_dir)
         root.mkdir(parents=True, exist_ok=True)
+        status: dict[str, Any] = {"active": _ACTIVE_RECORDER, "reason": _STAND_DOWN_REASON}
+        with C.REGISTRY.lock:
+            failures = list(C.REGISTRY.hooks_failed)
+        if failures:
+            status["hooks_failed"] = failures
         (root / f"recorder_status.{os.getpid()}.json").write_text(
-            json.dumps({"active": _ACTIVE_RECORDER, "reason": _STAND_DOWN_REASON}, ensure_ascii=True) + "\n",
-            encoding="utf-8")
+            json.dumps(status, ensure_ascii=True) + "\n", encoding="utf-8")
     except (KeyError, OSError, ValueError) as exc:
         if is_trial_alarm(exc):
             raise
@@ -146,16 +150,17 @@ def _write_orphan_h4_warning(failure: dict[str, Any]) -> None:
 
 def _record_problem(hook: str, target: str, reason: str, module: Any) -> None:
     """Classify an absent allow-listed symbol separately from an install failure."""
-    symbol = reason.split(":", 1)[0]
+    symbol, _, problem = reason.partition(": ")
+    if problem != "not found" or symbol not in OPTIONAL_SYMBOLS.get((hook, target), frozenset()):
+        _record_failed(hook, target, reason)
+        return
     obj = module
-    missing = False
-    for part in symbol.split("."):
-        try:
+    try:
+        for part in symbol.split("."):
             obj = getattr(obj, part)
-        except AttributeError:
-            missing = True
-            break
-    if not (missing and symbol in OPTIONAL_SYMBOLS.get((hook, target), frozenset())):
+    except AttributeError:
+        pass
+    else:
         _record_failed(hook, target, reason)
         return
     from capx_trace_recorder.payload import put_redacted
@@ -272,8 +277,14 @@ def _patch_requests(module: Any) -> None:
     err = http.install(module)
     if err:
         _record_failed("H1", "requests.sessions.Session.send", err)
+        return
+    _record_installed("H1", "requests.sessions.Session.send")
+    err = http.install_thread_start()
+    if err:
+        _record_failed("H1", "threading.Thread.start", err)
+        _write_status()
     else:
-        _record_installed("H1", "requests.sessions.Session.send")
+        _record_installed("H1", "threading.Thread.start")
 
 
 def _patch_client(module: Any) -> None:
@@ -293,17 +304,12 @@ def _patch_client(module: Any) -> None:
 def _patch_launch_utils(module: Any) -> None:
     from capx_trace_recorder.hooks import prompts
 
-    problems = prompts.install(module)
+    target = "capx.utils.launch_utils"
+    installed, problems = prompts.install(module)
     for p in problems:
-        _record_problem("H5/H6", "capx.utils.launch_utils", p, module)
-    if problems:
-        _record_partial("H5/H6", "capx.utils.launch_utils", module,
-                        ("_build_multi_turn_decision_prompt",
-                         "_build_multi_turn_decision_prompt_legacy",
-                         "_parse_multi_turn_decision", "_extract_code"))
-    if not problems:
-        _record_installed("H5", "capx.utils.launch_utils._build_multi_turn_decision_prompt(+_legacy)")
-        _record_installed("H6", "capx.utils.launch_utils._parse_multi_turn_decision/_extract_code")
+        _record_problem("H5/H6", target, p, module)
+    for hook, symbol in installed:
+        _record_installed(hook, f"{target}.{symbol}")
 
 
 def _patch_video_utils(module: Any) -> None:

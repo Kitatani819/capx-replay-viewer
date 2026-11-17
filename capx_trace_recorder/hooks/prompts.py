@@ -241,21 +241,25 @@ def make_build_wrapper(original: Any, builder_name: str) -> Any:
     return mark(wrapper, original)
 
 
-def install(launch_utils: Any) -> list[str]:
+def install(launch_utils: Any) -> tuple[list[tuple[str, str]], list[str]]:
+    """Return the installed (hook, symbol) pairs and any installation problems."""
+    installed = []
     problems = []
-    for name in ("_build_multi_turn_decision_prompt", "_build_multi_turn_decision_prompt_legacy"):
-        err = patch_attribute(launch_utils, name, lambda orig, n=name: make_build_wrapper(orig, n))
-        if err:
-            problems.append(err)
-    for name in ("_parse_multi_turn_decision", "_extract_code"):
-        err = patch_attribute(launch_utils, name, lambda orig, n=name: make_parse_wrapper(orig, n))
-        if err:
-            problems.append(err)
+    for hook, names, wrap in (
+        ("H5", ("_build_multi_turn_decision_prompt", "_build_multi_turn_decision_prompt_legacy"), make_build_wrapper),
+        ("H6", ("_parse_multi_turn_decision", "_extract_code"), make_parse_wrapper),
+    ):
+        for name in names:
+            err = patch_attribute(launch_utils, name, lambda original, n=name, factory=wrap: factory(original, n))
+            if err:
+                problems.append(err)
+            else:
+                installed.append((hook, name))
     from capx_trace_recorder.hooks.common import rebind_aliases
 
     rebind_aliases(launch_utils, ("_query_model", "_query_model_streaming", "_query_model_ensemble",
                                   "_query_single_model_ensemble"))
-    return problems
+    return installed, problems
 
 
 __all__ = ["install", "make_build_wrapper", "make_parse_wrapper", "USER_FEEDBACK_MARKER"]

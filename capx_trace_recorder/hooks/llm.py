@@ -12,6 +12,9 @@ episode's ``current_role`` (ensemble pool threads), else ``preflight`` in the
 experiment runner before any episode, else ``unknown``. Segments are
 registered right before each request from the env's state at that moment.
 
+``query_model`` records its returned reply when H1 leaves the last HTTP
+attempt's body unread for the client to consume.
+
 ``query_model_streaming`` is wrapped as a generator (PEP 380 delegation with a
 per-chunk callback); the context is set in the iterating thread for the whole
 iteration, ``model_response`` comes from the ``done`` chunk and ``model_error``
@@ -32,8 +35,9 @@ from capx_trace_recorder import context as C
 from capx_trace_recorder.hooks.common import add_overhead, guard, mark, patch_attribute
 from capx_trace_recorder.hooks.http import new_logical_call_id
 from capx_trace_recorder.ids import new_event_id
+from capx_trace_recorder.payload import mask_secrets
 from capx_trace_recorder.segments import find_task_text
-from capx_trace_recorder.serialize import text_value
+from capx_trace_recorder.serialize import json_safe, text_value
 from capx_trace_recorder.timeout import is_trial_alarm
 
 
@@ -135,6 +139,57 @@ def end_logical_error(lc: Any, exc: BaseException) -> None:
             builder=functools.partial(fill_message, message=message))
 
 
+def _record_query_response(lc: C.LogicalCall, result: Any) -> None:
+    """Record the reply for a query whose final HTTP attempt left the body to the client."""
+    request_id = lc.last_request_id
+    info = lc.stream_info
+    if (
+        not isinstance(result, dict)
+        or request_id is None
+        or info.get("request_event_id") != request_id
+        or lc.last_response_request_id == request_id
+    ):
+        return
+    latency = time.monotonic() - info["t_send"]
+    content = json_safe(result.get("content"))
+    reasoning = result.get("reasoning")
+    reasoning = reasoning if isinstance(reasoning, str) else None
+    usage = json_safe(result.get("usage"))
+    truncated = result.get("truncated") is True
+    event_id = new_event_id()
+    pending: list[Any] = []
+    data = {
+        "role": lc.role, "call_kind": lc.call_kind, "logical_call_id": lc.event_id,
+        "http_attempt": lc.attempts, "http_status": info.get("http_status"),
+        "latency_s": round(latency, 6), "streamed": False, "n_chunks": None, "ttft_s": None,
+        "content": text_value(content, pending, "text") if isinstance(content, str) else content,
+        "reasoning": {"text": text_value(reasoning, pending, "text"), "field": "query_model_return.reasoning"}
+        if reasoning is not None else None,
+        "usage": usage, "finish_reason": "length" if truncated else None,
+        "response_model": None, "response_id": None,
+        "body_captured": False, "source": "query_model_return_value",
+    }
+    assembled = {"content": content, "reasoning": reasoning, "usage": usage, "truncated": truncated}
+
+    def builder(ctx):
+        stored, masked_paths = mask_secrets(assembled)
+        art = ctx.write_file(f"payloads/{event_id}.response.json",
+                             json.dumps(stored, ensure_ascii=True, allow_nan=False).encode("ascii"),
+                             label="payload", kind="json", mime="application/json", binary=False,
+                             extra={"assembled_from_return_value": True})
+        ctx.data["payload_path"] = art["path"] if art["written"] else None
+        ctx.data["masked_fields"] = masked_paths
+        ctx.fill_pending(pending)
+
+    refs = {"logical_call_id": lc.event_id, "http_attempt": lc.attempts, "model_event_id": request_id}
+    if lc.turn_index is not None:
+        refs["turn_index"] = lc.turn_index
+    lc.episode.emit("model_response", status="ok", data=data, parent=request_id, refs=refs,
+                    builder=builder, event_id=event_id)
+    lc.last_response_id = event_id
+    lc.last_response_request_id = request_id
+
+
 def make_query_model_wrapper(original: Any) -> Any:
     @functools.wraps(original)
     def query_model(*args: Any, **kwargs: Any) -> Any:
@@ -146,17 +201,19 @@ def make_query_model_wrapper(original: Any) -> Any:
             return original(*args, **kwargs)
         add_overhead(lc.episode, t0)
         try:
-            C.push_ctx(lc)
-            result = original(*args, **kwargs)
+            try:
+                C.push_ctx(lc)
+                result = original(*args, **kwargs)
+            finally:
+                lc.finished = True
+                C.pop_ctx(lc)
         except BaseException as exc:
-            C.pop_ctx(lc)
             t1 = time.perf_counter()
             guard(end_logical_error, lc, exc)
             add_overhead(lc.episode, t1)
             raise
-        finally:
-            C.pop_ctx(lc)  # also when an alarm lands after the call returned
         t1 = time.perf_counter()
+        guard(_record_query_response, lc, result)
         guard(end_logical_ok, lc, result)
         add_overhead(lc.episode, t1)
         return result
@@ -244,6 +301,7 @@ class StreamState:
         ep.emit("model_response", status="ok", data=data, parent=lc.last_request_id, refs=refs,
                 builder=builder, event_id=event_id)
         lc.last_response_id = event_id
+        lc.last_response_request_id = lc.last_request_id
         end_logical_ok(lc, {"content": content})
 
     def failed(self, exc: BaseException, error_type: str | None = None) -> None:
@@ -320,18 +378,18 @@ def make_streaming_wrapper(original: Any) -> Any:
         state = StreamState(lc)
         add_overhead(lc.episode, t0)
         try:
-            C.push_ctx(lc)
-            result = yield from delegate(original(*args, **kwargs), state.on_chunk)
+            try:
+                C.push_ctx(lc)
+                result = yield from delegate(original(*args, **kwargs), state.on_chunk)
+            finally:
+                lc.finished = True
+                C.pop_ctx(lc)
         except GeneratorExit as exc:
-            C.pop_ctx(lc)
             guard(state.failed, exc, "GeneratorExit")
             raise
         except BaseException as exc:
-            C.pop_ctx(lc)
             guard(state.failed, exc)
             raise
-        finally:
-            C.pop_ctx(lc)  # also when an alarm lands after the stream ended
         guard(state.finished)
         return result
 

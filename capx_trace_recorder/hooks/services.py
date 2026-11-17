@@ -239,16 +239,17 @@ def make_service_wrapper(fn: Any, service: str, function: str) -> Any:
             return fn(*args, **kwargs)
         add_overhead(rec.episode, t0)
         try:
-            C.push_ctx(rec)
-            result = fn(*args, **kwargs)
+            try:
+                C.push_ctx(rec)
+                result = fn(*args, **kwargs)
+            finally:
+                rec.finished = True
+                C.pop_ctx(rec)
         except BaseException as exc:
-            C.pop_ctx(rec)
             t1 = time.perf_counter()
             guard(_service_end, rec, None, exc)
             add_overhead(rec.episode, t1)
             raise
-        finally:
-            C.pop_ctx(rec)  # also when an alarm lands after the closure returned
         t1 = time.perf_counter()
         guard(_service_end, rec, result, None)
         add_overhead(rec.episode, t1)
