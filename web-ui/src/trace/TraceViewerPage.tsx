@@ -476,6 +476,7 @@ export default function TraceViewerPage() {
         </details>}
         {videoPending && <span className="text-sm text-amber-200">{videoCopyMessage(summary.data)}</span>}
         <div className="ml-auto flex gap-2">
+          <a href="/evals" className="self-center text-sm text-text-tertiary hover:underline">評価一覧</a>
           <SmallButton onClick={() => setPickerOpen(true)}>試行を選ぶ</SmallButton>
           <SmallButton onClick={() => setParams({view: detailed ? 'simple' : 'details'})}>{detailed ? '実行回ごとの表示' : 'リプレイを見る'}</SmallButton>
         </div>

@@ -21,6 +21,9 @@ test('simple view hides diagnostics; details switch preserves episode and is rev
   const page=mount(TraceViewerPage,{});await advance(1000);
   assert.equal(findAll(page.output,SimpleViewer).length,1);
   assert.equal(findAll(page.output,TopBar).length,0);
+  const evalLinks=findAll(page.output,'a').filter(e=>e.props.href==='/evals');
+  assert.equal(evalLinks.length,1);
+  assert.equal(evalLinks[0].props.children,'評価一覧');
   const click=(label:string)=>(findAll(page.output,SmallButton).find(e=>e.props.children===label)!.props.onClick as ()=>void)();
   click('リプレイを見る');await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,0);

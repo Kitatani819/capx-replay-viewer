@@ -365,6 +365,7 @@ export function TopBar({
       <div className="replay-header-main">
         <h1 title={task ?? undefined}>{task ?? (episodeLabel?.split('/')[0] || '試行のリプレイ')}</h1>
         <div className="replay-header-actions">
+          <a href="/evals" className="replay-text-button whitespace-nowrap">評価一覧</a>
           {episodeId && status === 'running' && <span className="text-sm text-accent">記録中</span>}
           {episodeId && gapParts.length > 0 && <span className="replay-warning" title={[...gapParts, ...gapDetails].join('\n')}>記録に欠落があります</span>}
           {episodeId && reader.error && reader.count > 0 && <span role="status" className="replay-warning" title={reader.error}>記録の更新に失敗しています</span>}

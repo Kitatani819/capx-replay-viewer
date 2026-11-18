@@ -21,7 +21,7 @@ from capx_trace_viewer import evals, reader
 
 HEARTBEAT_INTERVAL_S = 60.0
 WORKER_WAIT_TIMEOUT_S = 60.0
-# Phase 2 can provide objects with publish(eval_record). Nothing is sent in phase 1.
+# Unused extension point for objects with publish(eval_record).
 SINKS: list[Any] = []
 
 
@@ -79,6 +79,20 @@ def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False) 
             pass
 
 
+def _warn_group_access(path: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        readable = path.stat().st_mode & stat.S_IRGRP
+        searchable = path.parent.stat().st_mode & stat.S_IXGRP
+    except OSError:
+        return
+    if not readable or not searchable:
+        print("eval: teammates will not see this evaluation in their viewer; use a group-readable "
+              "umask such as 027 or a group-owned trace root with group read/search permissions",
+              file=sys.stderr)
+
+
 def _wait_for_workers(pgid: int, timeout: float) -> bool:
     """Return whether the process group emptied before the deadline."""
     deadline = time.monotonic() + timeout
@@ -121,6 +135,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
     path = run / "eval.json"
     _write_record(path, record, initial=True)
+    _warn_group_access(path)
     _publish(record, sinks)
     if baseline is not None:
         try:
