@@ -4,6 +4,7 @@ import { advance, findAll, popState, propsOf, resetBrowser, setLocation } from '
 import { mount } from './harness/fakeReact';
 import { buildEpisodeModel } from '../model';
 import { VideoPlayback } from '../components/VideoPlayback';
+import { ApiPythonPanel } from '../components/ApiPythonPanel';
 import { MediaPane } from '../components/MediaPane';
 import { TopBar } from '../components/TopBar';
 import { DetailTabs } from '../components/DetailTabs';
@@ -62,11 +63,11 @@ async function changeSelect(p: ReturnType<typeof player>, label: string, value: 
   await advance(0);
 }
 
-test('the process list centers on selection, mode, turn and visibility changes while preserving manual scroll on trace updates', async () => {
+test('the legacy process list centers on selection, turn and visibility changes while preserving manual scroll on trace updates', async () => {
   resetBrowser();
   const rec = recording();
   const p = player({ model: rec.model, videos: [{ name: 'video_combined.mp4', url: '/video' }],
-    ep: { runId: 'run', episodeId: 'ep' }, initialKey: rec.sam.key, logPanel: 'recorded logs', onSelect: () => {} });
+    initialKey: rec.sam.key, logPanel: 'recorded logs', onSelect: () => {} });
   const positions = watchProcessScroll(p);
   const toggleLogs = async (label: string) => {
     const button = findAll(p.page.output, 'button').find(el => el.props.children === label);
@@ -87,18 +88,12 @@ test('the process list centers on selection, mode, turn and visibility changes w
     p.page.update({ ...p.page.props, initialKey: rec.code.key });
     await advance(0);
     assert.equal(positions.length, 2);
-    await changeSelect(p, '表示する処理', 'all');
-    assert.equal(positions.length, 3);
     await changeSelect(p, 'リプレイのターン', '1');
-    assert.equal(positions.length, 4);
+    assert.equal(positions.length, 3);
     await toggleLogs('詳細ログ');
-    assert.equal(positions.length, 4);
+    assert.equal(positions.length, 3);
     await toggleLogs('処理タイムライン');
-    assert.equal(positions.length, 5);
-    await changeSelect(p, '表示する処理', 'api-python');
-    assert.equal(positions.length, 5);
-    await changeSelect(p, '表示する処理', 'all');
-    assert.equal(positions.length, 6);
+    assert.equal(positions.length, 4);
   } finally {
     p.page.unmount();
   }
@@ -154,15 +149,17 @@ test('selecting a turn with a recorded process keeps automatic recording selecti
   }
 });
 
-test('selecting a turn with no matching process still opens its recording', async () => {
+test('selecting a turn without an API selects its recorded Python block', async () => {
   resetBrowser();
   const { model, videos } = turnRecording();
   const selections: string[] = [];
-  const p = player({ model, videos, initialKey: model.blocks[0].key, processMode: 'prompts',
+  const p = player({ model, videos, ep: { runId: 'run', episodeId: 'ep' }, initialKey: model.blocks[0].key,
     onSelect: node => selections.push(node.key) });
   try {
     await changeSelect(p, 'リプレイのターン', '1');
-    assert.deepEqual(selections, []);
+    assert.deepEqual(selections, [model.blocks[1].key]);
+    p.page.update({ ...p.page.props, initialKey: selections[0] });
+    await advance(0);
     assert.equal(p.video().props.src, '/turn1');
   } finally {
     p.page.unmount();
@@ -310,14 +307,13 @@ test('running page keeps Live tail ownership until replay interaction, and can r
   page.unmount();
 });
 
-test('picking another trial keeps the process mode and clears the previous selection and seek',async()=>{
+test('picking another trial opens its default API/Python view and clears the previous selection and seek',async()=>{
   resetBrowser();const run=makeRun();
   for(const id of ['e1','e2'])addEpisode(run,id,{status:'ended'},[
     ev(id,1,'episode_start',{}),ev(id,2,'code_block_start',{code_block_id:`${id}_2`,code:'x=1'}),
   ]);
   serve(run);setLocation('/traces?view=details&run=r1&episode=e1&event=e1_2');
   const page=mount(TraceViewerPage,{});await advance(1000);
-  propsOf<MediaProps>(page.output,MediaPane).onProcessModeChange!('api-python');await advance(0);
   const detail=propsOf<DetailsProps>(page.output,DetailTabs);
   detail.onSelect(detail.model.blocks[0]);await advance(0);
   assert.ok(propsOf<MediaProps>(page.output,MediaPane).seekRequest);
@@ -325,7 +321,11 @@ test('picking another trial keeps the process mode and clears the previous selec
   propsOf<Parameters<typeof Picker>[0]>(page.output,Picker).onPick('r1','e2');await advance(1000);
   const media=propsOf<MediaProps>(page.output,MediaPane);
   assert.equal(media.ep.episodeId,'e2');
-  assert.equal(media.processMode,'api-python');
+  const pane = mount(MediaPane, { ...media, videos: [{ name: 'video_combined.mp4', url: '/video' }] });
+  const video = mount(VideoPlayback, propsOf<PlayerProps>(pane.output, VideoPlayback));
+  assert.equal(findAll(video.output, 'select').some(element => element.props['aria-label'] === '表示する処理'), false);
+  assert.equal(findAll(video.output, ApiPythonPanel).length, 1);
+  video.unmount(); pane.unmount();
   assert.equal(media.seekRequest,null);
   assert.equal(media.selection,null);
   assert.equal(media.allowReplayInitialSelection,true);

@@ -37,7 +37,7 @@ import { dataOf, type ImageInfo } from '../types';
 import { Badge, DebugFrameChip, SentToModelChip, SmallButton } from './common';
 import type { EventDataAccess } from './DataAssetState';
 import { TraceImage } from './TraceImage';
-import { VideoPlayback, type ReplayProcessMode, type ReplaySeek } from './VideoPlayback';
+import { VideoPlayback, type ReplaySeek } from './VideoPlayback';
 import type { TrialVideo } from '../playback';
 import type { TNode } from '../model';
 import type { EpisodeRef } from './ValueView';
@@ -54,9 +54,7 @@ interface MediaPaneProps extends EventDataAccess {
   replayLive?: boolean;
   allowReplayInitialSelection?: boolean;
   onReplayInteract?: () => void;
-  processMode?: ReplayProcessMode;
-  onProcessModeChange?: (mode: ReplayProcessMode) => void;
-  onApiPythonModeChange?: (active: boolean) => void;
+  onApiPythonVisibleChange?: (visible: boolean) => void;
   model: EpisodeModel;
   ep: EpisodeRef;
   selection: Selection | null;
@@ -65,7 +63,7 @@ interface MediaPaneProps extends EventDataAccess {
   follow: boolean;
 }
 
-export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, processMode, onProcessModeChange, onApiPythonModeChange, assetStates, onRetryAsset }: MediaPaneProps) {
+export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonVisibleChange, assetStates, onRetryAsset }: MediaPaneProps) {
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -112,8 +110,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
       </div>
       {tab === 'video' ? (
         <div className="replay-video min-w-0">
-          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} ep={ep} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} onClearSelection={onPlaybackClear} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} onApiPythonModeChange={onApiPythonModeChange}
-            processMode={processMode} onProcessModeChange={onProcessModeChange}
+          <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} ep={ep} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} onClearSelection={onPlaybackClear} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} onApiPythonVisibleChange={onApiPythonVisibleChange}
             assetStates={assetStates} onRetryAsset={onRetryAsset}
             selectionFromPlayback={selectionFromPlayback} liveMode={replayLive} allowInitialSelection={allowReplayInitialSelection} onInteract={onReplayInteract}/>
         </div>

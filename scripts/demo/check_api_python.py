@@ -12,8 +12,7 @@ def check_api_python(page, url, events, output):
     calls.sort(key=lambda event: event['seq'])
     assert len(calls) == 6
     by_id = {event['event_id']: event for event in events}
-    mode = page.get_by_label('表示する処理', exact=True)
-    mode.select_option('api-python')
+    expect(page.get_by_label('表示する処理', exact=True)).to_have_count(0)
     api_panel = page.locator('[data-api-python-panel]')
     details = page.get_by_role('tabpanel')
 
@@ -82,7 +81,7 @@ def check_api_python(page, url, events, output):
     expect(api_panel.locator('[data-code-line="3"]')).to_contain_text('1.1')
     api_panel.get_by_role('button', name='前のコードブロック', exact=True).click()
     paused_at(0)
-    expect(mode).to_have_value('api-python')
+    expect(api_panel).to_be_visible()
     expect(api_panel.locator('[data-code-line="3"]')).to_contain_text('0.93')
     expect(api_panel.locator('[data-code-highlighted=true]')).to_have_count(0)
     api_panel.get_by_role('button', name='次のコードブロック', exact=True).click()

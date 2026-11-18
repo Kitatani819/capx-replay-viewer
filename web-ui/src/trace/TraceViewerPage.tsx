@@ -49,7 +49,7 @@ import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type
 import { awaitingOracleHookEvidence, episodeRecordingWarnings } from './recordingWarnings';
 import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
-import type { ReplayProcessMode, ReplaySeek } from './components/VideoPlayback';
+import type { ReplaySeek } from './components/VideoPlayback';
 import { replayTab } from './replay';
 import { headerVerdict } from './outcome';
 import { dataOf } from './types';
@@ -213,8 +213,7 @@ export default function TraceViewerPage() {
 
   const [scrollToken, setScrollToken] = useState(0);
   const [tab, setTab] = useState(0);
-  const [processMode, setProcessMode] = useState<ReplayProcessMode>('main');
-  const [apiPythonMode, setApiPythonMode] = useState(false);
+  const [apiPythonVisible, setApiPythonVisible] = useState(false);
   const [focus, setFocus] = useState<RangeFocus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [playbackSelection, setPlaybackSelection] = useState<{ eventId: string | null } | null>(null);
@@ -348,22 +347,35 @@ export default function TraceViewerPage() {
   const mainRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const layout = mainRef.current;
-    if (!apiPythonMode || !layout) return;
-    const measureTop = () => {
-      // Use the document position so scrolling the page leaves the pane sizes stable.
-      const top = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
-      layout.style.setProperty('--replay-layout-top', `${top}px`);
+    if (!apiPythonVisible || !layout) return;
+    const details = layout.querySelector<HTMLElement>('.replay-details');
+    let documentTop = 0;
+    let detailsHeight = 0;
+    const updateVisibleHeight = () => {
+      const room = Math.min(window.innerHeight + window.scrollY - documentTop, detailsHeight);
+      layout.style.setProperty('--replay-visible-column', `${Math.floor(room)}px`);
     };
-    measureTop();
+    const measure = () => {
+      // The document position keeps the video stable. Only the log uses the
+      // additional space revealed by scrolling alongside the details column.
+      documentTop = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
+      detailsHeight = details?.offsetHeight ?? 0;
+      layout.style.setProperty('--replay-layout-top', `${documentTop}px`);
+      updateVisibleHeight();
+    };
+    measure();
     const header = layout.parentElement?.querySelector('.replay-header');
-    const observer = header && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measureTop) : null;
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     if (header) observer?.observe(header);
-    window.addEventListener('resize', measureTop);
+    if (details) observer?.observe(details);
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', updateVisibleHeight, { passive: true });
     return () => {
       observer?.disconnect();
-      window.removeEventListener('resize', measureTop);
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', updateVisibleHeight);
     };
-  }, [apiPythonMode]);
+  }, [apiPythonVisible]);
   const clampLeft = (w: number) => {
     const total = mainRef.current?.getBoundingClientRect().width ?? 1400;
     return Math.round(Math.max(280, Math.min(total - 420, w)));
@@ -508,8 +520,7 @@ export default function TraceViewerPage() {
               </div>
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
-                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonModeChange={setApiPythonMode}
-                  processMode={processMode} onProcessModeChange={setProcessMode}
+                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonVisibleChange={setApiPythonVisible}
                   assetStates={shownAssetStates} onRetryAsset={assets.retry}
                   selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
@@ -538,7 +549,6 @@ export default function TraceViewerPage() {
           <div data-replay-pane="details" className="replay-details flex-1 min-w-0 flex flex-col">
             <div className="flex-1 min-h-0">
               <DetailTabs
-                apiPythonMode={apiPythonMode}
                 model={model}
                 ep={ep}
                 summary={summary.data}

@@ -51,3 +51,53 @@ test('hover and focus preview an API without selecting it; clicks and block navi
     assert.equal(selected.at(-1), model.nodeOfEvent.get(block.event_id)!.key);
   } finally { panel.unmount(); }
 });
+
+test('resizing the API and Python panes preserves manual scroll and keeps a visible selection in view on shrink', () => {
+  resetBrowser();
+  const r = new Rec();
+  r.episodeStart();
+  const block = r.blockStart(null, 'get_observation()');
+  const api = r.apiStart(block, 'get_observation', {}, null, { call_site: { code_block_id: block.event_id, line: 1 } });
+  const model = buildEpisodeModel(r.events);
+  const props: ApiPythonPanelProps = { model, ep: { runId: 'run', episodeId: 'ep' }, apiCues: [], selectedKey: null, onSelect() {} };
+  const panel = mount(ApiPythonPanel, props);
+  const resize = new Map<object, () => void>();
+  const originalObserver = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  Object.assign(globalThis, { ResizeObserver: class {
+    constructor(private notify: () => void) {}
+    observe(pane: object) { resize.set(pane, this.notify); }
+    disconnect() {}
+  } });
+  try {
+    const panes = ['API呼び出し', 'Pythonコードと記録'].map(label => {
+      const pane = {
+        clientHeight: 100, clientWidth: 300, clientTop: 0, scrollTop: 0,
+        getBoundingClientRect: () => ({ top: 0 }),
+        querySelector: () => ({ getBoundingClientRect: () => ({ top: 300 - pane.scrollTop, height: 10, bottom: 310 - pane.scrollTop }) }),
+      };
+      const element = findAll(panel.output, 'div').find(el => el.props['aria-label'] === label)!;
+      (element.props.ref as { current: unknown }).current = pane;
+      return pane;
+    });
+    panel.update({ ...props, selectedKey: model.nodeOfEvent.get(api.event_id)!.key });
+    for (const pane of panes) {
+      const resized = resize.get(pane)!;
+      assert.equal(pane.scrollTop, 255, 'selecting an API reveals its row and its call line');
+      pane.scrollTop = 20;
+      pane.clientHeight = 200;
+      resized();
+      assert.equal(pane.scrollTop, 20, 'growing the pane leaves the reading position alone');
+      pane.clientHeight = 100;
+      resized();
+      assert.equal(pane.scrollTop, 20, 'shrinking the pane also preserves a manual scroll away from the selection');
+      pane.scrollTop = 225; // The selected row is now visible, 75 px from the top.
+      pane.clientHeight = 50;
+      resized();
+      assert.equal(pane.scrollTop, 280, 'a previously visible selection stays inside the smaller pane');
+    }
+  } finally {
+    panel.unmount();
+    if (originalObserver) Object.defineProperty(globalThis, 'ResizeObserver', originalObserver);
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+  }
+});

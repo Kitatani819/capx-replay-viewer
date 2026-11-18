@@ -177,3 +177,47 @@ test('recorded handover methods resolve only for the verified class and qualifie
   assert.match(definition(calls[2])!.summaryJa, /アーム0基準からアーム1基準に変換/);
   for (const call of unverified) assert.equal(definition(call), null);
 });
+
+test('competition control and skill-library methods use their recorded declaring classes', () => {
+  const r = new Rec();
+  const block = r.blockStart(null, code);
+  const owner = 'FrankaControlApiReduced';
+  const skill = 'FrankaControlApiReducedSkillLibrary';
+  const names = ['get_observation', 'segment_sam3_text_prompt', 'get_oriented_bounding_box_from_3d_points',
+    'solve_ik_arm0', 'solve_ik_arm1', 'move_to_joints_arm0', 'move_to_joints_arm1',
+    'open_gripper_arm0', 'close_gripper_arm0', 'open_gripper_arm1', 'close_gripper_arm1',
+    'point_prompt_molmo', 'segment_sam3_point_prompt', 'detect_object_owlvit', 'segment_sam2',
+    'plan_grasp', 'solve_ik', 'move_to_joints', 'open_gripper', 'close_gripper', 'move_to_joints_both'];
+  const calls = names.map(name => r.apiStart(block, name, {}, null, { api_class: skill, qualname: `${owner}.${name}` }));
+  const skills = ['mask_to_world_points', 'rotation_matrix_to_quaternion', 'decompose_transform', 'depth_to_point_cloud',
+    'pixel_to_world_point', 'transform_points', 'interpolate_segment', 'normalize_vector', 'select_top_down_grasp'];
+  const skillCalls = skills.map(name => r.apiStart(block, name, {}, null, { api_class: skill, qualname: `${skill}.${name}` }));
+  const unverified = [
+    r.apiStart(block, 'solve_ik_arm0', {}, null, { api_class: skill, qualname: `${owner}.solve_ik_arm1` }),
+    r.apiStart(block, 'solve_ik_arm0', {}, null, { api_class: 'AnotherApi', qualname: `${owner}.solve_ik_arm0` }),
+    r.apiStart(block, 'move_to_joints_arm0', {}, null, { api_class: skill, qualname: null }),
+    r.apiStart(block, 'solve_ik_arm2', {}, null, { api_class: skill, qualname: `${owner}.solve_ik_arm2` }),
+    r.apiStart(block, 'mask_to_world_points', {}, null, { api_class: owner, qualname: `${skill}.mask_to_world_points` }),
+    r.apiStart(block, 'pixel_to_world_point', {}, null, { api_class: skill, qualname: `${owner}.pixel_to_world_point` }),
+  ];
+  const model = buildEpisodeModel(r.events);
+  const definition = (event: (typeof calls)[number]) => apiDefinition(model.nodeOfEvent.get(event.event_id)!);
+  for (const event of [...calls, ...skillCalls]) {
+    const doc = definition(event)!;
+    assert.equal(doc.name, dataOf(event, 'api_call_start').name);
+    assert.ok(doc.summaryJa && doc.descriptionJa && doc.docstring && doc.signature);
+    assert.match(doc.sourceUrl, /blob\/ac680843fb60c464aa74c87a2815cb5917865be4\/capx\/integrations\/franka\/control_reduced(?:_skill_library)?\.py#L\d+-L\d+/);
+  }
+  assert.match(definition(calls[3])!.summaryJa, /アーム0.*7関節/);
+  assert.match(definition(calls[4])!.summaryJa, /アーム0基準からアーム1基準/);
+  assert.match(definition(calls[5])!.descriptionJa, /move_to_joints_blocking に/);
+  assert.match(definition(calls[6])!.descriptionJa, /move_to_joints_blocking_arm1 に/);
+  assert.match(definition(calls[7])!.descriptionJa, /1\.0.*30ステップ/);
+  assert.match(definition(calls[8])!.descriptionJa, /0\.0.*30ステップ/);
+  assert.match(definition(skillCalls[0])!.summaryJa, /深度.*ワールド座標/);
+  assert.match(definition(calls[names.indexOf('plan_grasp')])!.descriptionJa, /局所Z方向に0\.12m/);
+  assert.match(definition(calls[names.indexOf('move_to_joints_both')])!.descriptionJa, /move_to_joints_blocking_both/);
+  assert.match(definition(skillCalls[skills.indexOf('depth_to_point_cloud')])!.summaryJa, /カメラ座標/);
+  assert.match(definition(skillCalls[skills.indexOf('select_top_down_grasp')])!.descriptionJa, /None, -inf/);
+  for (const event of unverified) assert.equal(definition(event), null);
+});

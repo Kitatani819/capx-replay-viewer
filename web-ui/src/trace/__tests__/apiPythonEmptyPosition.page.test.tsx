@@ -52,8 +52,7 @@ function player(rec: ReturnType<typeof recording>) {
   const panel = () => propsOf<PanelProps>(page.output, ApiPythonPanel);
   const ready = async () => {
     (video().props.onLoadedMetadata as Function)({ currentTarget: media }); await advance(0);
-    const mode = findAll(page.output, 'select').find(item => item.props['aria-label'] === '表示する処理')!;
-    (mode.props.onChange as Function)({ target: { value: 'api-python' } }); await accept();
+    await accept();
     (video().props.onSeeked as Function)({ currentTarget: media }); await advance(0);
   };
   return { page, video, media, updates, accept, panel, ready };

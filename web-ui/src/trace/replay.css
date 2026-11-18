@@ -76,20 +76,29 @@
 .replay-workspace .replay-event-row[data-current="true"] { background: #e0ebdf; border-radius: 5px; box-shadow: inset 3px 0 #467e5c; font-weight: 600; border-bottom-color: transparent; animation: replay-a-focus 450ms ease-out; }
 @keyframes replay-a-focus { from { background: #c9dfc7; } to { background: #e0ebdf; } }
 .replay-log-tools { display: flex; align-items: center; gap: 20px; padding-bottom: 10px; font-size: 13px; flex-wrap: wrap; }
-.replay-log-tools > select { margin-left: auto; font-size: 13px; background: transparent; border-color: transparent; }
 .replay-process-scroll { max-height: var(--replay-process-height); overflow-y: auto; scrollbar-gutter: stable; }
 .replay-process-scroll:focus-visible { outline: 2px solid #467e5c; outline-offset: -2px; }
-.replay-playback-options { position: relative; color: #647568; }
+.replay-playback-options { position: relative; margin-left: auto; color: #647568; }
 .replay-playback-options > div { position: absolute; bottom: 32px; right: 0; z-index: 30; width: 300px; padding: 18px; border: 1px solid #d5ddd4; background: white; border-radius: 8px; box-shadow: 0 8px 30px #24332b22; display: flex; gap: 14px; flex-wrap: wrap; }
 .replay-media-tools { padding-bottom: 9px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; font-size: 12px; color: #69796c; }
 .replay-media-tools select { background: transparent; border-color: transparent; font-size: 12px; padding: 0 4px; }
-/* The recording and Python pane share the space below the trial header. */
-.replay-media:has(.replay-api-python) { height: max(520px, calc(100dvh - var(--replay-layout-top, 110px) - 16px)); }
+/* At the top of the page the video and the selected line fit together. */
+.replay-media:has(.replay-api-python) {
+  --replay-bottom-gap: 16px;
+  --replay-media-height: max(520px, calc(100dvh - var(--replay-layout-top, 110px) - var(--replay-bottom-gap)));
+  --replay-log-extra: 0px;
+  height: calc(var(--replay-media-height) + var(--replay-log-extra));
+}
+@media (min-width: 901px) {
+  .replay-media:has(.replay-api-python) {
+    --replay-log-extra: clamp(0px, calc(var(--replay-visible-column, 0px) - var(--replay-bottom-gap) - var(--replay-media-height)), 40dvh);
+  }
+}
 .replay-media:has(.replay-api-python) > .replay-media-tools { flex-shrink: 0; }
 .replay-video:has(.replay-api-python) { display: flex; flex: 1; min-height: 0; }
 .replay-api-python { width: 100%; min-width: 0; }
 .replay-api-python .replay-film { flex: 1 1 0; height: auto; min-height: 128px; max-height: 520px; }
-.replay-api-python .replay-process-log { display: flex; flex: 1 1 7rem; flex-direction: column; min-height: 0; }
+.replay-api-python .replay-process-log { display: flex; flex: 1 1 calc(7rem + var(--replay-log-extra)); flex-direction: column; min-height: 0; }
 .replay-api-python :is(.replay-log-heading, .replay-log-tools, .replay-sync-warning, .replay-warning) { flex-shrink: 0; }
 .replay-recorded-frame-viewport {
   --frame-height: clamp(230px, 36dvh, 460px);
