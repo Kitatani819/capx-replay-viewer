@@ -331,6 +331,129 @@ def test_dead_writer_is_noticed(work_dir, monkeypatch):
     C.close_episode(ep)
 
 
+@pytest.mark.parametrize("failed_kind,nbytes,keep_payload", [
+    ("internal", 128, False),
+    ("internal", 2048, True),
+    ("internal", 2048, False),
+    ("barrier", 0, False),
+])
+def test_queue_memory_error_preserves_accounting_and_allows_unbounded_flush(
+        work_dir, monkeypatch, failed_kind, nbytes, keep_payload):
+    store = make_store(work_dir, max_queue_mb=0.001)
+    ep = open_ep(store)
+    assert store.flush(5)
+    builder_started = threading.Event()
+    release_builder = threading.Event()
+    real_queue = store._queue
+    error = MemoryError("queue allocation failed")
+    saved = []
+    results = []
+
+    class RecoveringQueue:
+        fail_next = True
+
+        def put(self, item):
+            if item.kind == failed_kind and self.fail_next:
+                self.fail_next = False
+                raise error
+            real_queue.put(item)
+
+        def get(self, *args, **kwargs):
+            return real_queue.get(*args, **kwargs)
+
+    def blocked_builder(ctx):
+        builder_started.set()
+        assert release_builder.wait(5)
+        saved.append("pending write")
+
+    def drain():
+        try:
+            results.append(store.flush(timeout=None))
+        except BaseException as exc:
+            results.append(exc)
+
+    thread = threading.Thread(target=drain, daemon=True)
+    try:
+        ep.internal(blocked_builder, nbytes=64)
+        assert builder_started.wait(5)
+        monkeypatch.setattr(store, "_queue", RecoveringQueue())
+        with pytest.raises(MemoryError) as caught:
+            if failed_kind == "barrier":
+                store.flush(timeout=None)
+            else:
+                store.submit(S.Item("internal", ep, nbytes=nbytes, keep_payload=keep_payload))
+        assert caught.value is error
+        # The existing write remains counted; the rejected item does not.
+        with store._bytes_lock:
+            assert store._in_flight == 1
+            assert store.queued_bytes() == 64
+        assert store.writer_alive()
+        ep.emit("trace_warning", data={"code": "recovered", "counts_as_gap": False})
+        release_builder.set()
+        thread.start()
+        thread.join(2)
+        assert not thread.is_alive(), "unbounded flush hung after a queue allocation failure"
+        assert results == [True]
+        assert saved == ["pending write"]
+        assert store.queued_bytes() == 0
+        events, corrupt, torn = read_events(ep.events_path)
+        assert not corrupt and not torn
+        assert events[-1]["data"]["code"] == "recovered"
+    finally:
+        release_builder.set()
+        C.close_episode(ep)
+        store.shutdown(5)
+
+
+def test_unbounded_flush_notices_writer_death_with_a_pending_barrier(work_dir, monkeypatch):
+    store = make_store(work_dir)
+    ep = open_ep(store)
+    assert store.flush(5)
+    builder_started = threading.Event()
+    release_builder = threading.Event()
+    barrier_queued = threading.Event()
+    real_queue = store._queue
+    results = []
+
+    class WriterDied(BaseException):
+        pass
+
+    class ExplodingQueue:
+        def put(self, item):
+            real_queue.put(item)
+            if item.kind == "barrier":
+                barrier_queued.set()
+
+        def get(self, *args, **kwargs):
+            raise WriterDied()
+
+    def blocked_builder(ctx):
+        builder_started.set()
+        assert release_builder.wait(5)
+
+    def drain():
+        try:
+            results.append(store.flush(timeout=None))
+        except BaseException as exc:
+            results.append(exc)
+
+    thread = threading.Thread(target=drain, daemon=True)
+    try:
+        ep.internal(blocked_builder)
+        assert builder_started.wait(5)
+        monkeypatch.setattr(store, "_queue", ExplodingQueue())
+        thread.start()
+        assert barrier_queued.wait(5)
+        release_builder.set()
+        thread.join(2)
+        assert not thread.is_alive(), "unbounded flush hung after the writer died"
+        assert results == [False]
+    finally:
+        release_builder.set()
+        C.close_episode(ep)
+        store.shutdown(5)
+
+
 _ATEXIT_SCRIPT = r"""
 import sys, time
 from pathlib import Path

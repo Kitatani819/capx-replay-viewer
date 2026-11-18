@@ -874,6 +874,32 @@ def make_run_single_trial_wrapper(original: Any) -> Any:
     return mark(_run_single_trial, original)
 
 
+def _flush_worker_recording() -> None:
+    store = get_store()
+    if store is not None:
+        store.flush(timeout=None)
+
+
+def make_trial_worker_wrapper(original: Any) -> Any:
+    """Drain completed recordings before the collector receives the result.
+
+    CaP-X ``capx/envs/runner.py:197-207`` dispatches retries through this worker
+    entry point; ``runner.py:310-312`` disables SIGALRM before they unwind.
+    ``capx/utils/parallel_eval.py:113-114`` sends its returned result and
+    ``parallel_eval.py:241-246`` can terminate workers five seconds afterwards.
+    Waiting here keeps large video copies outside both the alarm and that grace
+    period, including the error path, while preserving the original result/error.
+    """
+    @functools.wraps(original)
+    def trial_worker(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return original(*args, **kwargs)
+        finally:
+            guard(_flush_worker_recording)
+
+    return mark(trial_worker, original)
+
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
@@ -913,7 +939,8 @@ def install_episode(trial_module: Any) -> list[str]:
 
 def install_runner_aliases(module: Any) -> list[str]:
     rebind_aliases(module, ("_run_single_trial",))
-    return []
+    err = patch_attribute(module, "_run_single_trial_worker", make_trial_worker_wrapper)
+    return [err] if err else []
 
 
 __all__ = ["install_roles", "install_episode", "install_runner_aliases", "end_episode",
