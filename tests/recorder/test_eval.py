@@ -137,6 +137,27 @@ def test_record_permissions_survive_heartbeat_and_final_writes(tmp_path, monkeyp
     assert {mode for _status, mode in modes} == {0o640 if existing_mode is None else existing_mode}
 
 
+@pytest.mark.skipif(os.name != "posix", reason="file permissions require POSIX")
+@pytest.mark.parametrize("umask, warn", [(0o027, False), (0o077, True), (0o047, True), (0o037, True)])
+def test_group_access_warning_preserves_permissions_and_exit(tmp_path, capsys, umask, warn):
+    previous_umask = os.umask(umask)
+    try:
+        assert wrapper.run_eval([sys.executable, "-c", "raise SystemExit(9)"], trace_root=tmp_path) == 9
+    finally:
+        os.umask(previous_umask)
+    path = next(tmp_path.glob("*/eval.json"))
+    assert stat.S_IMODE(path.stat().st_mode) == 0o666 & ~umask
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o777 & ~umask
+    assert read_record(tmp_path)["end"]["exit_code"] == 9
+    error = capsys.readouterr().err
+    if warn:
+        assert error.splitlines() == [
+            "eval: teammates will not see this evaluation in their viewer; use a group-readable "
+            "umask such as 027 or a group-owned trace root with group read/search permissions"]
+    else:
+        assert error == ""
+
+
 @pytest.mark.skipif(os.name != "posix", reason="process-group waiting requires POSIX")
 def test_summary_waits_for_workers_after_leader_exits(tmp_path, monkeypatch):
     checks = []
