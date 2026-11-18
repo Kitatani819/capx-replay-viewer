@@ -1549,7 +1549,8 @@ The browser's `localStorage` keeps the pane sizes.
 ### 9.4 Episodes without a trace
 
 The picker lists runner run directories written before the recorder existed separately,
-under 「トレースなし（既存ログ）」 (no trace, existing logs). The backend reads them from the
+under 「古いログ（トレースなし）」 (old logs without a trace). This tab is shown when the
+legacy run list is nonempty or the current URL identifies a legacy run. The backend reads them from the
 runner roots (default `outputs/runner`, changed with
 `--runner-root`) with the same path rules. A runner run is a directory that holds
 `run.json` or `trials.jsonl`, and its trials are `<task>/<condition>/trial_*`. The same run

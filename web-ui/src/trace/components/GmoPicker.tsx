@@ -265,7 +265,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const skippedLarge = new Set(autoStatus?.skipped_large.map(rowKey));
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto">
+    <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-y-auto">
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
         <span role="status" className="text-xs text-text-secondary">接続の状態：{connectionStatus}</span>
         <span className="text-[11px] text-text-tertiary">一覧の更新時刻：{fmtWall(listing.data?.updatedAt)}</span>
@@ -325,7 +325,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
         <div className="min-h-0 overflow-x-auto">
           <table aria-label="GMO の試行" className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-raised"><tr className="text-left text-text-tertiary border-b border-surface-border">
-              {['手元の状態', '結果', 'task・seed', '実行者', '開始時刻', '大きさ', '操作'].map(label => <th key={label} scope="col" className="py-1.5 px-3 font-normal">{label}</th>)}
+              {['手元の状態', '結果', 'task・seed', '実行者', '開始時刻', '大きさ', '操作'].map(label => <th key={label} scope="col" className="py-1.5 px-3 font-normal whitespace-nowrap">{label}</th>)}
             </tr></thead>
             <tbody>{rows.map((row, index) => {
               const key = rowKey(row);
@@ -345,7 +345,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
                 <td className="py-2 px-3">{row.mine ? '自分' : row.owner || '—'}</td>
                 <td className="py-2 px-3 whitespace-nowrap">{fmtWall(row.start_wall_time)}</td>
                 <td className="py-2 px-3 whitespace-nowrap">{fmtBytes(row.size_bytes)}</td>
-                <td className="py-2 px-3"><SmallButton disabled={!!reason || !!busy} title={reason ?? undefined} onClick={() => row.local_state === 'local' ? onPick(row.run_id, row.episode_id) : void fetchEpisode(row.run_id, row.episode_id)}>{busy ? '取り込み中…' : row.local_state === 'local' ? '開く' : row.local_state === 'stale' ? '更新を取り込む' : '取り込む'}</SmallButton>
+                <td className="py-2 px-3"><div className="flex flex-wrap gap-1 whitespace-nowrap"><SmallButton disabled={!!reason || !!busy} title={reason ?? undefined} onClick={() => row.local_state === 'local' ? onPick(row.run_id, row.episode_id) : void fetchEpisode(row.run_id, row.episode_id)}>{busy ? '取り込み中…' : row.local_state === 'local' ? '開く' : row.local_state === 'stale' ? '更新を取り込む' : '取り込む'}</SmallButton></div>
                   {reason && <p className="mt-1 text-[11px] text-text-secondary">{reason}</p>}
                   {error && <div role="alert" className="mt-1"><ErrorText>{error}</ErrorText></div>}
                   {job?.note && <p className="mt-1 text-[11px] text-text-tertiary break-all">{job.note}</p>}
