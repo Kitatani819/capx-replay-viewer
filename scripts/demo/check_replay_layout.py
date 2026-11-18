@@ -74,15 +74,17 @@ def check(base_url: str, root: Path, output: Path):
             # Exercise the actual picker flow: a direct event URL cannot catch
             # the initial-selection regression caused by default Live state.
             page.goto(base_url + "/traces?view=details")
+            # Local fixture checks must also work when GMO is the initial tab.
+            page.get_by_role("button", name="手元の記録", exact=True).click()
             picker_details = page.locator('[data-picker-details="trace"]')
             expect(picker_details).not_to_have_attribute("open", "")
             expect(picker_details.get_by_text("viewer-only（記録の閲覧専用）", exact=True)).to_be_hidden()
             picker_details.locator("summary").click()
             expect(picker_details.get_by_text("viewer-only（記録の閲覧専用）", exact=True)).to_be_visible()
             picker_details.locator("summary").click()
-            page.get_by_role("button", name="トレースなし（既存ログ）", exact=True).click()
+            page.get_by_role("button", name="古いログ（トレースなし）", exact=True).click()
             expect(page.locator('[data-picker-details="legacy"]')).not_to_have_attribute("open", "")
-            page.get_by_role("button", name="トレースあり", exact=True).click()
+            page.get_by_role("button", name="手元の記録", exact=True).click()
             page.get_by_role("button").filter(has=page.get_by_text(manifest["run"], exact=True)).click()
             search = page.get_by_role("searchbox", name="試行を検索")
             episode = page.get_by_role("button", name="episode " + manifest["episode"], exact=True)

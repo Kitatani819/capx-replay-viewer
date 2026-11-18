@@ -3,7 +3,8 @@
  * the episodes of a run with status badges (attempts of one seed next to each
  * other). Traced runs come from /api/traces/runs; runner directories written
  * before the recorder existed are listed separately under
- * 「トレースなし（既存ログ）」 (9.4) from /api/traces/legacy/runs. A run's
+ * 「古いログ（トレースなし）」 (9.4) from /api/traces/legacy/runs. GMO is
+ * the initial list when its integration is available. A run's
  * unscoped logs (events with no episode, such as the runner's preflight
  * requests) are listed under the episodes and open like an episode; lines of
  * such a log that the recorder could not write (its unscoped.<pid>.status.json,
@@ -14,9 +15,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { GmoDisabledError, gmoApi, traceApi } from '../api';
+import { ApiError, gmoApi, traceApi } from '../api';
 import { fmtBytes, fmtWall } from '../format';
-import { useAsync } from '../hooks';
+import { useAsync, type AsyncState } from '../hooks';
 import { LABELS, UNSCOPED_STATUS_LABEL, WARNING_CODE_LABELS, episodeStatusLabel, episodeStatusShortLabel } from '../labels';
 import { LEGACY_PROMPT_HOOK_REASON, UNUSED_HOOK_STATUS, summaryRecordingWarnings } from '../recordingWarnings';
 import type { EpisodeSummary, TraceConfigResponse, UnscopedFileInfo } from '../types';
@@ -27,31 +28,58 @@ import { TaskOutcomeBadge } from './TaskOutcomeBadge';
 import { legacyRootsOf, legacyRunsOf, legacyTrialsOf, type LegacyRunRef, type LegacyTrialRef } from './LegacyView';
 import { GmoPicker } from './GmoPicker';
 
+export type PickerMode = 'gmo' | 'traced' | 'legacy';
+
 interface PickerProps {
   config: TraceConfigResponse | null;
   configError: string | null;
   currentRun: string | null;
   currentEpisode: string | null;
+  currentLegacyRun?: string | null;
+  initialMode?: PickerMode | null;
+  onModeChange?: (mode: PickerMode) => void;
   onPick: (runId: string, episodeId: string) => void;
   onPickLegacy: (runId: string, trial: LegacyTrialRef) => void;
   onClose?: () => void;
 }
 
-export function Picker({ config, configError, currentRun, currentEpisode, onPick, onPickLegacy, onClose }: PickerProps) {
-  const [mode, setMode] = useState<'traced' | 'legacy' | 'gmo'>('traced');
+export function Picker({ config, configError, currentRun, currentEpisode, currentLegacyRun, initialMode, onModeChange, onPick, onPickLegacy, onClose }: PickerProps) {
+  const [selectedMode, setSelectedMode] = useState<PickerMode | null>(initialMode ?? null);
   const [gmoDisabled, setGmoDisabled] = useState(false);
   const [runSel, setRunSel] = useState<string | null>(currentRun);
   const [filter, setFilter] = useState('');
   const [resultFilter, setResultFilter] = useState<TaskVerdict | 'all'>('all');
   const runs = useAsync((s) => traceApi.runs(s), []);
+  const legacyRuns = useAsync((s) => traceApi.legacyRuns(s), []);
   const gmoConfig = useAsync(async (signal) => {
     try {
-      return await gmoApi.config(signal);
+      return { config: await gmoApi.config(signal) };
     } catch (error) {
-      if (error instanceof GmoDisabledError) return null;
+      // Keep a completed 404 distinct from a config request still in flight.
+      if (error instanceof ApiError && error.status === 404) return { config: null };
       throw error;
     }
   }, []);
+  const gmoAvailable = !gmoDisabled && !!(gmoConfig.data?.config || gmoConfig.error);
+  const legacyAvailable = !!currentLegacyRun || legacyRunsOf(legacyRuns.data).length > 0;
+  // Only automatic/GMO selection needs this config; local choices work while
+  // it is pending, including a restored choice when reopening the picker.
+  const checking = ((selectedMode === null || selectedMode === 'gmo') && gmoConfig.data === null && !gmoConfig.error) ||
+    (selectedMode === 'legacy' && !currentLegacyRun && legacyRuns.data === null && legacyRuns.loading);
+  // A later refresh failure must not move the initial GMO tab away from a
+  // config that was already read successfully (for example, after saving).
+  const preferredMode = selectedMode ?? (!gmoDisabled && gmoConfig.data?.config ? 'gmo' : 'traced');
+  const availableMode = (preferredMode === 'gmo' && !gmoAvailable) || (preferredMode === 'legacy' && !legacyAvailable) ? 'traced' : preferredMode;
+  const mode = checking ? null : availableMode;
+  const selectMode = (next: PickerMode) => {
+    setSelectedMode(next);
+    onModeChange?.(next);
+  };
+  const reloadLocalLists = () => {
+    runs.reload();
+    // The legacy tab may be hidden after an empty or failed initial read.
+    legacyRuns.reload();
+  };
   const detail = useAsync(runSel && mode === 'traced' ? (s) => traceApi.run(runSel, s) : null, [runSel, mode]);
 
   const episodes = useMemo(() => {
@@ -70,14 +98,16 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface">
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-surface-border bg-surface-raised">
-        <SmallButton active={mode === 'traced'} onClick={() => setMode('traced')}>
-          トレースあり
+        {gmoAvailable && (
+          <SmallButton active={mode === 'gmo'} title="GMO の記録を探して取り込み、開きます" onClick={() => selectMode('gmo')}>GMO</SmallButton>
+        )}
+        <SmallButton active={mode === 'traced'} title="手元に保存されたトレースの一覧です" onClick={() => selectMode('traced')}>
+          {LABELS.localSection}
         </SmallButton>
-        <SmallButton active={mode === 'legacy'} onClick={() => setMode('legacy')}>
-          {LABELS.legacySection}
-        </SmallButton>
-        {!gmoDisabled && (gmoConfig.data?.enabled || gmoConfig.error) && (
-          <SmallButton active={mode === 'gmo'} onClick={() => setMode('gmo')}>GMO</SmallButton>
+        {legacyAvailable && (
+          <SmallButton active={mode === 'legacy'} title="トレースのない既存 runner ログの一覧です" onClick={() => selectMode('legacy')}>
+            {LABELS.legacySection}
+          </SmallButton>
         )}
         <details data-picker-details="trace" className="min-w-0 text-xs text-text-secondary open:order-last open:basis-full">
           <summary className="cursor-pointer px-2 py-1">一覧の詳細</summary>
@@ -93,21 +123,23 @@ export function Picker({ config, configError, currentRun, currentEpisode, onPick
         {mode === 'traced' && config?.exists === false && <span role="status" className="text-xs text-text-secondary">トレースの保存先が見つかりません</span>}
         {configError && <div role="alert"><ErrorText>{configError}</ErrorText></div>}
         <div className="ml-auto flex gap-2">
-          {mode !== 'gmo' && <SmallButton onClick={runs.reload}>一覧を更新</SmallButton>}
+          {mode !== null && mode !== 'gmo' && <SmallButton onClick={mode === 'legacy' ? legacyRuns.reload : reloadLocalLists}>一覧を更新</SmallButton>}
           {onClose && <SmallButton onClick={onClose}>閉じる</SmallButton>}
         </div>
       </div>
-      {mode === 'gmo' ? (
+      {mode === null ? (
+        <div role="status" className="p-4"><Spinner label="一覧を確認中" /></div>
+      ) : mode === 'gmo' ? (
         <GmoPicker
-          initialConfig={gmoConfig.data}
+          initialConfig={gmoConfig.data?.config ?? null}
           configError={gmoConfig.error}
           onConfigChange={gmoConfig.reload}
           onRetryConfig={gmoConfig.reload}
-          onDisabled={() => { setGmoDisabled(true); setMode('traced'); }}
+          onDisabled={() => { setGmoDisabled(true); selectMode('traced'); }}
           onPick={onPick}
         />
       ) : mode === 'legacy' ? (
-        <LegacyPicker config={config} onPickLegacy={onPickLegacy} />
+        <LegacyPicker runs={legacyRuns} onPickLegacy={onPickLegacy} />
       ) : (
         <div className="flex-1 min-h-0 flex">
           <div className="w-80 flex-shrink-0 border-r border-surface-border overflow-y-auto">
@@ -334,10 +366,9 @@ export function UnscopedFileList({
   );
 }
 
-function LegacyPicker({ onPickLegacy }: { config: TraceConfigResponse | null; onPickLegacy: (runId: string, trial: LegacyTrialRef) => void }) {
+function LegacyPicker({ runs, onPickLegacy }: { runs: AsyncState<unknown>; onPickLegacy: (runId: string, trial: LegacyTrialRef) => void }) {
   const [runSel, setRunSel] = useState<LegacyRunRef | null>(null);
   const [filter, setFilter] = useState('');
-  const runs = useAsync((s) => traceApi.legacyRuns(s), []);
   const detail = useAsync(runSel ? (s) => traceApi.legacyRun(runSel.runId, runSel.root, s) : null, [runSel?.runId, runSel?.root]);
   const runList = useMemo(() => legacyRunsOf(runs.data), [runs.data]);
   const roots = useMemo(() => legacyRootsOf(runs.data), [runs.data]);

@@ -1,13 +1,16 @@
 /** GMO picker flows against the API contract, with a virtual polling clock. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Picker } from '../components/Picker';
+import TraceViewerPage from '../TraceViewerPage';
+import { Picker, type PickerMode } from '../components/Picker';
 import { GmoPicker } from '../components/GmoPicker';
-import { SmallButton } from '../components/common';
+import { TopBar } from '../components/TopBar';
+import { SmallButton, Spinner } from '../components/common';
 import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
 import type { GmoAutoStatus, GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings } from '../api';
-import { advance, findAll, net, resetBrowser, type FakeElement } from './harness/browser';
+import { advance, findAll, net, propsOf, resetBrowser, setLocation, type FakeElement } from './harness/browser';
 import { mount } from './harness/fakeReact';
+import { addEpisode, ev, makeRun, serve } from './pageServer';
 
 const browserFetch = globalThis.fetch;
 interface SentRequest { path: string; method: string; headers: Headers; body: unknown }
@@ -28,7 +31,9 @@ function job(row: GmoEpisodeSummary, overrides: Partial<GmoJob> = {}): GmoJob {
 }
 function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   resetBrowser();
-  const state = { config: config(configured), disabled: false, rows, jobs: [] as GmoJob[],
+  const state = { config: config(configured), disabled: false, configError: '', configStatus: 502, configLatency: 5,
+    legacyRuns: [] as { run_id: string; root_index: number; n_trials: number }[], legacyError: false, legacyLatency: 5,
+    rows, jobs: [] as GmoJob[],
     auto: { enabled: configured, paused: false, interval_s: 120, running: false, last_run_at: null,
       next_run_at: new Date(Date.now() + 120_000).toISOString(), last_error: null, queued_in_last_run: 0, skipped_large: [] } as GmoAutoStatus,
     check: { ok: true, mine_episodes: 2, team_episodes: 3, error: null as string | null },
@@ -41,7 +46,10 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   };
   net.handler = req => {
     const sent = state.sent[state.sent.length - 1];
-    if (req.path === '/api/traces/runs') return { json: { runs: [] } };
+    if (req.path === '/api/traces/runs') return { json: { runs: [{ run_id: 'local_run', n_episodes: 1 }] } };
+    if (req.path === '/api/traces/legacy/runs') return state.legacyError
+      ? { status: 500, json: { detail: 'Legacy list unavailable' }, latency: state.legacyLatency }
+      : { json: { roots: [], runs: state.legacyRuns }, latency: state.legacyLatency };
     if (!req.path.startsWith('/api/gmo/')) return null;
     if (state.disabled) return { status: 404, json: { detail: 'Not Found' } };
     if (req.path === '/api/gmo/auto') {
@@ -52,12 +60,13 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
       return { json: state.auto };
     }
     if (req.path === '/api/gmo/config') {
+      if (state.configError) return { status: state.configStatus, json: { detail: state.configError }, latency: state.configLatency };
       if (sent.method === 'PUT') {
         if (state.saveError) return { status: 400, json: { detail: state.saveError } };
         const saved = sent.body as GmoSettings;
         state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.mine.length || saved.team.length)) };
       }
-      return { json: state.config };
+      return { json: state.config, latency: state.configLatency };
     }
     if (req.path === '/api/gmo/check') return { json: state.check };
     if (req.path === '/api/gmo/episodes') return { json: state.rows };
@@ -121,18 +130,197 @@ function assertGmoHeaders(sent: SentRequest[]): void {
   }
 }
 
-test('GMO tab is hidden when the integration is disabled, and shown when enabled', async () => {
-  const state = setup(); state.disabled = true;
-  const props = { config: null, configError: null, currentRun: null, currentEpisode: null, onPick: () => {}, onPickLegacy: () => {} };
-  const disabled = mount(Picker, props); await advance(100);
-  assert.equal(findAll(disabled.output, SmallButton).some(el => text(el) === 'GMO'), false);
-  assertGmoHeaders(state.sent); disabled.unmount();
-  state.disabled = false;
-  const enabled = mount(Picker, props); await advance(100);
-  click(enabled.output, 'GMO'); await advance(0);
-  assert.equal(findAll(enabled.output, GmoPicker).length, 1);
-  enabled.unmount();
+type PickerProps = Parameters<typeof Picker>[0];
+type TopBarProps = Parameters<typeof TopBar>[0];
+function pickerProps(overrides: Partial<PickerProps> = {}): PickerProps {
+  return { config: null, configError: null, currentRun: null, currentEpisode: null,
+    onPick: () => {}, onPickLegacy: () => {}, ...overrides };
+}
+function pickerTabs(node: unknown): FakeElement[] {
+  return findAll(node, SmallButton).filter(el => ['GMO', '手元の記録', '古いログ（トレースなし）'].includes(text(el)));
+}
+function activeTab(node: unknown): string[] { return pickerTabs(node).filter(el => el.props.active).map(text); }
+
+for (const configured of [true, false]) {
+  test(`GMO is the initial tab without flashing the local list (configured=${configured})`, async () => {
+    const state = setup([], configured); state.configLatency = 200;
+    const page = mount(Picker, pickerProps());
+    const assertPending = () => {
+      assert.equal(findAll(page.output, Spinner).some(el => el.props.label === '一覧を確認中'), true);
+      assert.doesNotMatch(text(page.output), /local_run|run（新しい順）|左の run を選んでください/);
+      assert.deepEqual(activeTab(page.output), []);
+      assert.equal(findAll(page.output, GmoPicker).length, 0);
+    };
+    assertPending();
+    await advance(100);
+    assertPending();
+    await advance(100);
+    assert.deepEqual(activeTab(page.output), ['GMO']);
+    assert.equal(findAll(page.output, GmoPicker).length, 1);
+    assert.doesNotMatch(text(page.output), /local_run|run（新しい順）/);
+    assertGmoHeaders(state.sent);
+    page.unmount();
+  });
+}
+
+for (const initialMode of [null, 'traced'] as const) {
+  test(`local recordings remain usable while GMO config is pending (${initialMode ?? 'manual selection'})`, async () => {
+    const state = setup(); state.configLatency = 60_000;
+    const pickerHandler = net.handler;
+    const run = makeRun('local_run');
+    addEpisode(run, 'e1', { status: 'ended', trace_complete: true }, []);
+    serve(run); const traceHandler = net.handler;
+    net.handler = req => traceHandler(req) ?? pickerHandler(req);
+    const picked: string[][] = [];
+    const page = mount(Picker, pickerProps({ initialMode, currentRun: run.runId,
+      onPick: (runId, episodeId) => picked.push([runId, episodeId]) }));
+    await advance(100);
+    if (initialMode === null) {
+      click(page.output, '手元の記録'); await advance(100);
+    }
+    assert.deepEqual(activeTab(page.output), ['手元の記録']);
+    assert.equal(findAll(page.output, Spinner).some(el => el.props.label === '一覧を確認中'), false);
+    assert.match(text(page.output), /local_run/);
+    const episode = findAll(page.output, 'tr').find(el => el.props['aria-label'] === 'episode e1');
+    assert.ok(episode, 'local episodes can be loaded before GMO config responds');
+    (episode!.props.onClick as () => void)();
+    assert.deepEqual(picked, [['local_run', 'e1']]);
+    click(page.output, '一覧を更新'); await advance(100);
+    assert.equal(net.log.filter(req => req.path === '/api/traces/runs' && req.doneAt !== null).length, 2);
+    assert.equal(net.log.find(req => req.path === '/api/gmo/config')?.doneAt, null);
+    await advance(state.configLatency);
+    assert.ok(net.log.find(req => req.path === '/api/gmo/config')?.doneAt);
+    assert.deepEqual(activeTab(page.output), ['手元の記録'], 'a late config response keeps the explicit local choice');
+    page.unmount();
+  });
+}
+
+for (const detail of ['Not Found', 'GMO is disabled in this deployment']) {
+  test(`a GMO config 404 opens local recordings and hides GMO regardless of its body (${detail})`, async () => {
+    const state = setup(); state.configError = detail; state.configStatus = 404;
+    const page = mount(Picker, pickerProps()); await advance(100);
+    assert.deepEqual(pickerTabs(page.output).map(text), ['手元の記録']);
+    assert.deepEqual(activeTab(page.output), ['手元の記録']);
+    assert.match(text(page.output), /local_run/);
+    assert.doesNotMatch(text(page.output), /トレースあり|トレースなし（既存ログ）/);
+    assertGmoHeaders(state.sent); page.unmount();
+  });
+}
+
+test('a non-404 GMO config error falls back to local recordings but keeps GMO available to retry', async () => {
+  const state = setup(); state.configError = 'GMO config unavailable';
+  const page = mount(Picker, pickerProps()); await advance(100);
+  assert.deepEqual(pickerTabs(page.output).map(text), ['GMO', '手元の記録']);
+  assert.deepEqual(activeTab(page.output), ['手元の記録']);
+  assert.match(text(page.output), /local_run/);
+  click(page.output, 'GMO'); await advance(0);
+  const gmo = propsOf<Parameters<typeof GmoPicker>[0]>(page.output, GmoPicker);
+  assert.equal(gmo.initialConfig, null);
+  assert.match(gmo.configError ?? '', /GMO config unavailable/);
+  state.configError = '';
+  gmo.onRetryConfig(); await advance(100);
+  assert.deepEqual(activeTab(page.output), ['GMO']);
+  assert.deepEqual(propsOf<Parameters<typeof GmoPicker>[0]>(page.output, GmoPicker).initialConfig, state.config);
+  assertGmoHeaders(state.sent); page.unmount();
 });
+
+test('a config refresh failure keeps an already open initial GMO tab and its last config', async () => {
+  const state = setup();
+  const page = mount(Picker, pickerProps()); await advance(100);
+  assert.deepEqual(activeTab(page.output), ['GMO']);
+  state.configError = 'Config refresh unavailable';
+  propsOf<Parameters<typeof GmoPicker>[0]>(page.output, GmoPicker).onConfigChange(); await advance(100);
+  assert.deepEqual(activeTab(page.output), ['GMO']);
+  const gmo = propsOf<Parameters<typeof GmoPicker>[0]>(page.output, GmoPicker);
+  assert.deepEqual(gmo.initialConfig, state.config);
+  assert.match(gmo.configError ?? '', /Config refresh unavailable/);
+  page.unmount();
+});
+
+test('legacy recordings appear only for a nonempty list, in GMO, local, legacy order', async () => {
+  const state = setup();
+  const empty = mount(Picker, pickerProps()); await advance(100);
+  assert.deepEqual(pickerTabs(empty.output).map(text), ['GMO', '手元の記録']);
+  empty.unmount();
+  state.legacyRuns = [{ run_id: 'old_run', root_index: 0, n_trials: 1 }];
+  const nonempty = mount(Picker, pickerProps()); await advance(100);
+  assert.deepEqual(pickerTabs(nonempty.output).map(text), ['GMO', '手元の記録', '古いログ（トレースなし）']);
+  for (const tab of pickerTabs(nonempty.output)) assert.equal(typeof tab.props.title, 'string');
+  click(nonempty.output, '古いログ（トレースなし）'); await advance(100);
+  assert.deepEqual(activeTab(nonempty.output), ['古いログ（トレースなし）']);
+  assert.equal(net.log.filter(req => req.path === '/api/traces/legacy/runs' && !req.aborted).length, 2,
+    'each picker reads legacy availability once and shares that list with the legacy pane');
+  nonempty.unmount();
+});
+
+for (const legacyError of [false, true]) {
+  test(`local refresh discovers hidden legacy recordings after an initially ${legacyError ? 'failed' : 'empty'} list`, async () => {
+    const state = setup(); state.legacyError = legacyError;
+    const page = mount(Picker, pickerProps()); await advance(100);
+    click(page.output, '手元の記録'); await advance(0);
+    assert.deepEqual(pickerTabs(page.output).map(text), ['GMO', '手元の記録']);
+    state.legacyError = false;
+    state.legacyRuns = [{ run_id: 'old_run', root_index: 0, n_trials: 1 }];
+    click(page.output, '一覧を更新'); await advance(100);
+    for (const path of ['/api/traces/runs', '/api/traces/legacy/runs']) {
+      assert.equal(net.log.filter(req => req.path === path && req.doneAt !== null).length, 2, path);
+    }
+    assert.deepEqual(activeTab(page.output), ['手元の記録']);
+    assert.deepEqual(pickerTabs(page.output).map(text), ['GMO', '手元の記録', '古いログ（トレースなし）']);
+    click(page.output, '古いログ（トレースなし）'); await advance(0);
+    assert.deepEqual(activeTab(page.output), ['古いログ（トレースなし）']);
+    page.unmount();
+  });
+}
+
+for (const legacyError of [false, true]) {
+  test(`a legacy trial URL keeps the old-log tab even when the list is ${legacyError ? 'unavailable' : 'empty'}`, async () => {
+    const state = setup(); state.legacyError = legacyError;
+    setLocation('/traces?legacy_run=old_run&legacy_trial=cube_lift/C/trial_1&legacy_root=0');
+    const page = mount(TraceViewerPage, {}); await advance(100);
+    propsOf<TopBarProps>(page.output, TopBar).onOpenPicker(); await advance(0);
+    const props = propsOf<PickerProps>(page.output, Picker);
+    assert.equal(props.currentLegacyRun, 'old_run');
+    const picker = mount(Picker, props); await advance(100);
+    assert.deepEqual(pickerTabs(picker.output).map(text), ['GMO', '手元の記録', '古いログ（トレースなし）']);
+    picker.unmount(); page.unmount();
+  });
+}
+
+for (const [label, mode] of [['GMO', 'gmo'], ['手元の記録', 'traced'], ['古いログ（トレースなし）', 'legacy']] as const) {
+  test(`the page preserves the chosen ${label} tab when its picker is closed and reopened`, async () => {
+    const state = setup(); state.legacyRuns = [{ run_id: 'old_run', root_index: 0, n_trials: 1 }];
+    const pickerHandler = net.handler;
+    const run = makeRun();
+    addEpisode(run, 'e1', { status: 'ended', trace_complete: true }, [
+      ev('e1', 1, 'episode_start', {}), ev('e1', 2, 'episode_end', { trace_complete: true }),
+    ]);
+    serve(run); const traceHandler = net.handler;
+    net.handler = req => traceHandler(req) ?? pickerHandler(req);
+    setLocation('/traces?run=r1&episode=e1');
+    const page = mount(TraceViewerPage, {}); await advance(100);
+    propsOf<TopBarProps>(page.output, TopBar).onOpenPicker(); await advance(0);
+    const first = mount(Picker, propsOf<PickerProps>(page.output, Picker)); await advance(100);
+    click(first.output, label); await advance(0);
+    assert.deepEqual(activeTab(first.output), [label]);
+    click(first.output, '閉じる'); await advance(0);
+    first.unmount();
+    assert.equal(findAll(page.output, Picker).length, 0);
+    propsOf<TopBarProps>(page.output, TopBar).onOpenPicker(); await advance(0);
+    const reopenedProps = propsOf<PickerProps>(page.output, Picker);
+    assert.equal(reopenedProps.initialMode, mode satisfies PickerMode);
+    const reopened = mount(Picker, reopenedProps); await advance(100);
+    assert.deepEqual(activeTab(reopened.output), [label]);
+    reopened.unmount(); page.unmount();
+
+    // A fresh page may recompute its default even when the URL is unchanged.
+    const reloadedPage = mount(TraceViewerPage, {}); await advance(100);
+    propsOf<TopBarProps>(reloadedPage.output, TopBar).onOpenPicker(); await advance(0);
+    const reset = mount(Picker, propsOf<PickerProps>(reloadedPage.output, Picker)); await advance(100);
+    assert.deepEqual(activeTab(reset.output), ['GMO']);
+    reset.unmount(); reloadedPage.unmount();
+  });
+}
 
 test('unconfigured GMO opens the labelled connection settings without listing remotely', async () => {
   const state = setup([], false);

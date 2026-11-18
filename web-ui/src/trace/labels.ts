@@ -41,8 +41,9 @@ export const LABELS = {
   notCaptured: '未取得',
   // 9.2 status "incomplete" (verbatim).
   incompleteStatus: '記録が途中で止まりました（episode_end なし）',
-  // 9.4 (verbatim).
-  legacySection: 'トレースなし（既存ログ）',
+  // Picker lists (replay.md); the remaining 9.4 labels follow the spec.
+  localSection: '手元の記録',
+  legacySection: '古いログ（トレースなし）',
   legacyHarnessImage: 'ハーネス保存画像（送信を検証していない）',
   legacyHarnessPrompts: 'ハーネスが保存したプロンプト文字列（送信payloadではない）',
 

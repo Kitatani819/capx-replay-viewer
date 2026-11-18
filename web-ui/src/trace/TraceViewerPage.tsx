@@ -57,7 +57,7 @@ import { DetailTabs, type RangeFocus } from './components/DetailTabs';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LegacyTrialView, type LegacyTrialRef } from './components/LegacyView';
 import { MediaPane } from './components/MediaPane';
-import { Picker } from './components/Picker';
+import { Picker, type PickerMode } from './components/Picker';
 import { SimplePicker, SimpleViewer } from './components/SimpleViewer';
 import { Splitter } from './components/Splitter';
 import { Timeline } from './components/Timeline';
@@ -216,6 +216,8 @@ export default function TraceViewerPage() {
   const [apiPythonVisible, setApiPythonVisible] = useState(false);
   const [focus, setFocus] = useState<RangeFocus | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The picker unmounts on close; keep the user's list choice for this page.
+  const [pickerMode, setPickerMode] = useState<PickerMode | null>(null);
   const [playbackSelection, setPlaybackSelection] = useState<{ eventId: string | null } | null>(null);
   const [replaySeek, setReplaySeek] = useState<ReplaySeek | null>(null);
   useEffect(()=>{
@@ -411,6 +413,9 @@ export default function TraceViewerPage() {
       configError={config.error}
       currentRun={runId}
       currentEpisode={episodeId}
+      currentLegacyRun={legacyRun}
+      initialMode={pickerMode}
+      onModeChange={setPickerMode}
       onPick={pick}
       onPickLegacy={pickLegacy}
       onClose={(runId && episodeId) || (legacyRun && legacyTrial) ? () => setPickerOpen(false) : undefined}
