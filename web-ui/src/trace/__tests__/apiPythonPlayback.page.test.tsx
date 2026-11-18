@@ -10,6 +10,8 @@ import { MediaPane } from '../components/MediaPane';
 import { DetailTabs } from '../components/DetailTabs';
 import { ApiTurnModelTab } from '../components/tabs/ApiTurnModelTab';
 import { EnsembleTab } from '../components/tabs/EnsembleTab';
+import { Timeline } from '../components/Timeline';
+import { Badge } from '../components/common';
 import TraceViewerPage from '../TraceViewerPage';
 import { Rec } from './fixtures';
 import { addEpisode, makeRun, serve } from './pageServer';
@@ -286,4 +288,71 @@ test('API details always show the generating model and preserve selection across
   inspector.update(details());
   assert.equal(findAll(inspector.output, ApiTurnModelTab).length, 1, 'the same presentation is used when the detailed log is open');
   inspector.unmount(); page.unmount();
+});
+
+for (const synced of [true, false]) test(`synthesis survives the detailed-log all-turns selection and still shows the recorded Python answer (${synced ? 'synced' : 'before metadata'})`, async () => {
+  resetBrowser(); const rec = recording(); const run = makeRun();
+  const request = rec.events.find(event => event.event_type === 'model_request')!;
+  (request.data as Record<string, unknown>).call_kind = 'ensemble_synthesis';
+  const response = rec.events.find(event => event.event_type === 'model_response')!;
+  (response.data as Record<string, unknown>).content = '```python\ngoto_pose(target)\n```';
+  addEpisode(run, 'e1', { status: 'ended', trace_complete: true }, rec.events.map(event => ({ ...event, run_id: 'r1', episode_id: 'e1' })));
+  serve(run); setLocation(`/traces?view=details&run=r1&episode=e1&event=${rec.later.primary.event_id}`);
+  const page = mount(TraceViewerPage, {}); await advance(1000);
+  const mediaProps = () => propsOf<MediaProps>(page.output, MediaPane);
+  const details = () => propsOf<DetailsProps>(page.output, DetailTabs);
+  const pane = mount(MediaPane, { ...mediaProps(), videos: [{ name: 'video_combined.mp4', url: '/video' }] });
+  const player = mount(VideoPlayback, propsOf<PlayerProps>(pane.output, VideoPlayback));
+  const inspector = mount(DetailTabs, details());
+  const sync = async () => {
+    await advance(0);
+    pane.update({ ...mediaProps(), videos: [{ name: 'video_combined.mp4', url: '/video' }] });
+    if (findAll(pane.output, VideoPlayback).length) player.update(propsOf<PlayerProps>(pane.output, VideoPlayback));
+    inspector.update(details());
+    await advance(0);
+  };
+  const video = () => findAll(player.output, 'video')[0];
+  const mediaElement = { duration: 4, currentTime: 0, playbackRate: 1, paused: true, pause() { this.paused = true; } };
+  (video().props.ref as { current: unknown }).current = mediaElement;
+  try {
+    if (synced) (video().props.onLoadedMetadata as Function)({ currentTarget: mediaElement });
+    await sync();
+    // Match the CI sequence: choose synthesis, open detailed logs, reset the
+    // turn filter, then select the ensemble_synthesis card through its callback.
+    details().onTab(2); await sync();
+    const logs = findAll(player.output, 'button').find(button => button.props.children === '詳細ログ')!;
+    (logs.props.onClick as Function)(); await sync();
+    const turn = findAll(player.output, 'select').find(select => select.props['aria-label'] === 'リプレイのターン')!;
+    (turn.props.onChange as Function)({ target: { value: 'all' } }); await sync();
+    assert.equal(details().tab, 2, 'turn navigation preserves the chosen inspector tab');
+    const timeline = propsOf<Parameters<typeof Timeline>[0]>(player.output, Timeline);
+    const synthesis = timeline.model.nodeOfEvent.get(request.event_id)!;
+    timeline.onSelect(synthesis); await sync();
+    assert.equal(details().selection?.node.key, synthesis.key);
+    assert.equal(details().tab, 2);
+    assert.equal(findAll(inspector.output, 'button').find(button => button.props.children === '統合結果')?.props['aria-selected'], true);
+    const result = mount(EnsembleTab, propsOf<Parameters<typeof EnsembleTab>[0]>(inspector.output, EnsembleTab));
+    try {
+      await advance(0);
+      assert.equal(findAll(result.output, 'section').filter(section => section.props['data-synthesis'] !== undefined).length, 1);
+      assert.ok(findAll(result.output, Badge).some(badge => badge.props.children === 'Pythonコード'));
+    } finally { result.unmount(); }
+
+    // The same detailed log is used below recorded frames. Both user tabs
+    // survive its event selections; directly picking an API still opens I/O.
+    const display = findAll(pane.output, 'select').find(select => select.props['aria-label'] === '動画・記録フレーム')!;
+    (display.props.onChange as Function)({ target: { value: 'recorded' } }); await advance(0);
+    for (const tab of [1, 2]) {
+      details().onTab(tab); await sync();
+      propsOf<Parameters<typeof Timeline>[0]>(pane.output, Timeline).onSelect(synthesis); await sync();
+      assert.equal(details().tab, tab, 'recorded-frame log selection preserves the chosen tab');
+    }
+    (display.props.onChange as Function)({ target: { value: 'video' } }); await sync();
+    const apiList = findAll(player.output, 'button').find(button => button.props.children === 'APIとPythonに戻る')!;
+    (apiList.props.onClick as Function)(); await sync();
+    propsOf<PanelProps>(player.output, ApiPythonPanel).onSelect(mediaProps().model.nodeOfEvent.get(rec.first.primary.event_id)!); await sync();
+    assert.equal(details().tab, 0, 'explicit API-list selection opens the model I/O');
+  } finally {
+    inspector.unmount(); player.unmount(); pane.unmount(); page.unmount();
+  }
 });
