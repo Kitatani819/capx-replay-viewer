@@ -1152,6 +1152,51 @@ present, even when `--expose-traces` is set. PUT and POST additionally require a
 loopback `Origin` and `Content-Type: application/json`. Without `--gmo` these
 routes return 404. The episode list is cached for 30 seconds; `refresh=1` reloads it.
 
+GMO settings. `PUT /api/gmo/config` takes the settings object directly as its JSON
+body. Both config endpoints return that object in `settings`, including `shared_root`;
+`configured` means a nonempty host and at least one of `shared_root`, `mine` or `team`.
+The same fields are stored in `gmo.json` (see [GMO setup](gmo.md#gmoの記録を手元へ取ってくる)).
+
+| Field | Default | Meaning |
+|---|---|---|
+| `host` | `""` | Plain SSH alias or `user@host` |
+| `port` | `null` | Optional integer from 1 to 65535 |
+| `identity_file` | `null` | Optional nonempty SSH key path |
+| `shared_root` | `""` | One absolute shared recording directory, such as `/path/to/shared/traces`; empty disables this source |
+| `mine` | `[]` | Additional trace-root glob patterns for the current user's recordings |
+| `team` | `[]` | Additional trace-root glob patterns for team recordings |
+| `interval_s` | `120` | Automatic import interval in seconds, integer from 0 to 86400; 0 disables it |
+
+A nonempty `shared_root` must be a plain absolute path using ASCII letters, digits
+and `._/+@-`: no `..` path segments, control characters, whitespace or glob characters. It selects
+`<shared_root>/<username>` for mine and the other immediate directories matching
+`<shared_root>/*` for team. For `user@host`, `username` is `user`; an SSH alias without
+an explicit user resolves the remote account name inside the existing listing SSH
+call. Resolving that name does not add a connection. Under the shared directory,
+`owner` is the username directory name regardless of filesystem ownership, including
+when an additional pattern discovers the same recording.
+An explicit username can contain `@`; it ends at the last `@` in `host`.
+Trace roots whose directory entries cannot be read are skipped during listing,
+automatic imports and startup prefetch.
+
+The generated sources and explicit `mine`/`team` patterns are additive. A physical run
+found through multiple patterns appears once; mine takes precedence when both scopes
+match. Different remote locations with the same run id remain a conflict. Omitting
+`shared_root` is equivalent to `""`, so older settings files retain their behavior.
+For example, a complete `PUT /api/gmo/config` body can be:
+
+```json
+{
+  "host": "gmo-alias",
+  "port": null,
+  "identity_file": null,
+  "shared_root": "/path/to/shared/traces",
+  "mine": [],
+  "team": [],
+  "interval_s": 120
+}
+```
+
 | Method and path | Response |
 |---|---|
 | `GET /api/gmo/config` | `{enabled, configured, settings, dest, config_path}` |
@@ -1163,17 +1208,19 @@ routes return 404. The episode list is cached for 30 seconds; `refresh=1` reload
 | `GET /api/gmo/auto` | `{enabled, paused, interval_s, running, last_run_at, next_run_at, last_error, queued_in_last_run, skipped_large}` |
 | `PUT /api/gmo/auto` | Set the in-memory pause flag with `{paused: bool}`; same response as GET |
 
-With `--gmo`, automatic imports list `mine` episodes in one SSH call per cycle and
-also check `team` run names for collisions without traversing team episode contents.
+With `--gmo`, automatic imports list mine episodes (the current user's shared-root
+directory plus `mine` patterns) in one SSH call per cycle and also check team run names
+(the other shared-root directories plus `team` patterns) for collisions without
+traversing team episode contents. Team recordings are imported manually.
 Runs present at different remote paths are skipped, as in manual imports. Missing or
 changed episode files or `run.json` enqueue work on the manual import worker, without
 duplicate active jobs. A missing or partial `run.json` is repaired even if the episode
 files already match; shared run metadata is included only once in each cycle.
 The changed-file manifests share a preflight total budget below 1 GiB per cycle, newest
 first. `skipped_large` retains `{run_id, episode_id, size_bytes}` entries that did not
-fit, for manual import. `enabled` means host, mine patterns and a positive `interval_s`
-are configured; `paused` is independent. `running` covers discovery and queueing;
-transfer progress is in `/jobs`. Timestamps are UTC ISO 8601 strings or null.
+fit, for manual import. `enabled` means a host, either `shared_root` or mine patterns,
+and a positive `interval_s` are configured; `paused` is independent. `running` covers
+discovery and queueing; transfer progress is in `/jobs`. Timestamps are UTC ISO 8601 strings or null.
 Failures double the delay up to 30 minutes; success restores `interval_s`. Each cycle
 uses the current settings. `interval_s` accepts integers from 0 to 86400 (one day).
 Zero disables automatic imports; an invalid config file reports an error without
