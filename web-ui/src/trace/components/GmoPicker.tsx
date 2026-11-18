@@ -17,6 +17,7 @@ interface GmoPickerProps {
 }
 
 interface SettingsDraft {
+  sharedRoot: string;
   host: string;
   port: string;
   identityFile: string;
@@ -27,6 +28,7 @@ interface SettingsDraft {
 
 function settingsDraft(settings?: GmoSettings): SettingsDraft {
   return {
+    sharedRoot: settings?.shared_root ?? '',
     host: settings?.host ?? '', port: settings?.port?.toString() ?? '',
     identityFile: settings?.identity_file ?? '', mine: settings?.mine.join('\n') ?? '',
     team: settings?.team.join('\n') ?? '',
@@ -48,6 +50,7 @@ const INTERVAL_OPTIONS = [
 export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryConfig, onDisabled, onPick }: GmoPickerProps) {
   const [config, setConfig] = useState(initialConfig);
   const [settingsOpen, setSettingsOpen] = useState(!initialConfig?.configured);
+  const [patternsOpen, setPatternsOpen] = useState(() => !initialConfig?.settings.shared_root && !!(initialConfig?.settings.mine.length || initialConfig?.settings.team.length));
   const [draft, setDraft] = useState(() => settingsDraft(initialConfig?.settings));
   const [saving, setSaving] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
@@ -77,6 +80,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     if (!initialConfig) return;
     setConfig(initialConfig);
     setDraft(settingsDraft(initialConfig.settings));
+    setPatternsOpen(!initialConfig.settings.shared_root && !!(initialConfig.settings.mine.length || initialConfig.settings.team.length));
     if (!initialConfig.configured) setSettingsOpen(true);
   }, [initialConfig]);
   useEffect(() => () => {
@@ -238,6 +242,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     const lines = (text: string) => text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
     try {
       const saved = await gmoApi.saveConfig({
+        shared_root: draft.sharedRoot.trim(),
         host: draft.host.trim(), port: draft.port.trim() ? Number(draft.port) : null,
         identity_file: draft.identityFile.trim() || null, mine: lines(draft.mine), team: lines(draft.team),
         interval_s: Number(draft.interval),
@@ -291,7 +296,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           {autoSaving && <span>変更中…</span>}
         </label>
         <p className="mt-1 text-[11px]">
-          <span role="status">{!autoStatus ? '自動取り込みの状態を確認中…' : !autoStatus.enabled ? autoStatus.interval_s === 0 ? '自動取り込みは無効です（間隔 0 秒）' : '接続先と自分の記録の場所を設定してください' : autoStatus.paused ? '自動取り込みは一時停止中' : autoStatus.running ? '自動取り込み：巡回中…' : '次の巡回を待っています'}</span>
+          <span role="status">{!autoStatus ? '自動取り込みの状態を確認中…' : !autoStatus.enabled ? autoStatus.interval_s === 0 ? '自動取り込みは無効です（間隔 0 秒）' : '接続先と共有の記録フォルダー、または自分の記録の場所を設定してください' : autoStatus.paused ? '自動取り込みは一時停止中' : autoStatus.running ? '自動取り込み：巡回中…' : '次の巡回を待っています'}</span>
           {autoFollowing && !autoStatus?.running && secondsUntilNext !== null && <span> · 次の巡回まで {secondsUntilNext} 秒</span>}
         </p>
         {autoStatus && <p className="mt-1 text-[11px]">{autoStatus.last_run_at ? `最後の巡回：${fmtWall(autoStatus.last_run_at)} · ${autoStatus.queued_in_last_run} 件を取り込みキューに登録` : 'まだ巡回していません'}</p>}
@@ -304,9 +309,14 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           {initialConfigError && <div role="alert" className="mb-2"><ErrorText>{initialConfigError}</ErrorText><SmallButton onClick={onRetryConfig}>設定を読み直す</SmallButton></div>}
           <form onSubmit={event => { event.preventDefault(); void saveAndCheck(); }}>
             <fieldset disabled={saving} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-text-secondary">
-              <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="gmo または user@host" className={INPUT_CLASS} /></label>
+              <div className="sm:col-span-2 space-y-1">
+                <label htmlFor="gmo-shared-root">共有の記録フォルダー</label>
+                <input id="gmo-shared-root" name="gmo-shared-root" aria-label="共有の記録フォルダー" aria-describedby="gmo-shared-root-help" value={draft.sharedRoot} onChange={event => updateDraft('sharedRoot', event.target.value)} placeholder="/path/to/shared/traces" className={`${INPUT_CLASS} font-mono`} />
+                <p id="gmo-shared-root-help" className="text-text-tertiary">記録の場所はここだけで設定できます。この下の GMO のユーザー名フォルダーから、自分とチームの記録を探します。絶対パスを 1 つ指定してください（省略可）。</p>
+              </div>
+              <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="host-alias または user@host" className={INPUT_CLASS} /></label>
               <label className="space-y-1">ポート<input aria-label="ポート" name="gmo-port" type="number" min="1" max="65535" step="1" value={draft.port} onChange={event => updateDraft('port', event.target.value)} placeholder="SSH の設定を使う" className={INPUT_CLASS} /></label>
-              <label className="space-y-1">鍵ファイル<input aria-label="鍵ファイル" name="gmo-identity-file" value={draft.identityFile} onChange={event => updateDraft('identityFile', event.target.value)} placeholder="~/.ssh/id_ed25519（省略可）" className={INPUT_CLASS} /></label>
+              <label className="space-y-1">鍵ファイル<input aria-label="鍵ファイル" name="gmo-identity-file" value={draft.identityFile} onChange={event => updateDraft('identityFile', event.target.value)} placeholder="/path/to/private_key（省略可）" className={INPUT_CLASS} /></label>
               <div className="space-y-1">
                 <label htmlFor="gmo-interval">自動取り込みの間隔</label>
                 <select id="gmo-interval" name="gmo-interval" value={draft.interval} onChange={event => updateDraft('interval', event.target.value)} aria-describedby={draft.interval === '0' ? 'gmo-interval-help' : undefined} className={INPUT_CLASS}>
@@ -315,8 +325,14 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
                 </select>
                 {draft.interval === '0' && <p id="gmo-interval-help" className="text-text-tertiary">保存すると自動取り込みが止まります。</p>}
               </div>
-              <label className="space-y-1">自分の記録の場所<textarea aria-label="自分の記録の場所" name="gmo-mine" rows={3} value={draft.mine} onChange={event => updateDraft('mine', event.target.value)} placeholder="/home/user/outputs/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
-              <label className="space-y-1">チームの記録の場所<textarea aria-label="チームの記録の場所" name="gmo-team" rows={3} value={draft.team} onChange={event => updateDraft('team', event.target.value)} placeholder="/shared/team/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
+              <details open={patternsOpen} onToggle={event => setPatternsOpen(event.currentTarget.open)} className="sm:col-span-2">
+                <summary className="cursor-pointer">場所を個別に指定する（詳細）</summary>
+                <p className="mt-2 text-text-tertiary">共有フォルダーに加えて探す場所を指定できます。自分とチームの両方に当てはまる記録は自分の記録として扱います。</p>
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="space-y-1">自分の記録の場所<textarea aria-label="自分の記録の場所" name="gmo-mine" rows={3} value={draft.mine} onChange={event => updateDraft('mine', event.target.value)} placeholder="/path/to/mine/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
+                  <label className="space-y-1">チームの記録の場所<textarea aria-label="チームの記録の場所" name="gmo-team" rows={3} value={draft.team} onChange={event => updateDraft('team', event.target.value)} placeholder="/path/to/team/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
+                </div>
+              </details>
               <div className="sm:col-span-2"><button type="submit" className="px-2 py-1 rounded border border-surface-border-light bg-surface-sunken text-xs text-text-secondary hover:text-text-primary disabled:opacity-40">{saving ? '保存して確認中…' : '保存して確かめる'}</button></div>
             </fieldset>
           </form>
@@ -324,7 +340,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           {checkError && <div role="alert" className="mt-2"><ErrorText>{checkError}</ErrorText></div>}
           <p className="mt-3 text-[11px] text-text-secondary">自動取り込みは自分の記録だけが対象です。チームの試行は「取り込む」「更新を取り込む」で取り込めます。</p>
           <p className="mt-3 text-[11px] text-text-secondary">鍵は ssh-agent に読み込ませておく必要があります。この画面ではパスフレーズは聞けません。</p>
-          <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host gmo\n  HostName example.com\n  User your-user\n  Port 22\n  IdentityFile ~/.ssh/id_ed25519'}</pre></details>
+          <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host host-alias\n  HostName host.example\n  User your-user\n  Port 22\n  IdentityFile /path/to/private_key'}</pre></details>
         </section>
       )}
       {listing.error && <div role="alert" className="px-3 py-2"><ErrorText>一覧を取得できませんでした：{listing.error}</ErrorText></div>}

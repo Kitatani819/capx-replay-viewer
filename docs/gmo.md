@@ -14,22 +14,32 @@ viewerをGMOの計算ノードで動かし、SSH転送を通して手元のブ�
 
 ```text
 Host gmo
-    HostName connect2.gpucloud.gmo
+    HostName host.example
     Port 8822
     User USER
     IdentityFile ~/.ssh/YOUR_GMO_KEY
     IdentitiesOnly yes
 ```
 
-GMO上のトレースの置き場所（`CAPX_TRACE_DIR` に指定したディレクトリ）を指定して起動します。`*` などのパターンも使えます。複数の場所は `:` で区切ります。
+まず次のコマンドで起動し、「試行を選ぶ」→「GMO」→「接続設定」を開きます。接続先を入力し、一番上の「共有の記録フォルダー」に `/path/to/shared/traces` のような共有フォルダーの絶対パスを1つ入れて、「保存して確かめる」を押してください。記録の場所はこの1欄で設定できます。
 
 ```bash
-export CAPX_GMO_HOST=gmo
-export CAPX_GMO_TRACES='/home/GROUP/USER/replay-*/traces'
 bash Start-Replay.sh --from-gmo
 ```
 
-`--from-gmo` は起動前に自分の記録（`mine`）だけを取り込み、`outputs/gmo/traces` を開いて、サーバーの `--gmo` API を有効にします。設定がなければ警告を1行表示して取り込みを飛ばし、サーバーは起動します。チームの記録（`team`）は API から選んで取り込みます。サーバーを直接起動する場合も `--gmo` を付けると同じ API が使えます。
+共有フォルダーには、次の配置で記録を保存します。viewerでいう trace root は、共有フォルダー直下のユーザー名のフォルダーです。
+
+```text
+/path/to/shared/traces/<GMOのユーザー名>/<run id>/<episode>/…
+```
+
+自分の記録は `<共有フォルダー>/<自分のユーザー名>`、チームの記録は `<共有フォルダー>/*` のうち自分以外のフォルダーから探します。接続先が `user@host` なら `user` を自分のユーザー名として使い、SSH設定の別名などユーザー名が書かれていない場合は、一覧取得と同じSSH接続内でリモートのユーザー名を調べます。ユーザー名を調べるための追加接続は行いません。共有フォルダー配下の「実行者」（`owner`）は、ファイルの所有者にかかわらず、そのユーザー名のフォルダー名になります。
+
+接続先に `@` が複数ある場合は、最後の `@` より前をユーザー名として使います（例：`alice@domain@host` のユーザー名は `alice@domain`）。権限などで一覧を読めないユーザーフォルダーは飛ばし、読めるフォルダーの一覧取得・自動取り込み・起動前の取り込みを続けます。
+
+`--from-gmo` は起動前に自分の記録だけを取り込み、`outputs/gmo/traces` を開いて、サーバーの `--gmo` API を有効にします。初回など設定がなければ警告を1行表示して起動前の取り込みを飛ばし、サーバーは起動します。保存後は自動取り込みを利用でき、チームの記録はGMOタブから選んで手動で取り込みます。サーバーを直接起動する場合も `--gmo` を付けると同じ API が使えます。
+
+従来の場所も使う場合は「接続設定」の「場所を個別に指定する（詳細）」を開き、自分・チームのパターンを1行ずつ入力します。`mine` と `team` は共有フォルダーから決まる場所に足し合わせます。同じ場所が複数の指定に一致しても1回だけ表示し、自分とチームの両方に一致する記録は自分として扱います。共有フォルダー内の実行者名は、個別のパターンから見つかった場合もフォルダー名です。共有フォルダーを空にすれば個別のパターンだけで使え、既存の設定ファイルも変更せずに読み込めます。
 
 連携が有効な場合、「試行を選ぶ」は最初に「GMO」を開きます。接続設定が未入力なら同じタブで設定し、一覧から「取り込む」→「開く」と進めます。タブは左から「GMO」「手元の記録」「古いログ（トレースなし）」で、取得済みのトレースは「手元の記録」からも開けます。「古いログ（トレースなし）」は既存runnerログがある場合、またはURLで旧形式の試行を開いている場合に表示します。
 
@@ -37,36 +47,47 @@ bash Start-Replay.sh --from-gmo
 
 GMO タブの「接続設定」にある「自動取り込みの間隔」で、1 分・2 分（既定）・5 分・取り込まないを選び、「保存して確かめる」で保存できます。「取り込まない」を保存すると自動取り込みが無効になります。間隔の変更は次の巡回から反映されます。設定ファイルで指定したこれら以外の間隔も、設定ファイルの値として選択欄に表示され、そのまま保存できます。
 
-設定ファイルは Linux では `${XDG_CONFIG_HOME:-~/.config}/capx-geniac-replay/gmo.json`、macOS では `~/Library/Application Support/capx-geniac-replay/gmo.json` です。`CAPX_GMO_CONFIG` で別の場所を指定できます。ファイルがない場合だけ、上の `CAPX_GMO_HOST` と `CAPX_GMO_TRACES` を既定値（`mine`）として使います。設定はディレクトリ 700、ファイル 600 で保存します。
+設定ファイルは Linux では `${XDG_CONFIG_HOME:-~/.config}/capx-geniac-replay/gmo.json`、macOS では `~/Library/Application Support/capx-geniac-replay/gmo.json` です。`CAPX_GMO_CONFIG` で別の場所を指定できます。ファイルがない場合だけ、`CAPX_GMO_HOST` と `CAPX_GMO_TRACES` を既定値（`mine`）として使います。設定はディレクトリ 700、ファイル 600 で保存します。
 
 ```json
 {
   "host": "gmo",
   "port": null,
   "identity_file": null,
-  "mine": ["/path/to/your/traces"],
-  "team": ["/path/to/team/traces"],
+  "shared_root": "/path/to/shared/traces",
+  "mine": [],
+  "team": [],
   "interval_s": 120
 }
 ```
 
-`host` は SSH の Host 名または `user@host`、`port` は省略可能なポート番号、`identity_file` は省略可能な鍵のパスです。`mine` と `team` はパターンの配列で、`*` や `?` を使えます。自動取り込みの巡回間隔は設定ファイルの `interval_s` でも秒単位で指定でき、既定は 120 秒（2 分）、`0` は無効、最大は 86400 秒（1 日）です。範囲外の設定ファイルはエラーとなり、設定を修正すると巡回が復帰します。API の SSH 接続は `BatchMode=yes` を使うため、パスフレーズ付きの鍵は事前に `ssh-agent` へ登録してください。パスフレーズなしの鍵も使えます。
+`host` は SSH の Host 名または `user@host`、`port` は省略可能なポート番号、`identity_file` は省略可能な鍵のパスです。`shared_root` は共有フォルダーの絶対パス1つで、省略時や空文字列（`""`）では無効です。半角英数字と `._/+@-` を使えます。`..` のパス要素、制御文字、空白、glob文字（`*`、`?`、`[` など）は使えません。`mine` と `team` は追加するパターンの配列で、`*` や `?` を使えます。たとえば `"mine": ["/path/to/other/traces"]` で共有フォルダー以外の自分の記録を追加できます。
 
-`--gmo` のサーバーは `interval_s` ごとに `mine` の試行を一覧し、未取得・更新ありの試行を手動と同じキューへ入れます。同じ SSH 接続で `team` の run 名も確認し、異なる場所に同名 run がある場合は取り込みを見送ります（team の試行内容は巡回しません）。エピソードが一致していても `run.json` が欠落・不完全なら差分を取り込みます。1 回の巡回の転送予定量は合計 1 GiB 未満とし、新しい順に入るものを選びます。残りは GMO タブの「大きいため手動」に表示されます。記録中も差分を同じファイルへ取り込むため、開いている viewer の Live 表示が追従します。取り込み間隔の間に heartbeat が古くなり `incomplete` となった場合も、20 秒ごとの再読で次の取り込みを検知します。
+自動取り込みの巡回間隔は設定ファイルの `interval_s` でも秒単位で指定でき、既定は 120 秒（2 分）、`0` は無効、最大は 86400 秒（1 日）です。範囲外の設定ファイルはエラーとなり、設定を修正すると巡回が復帰します。API の SSH 接続は `BatchMode=yes` を使うため、パスフレーズ付きの鍵は事前に `ssh-agent` へ登録してください。パスフレーズなしの鍵も使えます。
+
+`--gmo` のサーバーは `interval_s` ごとに自分の試行（共有フォルダーの自分の場所と `mine` のパターン）を一覧し、未取得・更新ありの試行を手動と同じキューへ入れます。同じ SSH 接続でチームの場所（共有フォルダーの自分以外と `team` のパターン）の run 名も確認し、異なる場所に同名 run がある場合は取り込みを見送ります（team の試行内容は巡回しません）。エピソードが一致していても `run.json` が欠落・不完全なら差分を取り込みます。1 回の巡回の転送予定量は合計 1 GiB 未満とし、新しい順に入るものを選びます。残りは GMO タブの「大きいため手動」に表示されます。記録中も差分を同じファイルへ取り込むため、開いている viewer の Live 表示が追従します。取り込み間隔の間に heartbeat が古くなり `incomplete` となった場合も、20 秒ごとの再読で次の取り込みを検知します。
 
 GMO タブの「自分の試行を自動で取り込む」で一時停止・再開でき、次の巡回、最後の結果、エラーを 5 秒ごとに確認できます。一時停止はサーバー再起動で解除されます。失敗時は間隔を倍に延ばし（最大 30 分）、成功すると設定の間隔へ戻ります。設定変更は次の巡回に反映され、サーバー終了時に巡回と実行中の子プロセスも停止します。
 
-コピーだけを行う場合や、runを選ぶ場合は `scripts/fetch_gmo.py` を直接使います。
+従来の環境変数も引き続き使えます。`CAPX_GMO_TRACES` は自分のtrace rootのパターンで、複数の場所は `:` で区切ります。
+
+```bash
+export CAPX_GMO_HOST=gmo
+export CAPX_GMO_TRACES='/path/to/your/replay-*/traces'
+bash Start-Replay.sh --from-gmo
+```
+
+コピーだけを行う場合や、runを選ぶ場合は `scripts/fetch_gmo.py` を直接使います。この従来のCLIには `shared_root` の設定は適用されないので、環境変数か `--traces` でtrace rootを指定してください。
 
 ```bash
 python3 scripts/fetch_gmo.py --list                       # GMO上のrunとコピー量を表示するだけ
 python3 scripts/fetch_gmo.py --run RUN_ID                 # 指定したrunだけコピー
-python3 scripts/fetch_gmo.py --ssh "ssh -p 8822 -i ~/.ssh/YOUR_GMO_KEY" --host USER@connect2.gpucloud.gmo
+python3 scripts/fetch_gmo.py --ssh "ssh -p 8822 -i ~/.ssh/YOUR_GMO_KEY" --host USER@host.example
 ```
 
 `~/.ssh/config` を使わない場合、従来の CLI は最後の例のように `--ssh` と `--host`（環境変数では `CAPX_GMO_SSH` と `CAPX_GMO_HOST`）で指定できます。CLI では鍵のパスフレーズを `ssh` が通常どおり尋ねます。API は設定ファイルの `port` と `identity_file` だけを受け付けます。Windowsでは、WSL内で同じコマンドを実行してください。`--from-gmo` はLinux / macOSのランチャーにだけあります。
 
-GMO上で記録を作る手順はこのリポジトリに含めていません。記録時に `CAPX_TRACE_DIR` で指定したディレクトリが、ここで指定する置き場所です。
+GMO上で記録を作る手順はこのリポジトリに含めていません。共有フォルダーを使う場合は、記録を `<共有フォルダー>/<GMOのユーザー名>/<run id>/<episode>/…` に保存します。従来の `CAPX_TRACE_DIR` の場所は「場所を個別に指定する（詳細）」の個別パターンでも指定できます。
 
 **確認範囲:** GMOから取得した実記録をローカルのviewerで開くことは確認済みです。以下の計算ノードでの起動とSSH転送経路は、そのGMO環境では未確認です。計算ノードへのSSHが許可されていることが必要です。
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import shutil
 import sys
 import threading
@@ -63,7 +64,9 @@ def auto_source(tmp_path, monkeypatch):
     log = tmp_path / "ssh.log"
     ssh = tmp_path / "fake_ssh"
     ssh.write_text(
-        '#!/bin/sh\nshift\n'
+        '#!/bin/sh\n'
+        'if [ "$1" = "-l" ]; then shift 2; fi\n'
+        'shift\n'
         'case "$*" in\n'
         '  python3*) kind=list ;;\n'
         '  rsync*) kind=rsync ;;\n'
@@ -105,6 +108,142 @@ def test_auto_only_remote_and_stale_mine_one_listing(auto_source):
     assert log.read_text().splitlines().count("list") == 1
     assert log.read_text().splitlines().count("rsync") == 2
     assert service.run_auto_once()["queued_in_last_run"] == 0
+
+
+@pytest.mark.parametrize("username, teammate", [("trace_user", "team_user"), ("alice@domain", "alice")])
+def test_shared_root_auto_only_mine_and_manual_team(auto_source, username, teammate):
+    if shutil.which("rsync") is None:
+        pytest.skip("rsync is not installed")
+    service, mine, _, log, _, _ = auto_source
+    shared = mine.parent / "shared"
+    own = _episode(shared / username, "ep_own")
+    theirs = _episode(shared / teammate, "ep_team", run="team_run")
+    service.update_settings(gmo.GmoSettings(host=username + "@fakehost", shared_root=str(shared)))
+    state = service.run_auto_once()
+    assert state["enabled"] is True and state["queued_in_last_run"] == 1
+    _done(service)
+    assert (service.dest / "run_a" / "ep_own" / "events.jsonl").read_bytes() == (own / "events.jsonl").read_bytes()
+    assert not (service.dest / "team_run").exists()
+    assert log.read_text().splitlines() == ["list", "rsync"]
+    rows = {row["run_id"]: row for row in service.episodes("all")}
+    assert rows["run_a"]["owner"] == username and rows["run_a"]["mine"] is True
+    assert rows["team_run"]["owner"] == teammate and rows["team_run"]["mine"] is False
+    service.enqueue("team_run", "ep_team")
+    _done(service)
+    assert (service.dest / "team_run" / "ep_team" / "events.jsonl").read_bytes() == (theirs / "events.jsonl").read_bytes()
+
+
+@pytest.mark.parametrize("mine_only", [False, True])
+def test_shared_root_username_with_at_uses_last_separator(auto_source, mine_only):
+    service, mine, _, _, _, _ = auto_source
+    shared = mine.parent / "shared"
+    _episode(shared / "alice@domain", "ep_own")
+    _episode(shared / "alice", "ep_other", run="other_run")
+    settings = gmo.GmoSettings.from_dict({"host": "alice@domain@fakehost", "shared_root": str(shared)})
+    rows = gmo.list_remote_episodes(service.runner, settings, mine_only=mine_only)
+    expected = [("run_a", True, "alice@domain")]
+    if not mine_only:
+        expected.append(("other_run", False, "alice"))
+    assert [(row["run_id"], row["mine"], row["owner"]) for row in rows] == expected
+
+
+def test_shared_root_alias_resolves_remote_username_in_one_ssh(auto_source, monkeypatch):
+    service, mine, _, log, _, _ = auto_source
+    shared = mine.parent / "shared"
+    _episode(shared / "remote_account", "ep_own")
+    _episode(shared / pwd.getpwuid(os.geteuid()).pw_name, "ep_other", run="other_run")
+    # The fake ssh runs a remote Python whose account database differs from ours.
+    # Neither local account names nor USER/LOGNAME can identify the remote user.
+    remote_bin = mine.parent / "remote_bin"
+    remote_bin.mkdir()
+    python = remote_bin / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import pwd, sys, types\n"
+        "pwd.getpwuid = lambda uid: types.SimpleNamespace(pw_name='remote_account')\n"
+        "code = sys.argv[2]\n"
+        "sys.argv = ['-c', *sys.argv[3:]]\n"
+        "exec(code)\n"
+    )
+    python.chmod(0o700)
+    monkeypatch.setenv("PATH", str(remote_bin) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("USER", "wrong_account")
+    monkeypatch.setenv("LOGNAME", "wrong_account")
+    service.update_settings(gmo.GmoSettings(host="ssh-alias", shared_root=str(shared)))
+    rows = service.episodes("all")
+    assert [(row["run_id"], row["mine"], row["owner"]) for row in rows] == [
+        ("run_a", True, "remote_account"), ("other_run", False, pwd.getpwuid(os.geteuid()).pw_name)]
+    assert log.read_text().splitlines() == ["list"]
+
+
+def test_shared_root_auto_detects_team_collision_in_one_listing(auto_source, monkeypatch):
+    service, mine, _, log, _, _ = auto_source
+    shared = mine.parent / "shared"
+    _episode(shared / "trace_user", "ep_own")
+    _episode(shared / "team_user", "different_episode")
+    service.update_settings(gmo.GmoSettings(host="trace_user@fakehost", shared_root=str(shared)))
+    monkeypatch.setattr(gmo, "_transfer_episode", lambda *a, **kw: pytest.fail("conflicting run copied"))
+    state = service.run_auto_once()
+    assert state["queued_in_last_run"] == 0 and state["last_error"] is None
+    assert log.read_text().splitlines() == ["list"]
+    assert service.jobs() == [] and not service.dest.exists()
+    rows = service.episodes("all")
+    assert len(rows) == 2 and all(row["conflict"] for row in rows)
+    with pytest.raises(HTTPException) as error:
+        service.enqueue("run_a", "ep_own")
+    assert error.value.status_code == 409
+
+
+def test_shared_root_adds_explicit_patterns_deduplicates_and_keeps_folder_owner(auto_source):
+    service, mine, team, log, _, settings = auto_source
+    shared = mine.parent / "shared"
+    _episode(mine, "ep_explicit")
+    _episode(team, "ep_explicit_team", run="explicit_team")
+    _episode(shared / "trace_user", "ep_own", run="shared_own")
+    _episode(shared / "team_user", "ep_team", run="shared_team")
+    sibling = mine.parent / "shared-other" / "outside_user"
+    _episode(sibling, "ep_outside", run="outside_run")
+    service.update_settings(replace(
+        settings, host="trace_user@fakehost", shared_root=str(shared) + "/",
+        mine=(*settings.mine, str(shared / "team_user")),
+        team=(*settings.team, str(shared / "*"), str(sibling)),
+    ))
+    rows = service.episodes("all")
+    assert len(rows) == 5 and not any(row["conflict"] for row in rows)
+    runs = {row["run_id"]: row for row in rows}
+    assert runs["run_a"]["mine"] is True
+    assert runs["explicit_team"]["mine"] is False
+    assert runs["shared_own"]["mine"] is True and runs["shared_own"]["owner"] == "trace_user"
+    assert runs["shared_team"]["mine"] is True and runs["shared_team"]["owner"] == "team_user"
+    assert runs["outside_run"]["mine"] is False
+    assert runs["outside_run"]["owner"] == pwd.getpwuid(os.getuid()).pw_name
+    assert log.read_text().splitlines() == ["list"]
+
+
+@pytest.mark.parametrize("username", [".", ".."])
+def test_shared_root_refuses_username_path_components(auto_source, username):
+    service, mine, _, log, _, _ = auto_source
+    settings = gmo.GmoSettings(host=username + "@fakehost", shared_root=str(mine.parent / "shared"))
+    with pytest.raises(gmo.FetchError, match="Unsupported remote username"):
+        gmo.list_remote_episodes(service.runner, settings)
+    assert log.read_text().splitlines() == ["list"]
+
+
+@pytest.mark.parametrize("username, teammate", [("trace_user", "team_user"), ("alice@domain", "alice")])
+def test_shared_root_prefetch_only_mine_and_refuses_collisions(auto_source, capsys, username, teammate):
+    if shutil.which("rsync") is None:
+        pytest.skip("rsync is not installed")
+    service, mine, _, _, _, _ = auto_source
+    shared = mine.parent / "shared"
+    _episode(shared / username, "ep_own")
+    _episode(shared / teammate, "ep_team", run="team_run")
+    service.update_settings(gmo.GmoSettings(host=username + "@fakehost", shared_root=str(shared)))
+    assert gmo.prefetch_mine(service.dest) == 0
+    assert (service.dest / "run_a" / "ep_own" / "events.jsonl").is_file()
+    assert not (service.dest / "team_run").exists()
+    _episode(shared / teammate, "different_episode")
+    assert gmo.prefetch_mine(service.dest) == 1
+    assert "more than one GMO location" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("team_episode", ["ep_1", "different_episode"])
