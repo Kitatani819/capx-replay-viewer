@@ -98,6 +98,18 @@ test('list preserves invalid records as errors and completed evaluations have no
   assert.match(html, /schema が不正です/);
   assert.doesNotMatch(html, /完了/);
 });
+test('list and comparison show short commits and distinguish unknown uncommitted changes', () => {
+  for (const dirty of [true, false, null]) {
+    const d = detail();
+    d.eval!.git = { commit: 'a1b2c3d4', dirty, diff_sha256: dirty ? 'a'.repeat(64) : null };
+    for (const html of [renderToStaticMarkup(<EvalListTable entries={[d]} />), renderToStaticMarkup(<EvalComparison detail={d} />)]) {
+      assert.match(html, /a1b2c3d/);
+      assert.doesNotMatch(html, /a1b2c3d4/);
+      assert.equal(html.includes('＋未コミット'), dirty === true);
+      assert.equal(html.includes('title="未コミットの変更の有無は不明"'), dirty === null);
+    }
+  }
+});
 test('remote connection warning and running baseline computed summary remain visible', () => {
   const d = detail();
   d.baseline = { ...d.baseline!, status: 'running', summary: null };

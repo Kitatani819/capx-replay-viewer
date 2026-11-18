@@ -120,7 +120,7 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
         _require(isinstance(git, dict) and set(git).issubset({"commit", "dirty", "diff_sha256"})
                  and {"commit", "dirty"}.issubset(git), "git")
         _require(isinstance(git["commit"], str) and re.fullmatch(r"[0-9a-f]{40,64}", git["commit"]) is not None, "git.commit")
-        _require(type(git["dirty"]) is bool, "git.dirty")
+        _require(type(git["dirty"]) is bool or git["dirty"] is None, "git.dirty")
         diff = git.get("diff_sha256")
         _require((git["dirty"] and isinstance(diff, str) and re.fullmatch(r"[0-9a-f]{64}", diff) is not None)
                  or (not git["dirty"] and diff is None), "git.diff_sha256")

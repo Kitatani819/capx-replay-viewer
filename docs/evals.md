@@ -29,20 +29,16 @@ python -m capx_trace_recorder eval \
 
 ## 記録されるもの
 
-`<CAPX_TRACE_DIR>/<評価ID>/eval.json` に、開始時刻、実行者、変更した部品、基準ID、評価セット名、gitのコミット、未コミットの変更の有無を保存します。変更があれば `git diff HEAD` のSHA-256も残します。gitの情報が取れなければ `git` は `null` です。
+`<CAPX_TRACE_DIR>/<評価ID>/eval.json` に、開始時刻、実行者、変更した部品、基準ID、評価セット名、gitのコミット、未コミットの変更の有無を保存します。変更があれば `git diff HEAD` のSHA-256も残します。Gitコマンドが失敗するかGitがない場合は、チェックアウトの `.git` ファイルからコミットを読み、`dirty: null`・`diff_sha256: null` として変更の有無は不明と記録します。コミットも取れなければ `git` は `null` です。いずれの場合も評価開始時に警告を1行表示します。
 
-Gitの情報を取得できない場合は、評価開始時に警告します。別のメンバーが所有するチェックアウトを信頼して使う場合は、そのパスだけを許可した一時的な設定を渡せます。GMOのGit 2.34.1では、コマンドラインの `git -c safe.directory=…` で指定しても所有者チェックを通りません。
+別のメンバーが所有するチェックアウトを信頼して使う場合は、`--trust-repo` を指定すると、その `--repo` のパスだけを `safe.directory` として許可します。ラッパー自身のGit呼び出しだけに、一時ファイルを指す `GIT_CONFIG_GLOBAL` を渡し、使い終えたらファイルを削除します。この設定は子の評価コマンドへ渡しません。GMOのGit 2.34.1では、コマンドラインの `git -c safe.directory=…` で指定しても所有者チェックを通りません。
+
+このオプションは、そのチェックアウトのGit設定も信頼します。たとえば `core.fsmonitor` の設定によっては `git status` 中にコマンドが実行されるため、信頼できるチームメンバーのチェックアウトだけに使ってください。
 
 ```bash
-capx_checkout=/absolute/path/to/shared/CaP-X
-(
-  set -e
-  git_config=$(mktemp)
-  trap 'rm -f -- "$git_config"' EXIT
-  git config --file "$git_config" --add safe.directory "$capx_checkout"
-  GIT_CONFIG_GLOBAL="$git_config" python -m capx_trace_recorder eval \
-    --repo "$capx_checkout" -- /path/to/run-evaluation.sh
-)
+python -m capx_trace_recorder eval \
+  --repo /absolute/path/to/shared/CaP-X --trust-repo \
+  -- /path/to/run-evaluation.sh
 ```
 
 実行中は60秒ごとに生存時刻を更新します。終了コード0で「完了」、それ以外で「中断」として、成功・失敗・未判定・不完全な記録の数、タスク・seed、モデル名、設定フラグを集計します。終了コードは子プロセスの結果を引き継ぎます。`Ctrl+C` とSIGTERMは子のプロセスグループに送り、終了を待って集計します。
@@ -72,6 +68,8 @@ bash Start-Replay.sh --trace-root /absolute/path/to/traces
 試行画面の「評価一覧」、または同じPCのブラウザで **http://127.0.0.1:8390/evals** を開くと、新しい順の評価一覧が表示されます。行を押すと `/evals/<評価ID>` の比較ページに進みます。評価コマンドの終了時にも、このURLを表示します。別のポートで起動した場合はURLのポートを置き換えてください。
 
 一覧の状態は「実行中」「中断」「欠損あり」です。正常に完了した評価の状態欄は空欄です。SIGKILLなどで終了処理ができなかった評価も、生存時刻が5分以上更新されなければ「中断」と表示します。不正な `eval.json` は理由を表示し、ほかの評価は引き続き閲覧できます。
+
+一覧と比較ではコミットを短く表示し、変更があれば「＋未コミット」を付けます。変更の有無が不明な場合はこの印を付けず、コミットにカーソルを合わせると「未コミットの変更の有無は不明」と表示します。
 
 比較ページはタスクごとに基準と今回を並べ、seedごとの結果を表示します。成功は●、失敗は×、未判定は–、実行中は…、記録がないセルは空欄です。同じseedの再試行は最後を表示し、「再試行あり」と示します。基準が成功で今回が失敗なら、「悪化」の文字と枠を付けます。条件の違いと、記録された集計と表の件数が一致しない場合の案内も表示します。
 

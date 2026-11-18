@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -198,7 +199,7 @@ def test_summary_waits_for_workers_after_leader_exits(tmp_path, monkeypatch):
                 "harness_summary": {"task_completed": True}}))
             raise ProcessLookupError
 
-    monkeypatch.setattr(wrapper, "git_revision", lambda _repo: None)
+    monkeypatch.setattr(wrapper, "git_revision", lambda _repo, **_kwargs: None)
     monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
     monkeypatch.setattr(wrapper.os, "killpg", killpg)
     assert wrapper.run_eval(["evaluation"], trace_root=tmp_path, worker_wait_timeout=1) == -signal.SIGTERM
@@ -224,7 +225,7 @@ def test_worker_wait_timeout_is_bounded_and_recorded(tmp_path, monkeypatch):
         sleeps.append(duration)
         clock[0] += duration
 
-    monkeypatch.setattr(wrapper, "git_revision", lambda _repo: None)
+    monkeypatch.setattr(wrapper, "git_revision", lambda _repo, **_kwargs: None)
     monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
     monkeypatch.setattr(wrapper.os, "killpg", lambda *args: checks.append(args))
     monkeypatch.setattr(wrapper.time, "monotonic", lambda: clock[0])
@@ -269,6 +270,145 @@ def test_unavailable_git_revision_warns_and_keeps_eval_result(tmp_path):
     assert result.stderr.count("Git metadata unavailable") == 1
     assert str(repo) not in result.stderr
     assert read_record(trace_root)["git"] is None
+
+
+@pytest.mark.parametrize("layout", ["detached", "loose", "packed", "gitfile", "worktree_loose", "worktree_packed"])
+def test_git_failure_reads_commit_from_checkout_files(tmp_path, monkeypatch, layout):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = repo / ".git"
+    if layout in {"gitfile", "worktree_loose", "worktree_packed"}:
+        git = tmp_path / "gitdir"
+        (repo / ".git").write_text("gitdir: ../gitdir\n")
+    git.mkdir()
+    commit = "a1" * 20
+    if layout in {"detached", "gitfile"}:
+        (git / "HEAD").write_text(commit + "\n")
+    else:
+        (git / "HEAD").write_text("ref: refs/heads/main\n")
+        common = git
+        if layout.startswith("worktree_"):
+            common = tmp_path / "common"
+            common.mkdir()
+            (git / "commondir").write_text("../common\n")
+        if layout.endswith("packed"):
+            (common / "packed-refs").write_text(
+                "# pack-refs with: peeled fully-peeled sorted\n"
+                + "b2" * 20 + " refs/heads/other\n^" + "c3" * 20 + "\n"
+                + commit + " refs/heads/main\n")
+        else:
+            ref = common / "refs" / "heads" / "main"
+            ref.parent.mkdir(parents=True)
+            ref.write_text(commit + "\n")
+
+    calls = []
+
+    def fail(args, **kwargs):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 128, b"", b"fatal: dubious ownership")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fail)
+    assert wrapper.git_revision(repo) == {"commit": commit, "dirty": None, "diff_sha256": None}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 10)])
+def test_missing_or_timed_out_git_records_commit_and_warns_once(tmp_path, monkeypatch, capsys, failure):
+    repo = tmp_path / "repo"
+    git = repo / ".git"
+    git.mkdir(parents=True)
+    commit = "d4" * 20
+    (git / "HEAD").write_text(commit + "\n")
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fail)
+    trace_root = tmp_path / "trace"
+    monkeypatch.setattr(wrapper, "_warn_group_access", lambda _path: None)
+    assert wrapper.run_eval([sys.executable, "-c", "raise SystemExit(7)"], trace_root=trace_root, repo=repo) == 7
+    assert read_record(trace_root)["git"] == {"commit": commit, "dirty": None, "diff_sha256": None}
+    warning = capsys.readouterr().err
+    assert len(warning.splitlines()) == 1
+    assert "commit recorded" in warning.lower()
+    assert "uncommitted changes" in warning.lower() and "unknown" in warning.lower()
+    assert "--trust-repo" in warning
+    assert "Git metadata unavailable" not in warning
+
+
+@pytest.mark.parametrize("head", ["", "not-a-commit", "ref: refs/heads/missing\n", "\xff"])
+def test_invalid_fallback_commit_keeps_git_metadata_unavailable(tmp_path, monkeypatch, head):
+    git = tmp_path / ".git"
+    git.mkdir()
+    (git / "HEAD").write_bytes(head.encode("latin-1"))
+    monkeypatch.setattr(wrapper.subprocess, "run",
+                        lambda args, **kwargs: subprocess.CompletedProcess(args, 128, b"", b""))
+    assert wrapper.git_revision(tmp_path) is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="executable Git stub requires POSIX")
+@pytest.mark.parametrize("existing_global", [False, True])
+def test_cli_trust_repo_scopes_global_config_and_removes_it_before_child(tmp_path, existing_global):
+    repo = tmp_path / 'チーム "repo"\\checkout'
+    repo.mkdir()
+    stub_dir = tmp_path / "bin"
+    stub_dir.mkdir()
+    observed = tmp_path / "git-config-path"
+    commit = "e5" * 20
+    stub = stub_dir / "git"
+    stub.write_text("\n".join([
+        f"#!{sys.executable}",
+        "import os, subprocess, sys", "from pathlib import Path",
+        "config = Path(os.environ['GIT_CONFIG_GLOBAL'])",
+        f"value = subprocess.run([{shutil.which('git')!r}, 'config', '--file', str(config), "
+        "'--get-all', 'safe.directory'], capture_output=True, text=True, check=True).stdout",
+        f"assert value == {str(repo.resolve()) + chr(10)!r}",
+        f"Path({str(observed)!r}).write_text(str(config))",
+        f"if sys.argv[-2:] == ['rev-parse', 'HEAD']: print({commit!r})",
+        "elif sys.argv[-2:] != ['status', '--porcelain']: raise AssertionError(sys.argv)",
+    ]) + "\n")
+    stub.chmod(0o755)
+    trace_root = tmp_path / "trace"
+    env = environment(trace_root)
+    env["PATH"] = str(stub_dir) + os.pathsep + env.get("PATH", "")
+    env.pop("GIT_CONFIG_GLOBAL", None)
+    original = None
+    if existing_global:
+        original = str(tmp_path / "original-global")
+        Path(original).write_text("[user]\n\tname = Original\n")
+        env["GIT_CONFIG_GLOBAL"] = original
+    code = "\n".join([
+        "import os", "from pathlib import Path",
+        f"assert os.environ.get('GIT_CONFIG_GLOBAL') == {original!r}",
+        f"assert not Path(Path({str(observed)!r}).read_text()).exists()",
+    ])
+    result = run_cli(trace_root, code, "--repo", str(repo), "--trust-repo", env=env)
+    assert result.returncode == 0, result.stderr
+    assert read_record(trace_root)["git"] == {"commit": commit, "dirty": False}
+    assert not Path(observed.read_text()).exists()
+    if original is not None:
+        assert Path(original).read_text() == "[user]\n\tname = Original\n"
+
+
+@pytest.mark.parametrize("failure", ["failed", "missing", "timeout"])
+def test_trust_repo_removes_temporary_global_config_when_git_fails(tmp_path, monkeypatch, failure):
+    monkeypatch.delenv("GIT_CONFIG_GLOBAL", raising=False)
+    configs = []
+
+    def fail(args, **kwargs):
+        config = Path(kwargs["env"]["GIT_CONFIG_GLOBAL"])
+        assert config.is_file()
+        configs.append(config)
+        if failure == "missing":
+            raise FileNotFoundError("git")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args, 10)
+        return subprocess.CompletedProcess(args, 128, b"", b"")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fail)
+    assert wrapper.git_revision(tmp_path, trust_repo=True) is None
+    assert len(configs) == 1 and not configs[0].exists()
+    assert "GIT_CONFIG_GLOBAL" not in os.environ
 
 
 def test_sink_failures_at_start_and_end_preserve_exit(tmp_path, capsys):
