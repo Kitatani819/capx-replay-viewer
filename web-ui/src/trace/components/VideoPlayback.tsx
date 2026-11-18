@@ -51,6 +51,9 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   // render cannot publish an old playback cue after a manual/URL selection.
   const following=useRef(false);
   const appliedSeek=useRef<number|null>(null);
+  // Keep the target through seeked: a queued completion from an earlier seek
+  // may arrive before the latest seek's seeking event. Explicit replay input
+  // (or a native seek to a different position) releases this selection guard.
   const programmaticSeek=useRef<number|null>(null);
   const initialized=useRef(false);
   const map=useMemo(()=>playbackMap(model,chosen?.name??'',duration),[model,chosen?.name,duration]);
@@ -152,13 +155,13 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
     pane.scrollTop = row.offsetTop - (pane.clientHeight - row.clientHeight) / 2;
     lastCentered.current = key;
   }, [initialKey, map, turn, showLogs, apiMode, showProcessRows]);
-  const jump=(cue:PlaybackCue, alignTurn=turn!==null)=>{seek(cue,alignTurn);onSelect(cue.node,true);};
-  const selectRecordedNode=(node:TNode)=>{
+  const jump=(cue:PlaybackCue, alignTurn=turn!==null, openDetail=true)=>{seek(cue,alignTurn);onSelect(cue.node,openDetail);};
+  const selectRecordedNode=(node:TNode, openDetail=true)=>{
     const cue=map.all.find(c=>c.node.key===node.key);
-    if(cue){jump(cue);return;}
+    if(cue){jump(cue,turn!==null,openDetail);return;}
     video.current?.pause();following.current=false;setFollow(false);
     initialized.current=true;
-    selected.current=node.key;onSelect(node,true);
+    selected.current=node.key;onSelect(node,openDetail);
   };
   const resumeFollow = () => {
     onInteract?.();
@@ -195,7 +198,7 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
       onPause={e=>{setPlaying(false);setTime(e.currentTarget.currentTime);}}
       onSeeking={e=>{if(programmaticSeek.current===null || Math.abs(e.currentTarget.currentTime-programmaticSeek.current)>.01)resumeFollow();setTime(e.currentTarget.currentTime);}}
       onTimeUpdate={e=>setTime(e.currentTarget.currentTime)}
-      onSeeked={e=>{setTime(e.currentTarget.currentTime);programmaticSeek.current=null;}}
+      onSeeked={e=>setTime(e.currentTarget.currentTime)}
       onEnded={()=>{setTime(duration);setPlaying(false);}} onError={()=>{setDuration(0);setMediaError(true);}}/>
     {!simple && <>
       <div className="replay-playbar">
@@ -224,13 +227,15 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
             const cue=cues.find(c=>matchesTurn(c.node))
               ?? map.all.find(c=>c.node.kind==='code_block' && matchesTurn(c.node));
             if (cue) {
-              jump(cue, next !== null);
+              // Changing the turn keeps the chosen inspector tab. Only a
+              // direct process/API click opens that process's detail tab.
+              jump(cue, next !== null, false);
               return;
             }
             const node = withoutTime.find(n => n.kind === 'api_call' && matchesTurn(n))
               ?? withoutTime.find(matchesTurn);
             if (node) {
-              selectRecordedNode(node);
+              selectRecordedNode(node, false);
               return;
             }
             video.current?.pause();following.current=false;setFollow(false);
