@@ -55,7 +55,6 @@ export interface TabProps {
 }
 
 interface DetailTabsProps extends Omit<TabProps, 'selection'> {
-  apiPythonMode?: boolean;
   selection: Selection | null;
   tab: number;
   onTab: (i: number) => void;
@@ -133,14 +132,14 @@ export function DataAssetNotice({
   return rows.length ? <div className="space-y-1 mb-2">{rows}</div> : null;
 }
 
-export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
+export function DetailTabs({ tab, onTab, selection, missingEventId = null, assetStates = NO_ASSET_STATES, onRetryAsset, assetEvents = [], ...rest }: DetailTabsProps) {
   const eventId = selection?.eventId ?? null;
   let body: ReactNode;
   if (!selection) {
     body = (
       <div className="p-4 text-xs text-text-tertiary space-y-1">
         {missingEventId && <div className="text-amber-300">URL で指定されたイベント {missingEventId} は、このエピソードの記録にありません。</div>}
-        <div>{apiPythonMode ? 'この位置ではAPIは選択されていません。左のAPI一覧から選択できます。' : '左のタイムラインでイベントを選択してください。'}</div>
+        <div>左のAPI一覧または詳細ログで、確認する処理を選んでください。</div>
       </div>
     );
   } else {
@@ -154,7 +153,7 @@ export function DetailTabs({ tab, onTab, selection, apiPythonMode = false, missi
         body = <EnsembleTab {...props} mode="synthesis" onTurnSelect={rest.onSelect} />;
         break;
       default:
-        body = apiPythonMode && ['api_call','code_block'].includes(selection.node.kind)
+        body = ['api_call','code_block'].includes(selection.node.kind)
           ? <ApiTurnModelTab {...props} /> : <InputOutputTab {...props} />;
         break;
     }

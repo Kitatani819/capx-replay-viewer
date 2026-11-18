@@ -77,3 +77,23 @@ test('API details distinguish the reference definition, recorded arguments and r
   assert.match(failed, /エラー終了（戻り値なし）/);
   assert.doesNotMatch(failed, /RECORDED_RESULT/);
 });
+
+test('competition API details show the inherited definition and their own recorded execution', () => {
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null, 'move_to_joints_arm1(joints)');
+  const api = r.apiStart(block, 'move_to_joints_arm1', { joints: 'RECORDED_JOINTS' }, null, {
+    api_class: 'FrankaControlApiReducedSkillLibrary', qualname: 'FrankaControlApiReduced.move_to_joints_arm1',
+  });
+  r.apiEnd(api, null);
+  const model = buildEpisodeModel(r.events);
+  const node = model.nodeOfEvent.get(api.event_id)!;
+  const panel = renderToStaticMarkup(<ApiPythonPanel model={model} ep={ep} apiCues={[{node,time:2}]}
+    selectedKey={node.key} onSelect={() => {}}/>);
+  assert.match(panel, /アーム1を指定した7関節の角度へ移動/);
+  assert.doesNotMatch(panel, /説明未登録/);
+  const details = renderToStaticMarkup(<RecordedApiDetails ep={ep} node={node}/>);
+  assert.match(details, /Move the robot arm 1 to a given joint configuration/);
+  assert.match(details, /control_reduced\.py#L596-L605/);
+  assert.match(details, /RECORDED_JOINTS/);
+  assert.doesNotMatch(details, /説明未登録/);
+});

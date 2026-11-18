@@ -48,11 +48,11 @@ function recording() {
 
 function player(rec: ReturnType<typeof recording>) {
   const selections: { node: TNode; openDetail: boolean | undefined }[] = [];
-  const modes: boolean[] = [];
+  const visibility: boolean[] = [];
   const props: PlayerProps = {
     model: rec.model, ep: { runId: 'run', episodeId: 'ep' }, videos: [{ name: 'video_combined.mp4', url: '/video' }],
     initialKey: rec.block.key, logPanel: 'recorded logs',
-    onSelect: (node, openDetail) => selections.push({ node, openDetail }), onApiPythonModeChange: active => modes.push(active),
+    onSelect: (node, openDetail) => selections.push({ node, openDetail }), onApiPythonVisibleChange: visible => visibility.push(visible),
   };
   const page = mount(VideoPlayback, props);
   const video = () => findAll(page.output, 'video')[0];
@@ -67,7 +67,6 @@ function player(rec: ReturnType<typeof recording>) {
     play() { this.paused = false; (video().props.onPlay as Function)(); return Promise.resolve(); },
   };
   (video().props.ref as { current: unknown }).current = media;
-  const mode = () => findAll(page.output, 'select').find(element => element.props['aria-label'] === '表示する処理')!;
   const panel = () => propsOf<PanelProps>(page.output, ApiPythonPanel);
   // Mirror the controlled parent accepting the event returned by the player.
   const accept = async () => {
@@ -77,9 +76,13 @@ function player(rec: ReturnType<typeof recording>) {
     await advance(0);
   };
   const metadata = async () => { (video().props.onLoadedMetadata as Function)({ currentTarget: media }); await advance(0); };
-  const changeMode = async (value: string) => { (mode().props.onChange as Function)({ target: { value } }); await accept(); };
+  const toggleLogs = async () => {
+    const button = findAll(page.output, 'button').find(element =>
+      element.props.children === '詳細ログ' || element.props.children === 'APIとPythonに戻る')!;
+    (button.props.onClick as Function)(); await advance(0);
+  };
   const moveTime = async (time: number) => { media.currentTime = time; (video().props.onTimeUpdate as Function)({ currentTarget: media }); await accept(); };
-  return { page, media, video, mode, panel, selections, modes, accept, metadata, changeMode, moveTime };
+  return { page, media, video, panel, selections, visibility, accept, metadata, toggleLogs, moveTime };
 }
 
 test('a recorded evaluation beyond the final frame stays selectable without changing the video position', async () => {
@@ -93,17 +96,17 @@ test('a recorded evaluation beyond the final frame stays selectable without chan
   const events = [...rec.events, evaluation];
   const p = player({ ...rec, events, model: buildEpisodeModel(events) });
   await p.metadata();
-  await p.changeMode('all');
   await p.media.play();
   await p.moveTime(3.25);
-  const row = () => findAll(p.page.output, 'button').find(button => button.props['data-replay-event'] === evaluation.event_id)!;
-  assert.equal(row().props['data-replay-sync'], 'unmapped');
-  (row().props.onClick as Function)();
-  await p.accept();
+  await p.toggleLogs();
+  const selectedKey = p.page.props.model.nodeOfEvent.get(evaluation.event_id)!.key;
+  // Detailed-log selections arrive through the controlled parent and seek token.
+  p.page.update({ ...p.page.props, initialKey: selectedKey, seekRequest: { key: selectedKey, token: 1 } });
+  await advance(0);
   assert.equal(p.media.currentTime, 3.25);
   assert.equal(p.media.paused, true);
-  assert.equal(p.selections.at(-1)?.node.primary.event_id, evaluation.event_id);
-  assert.equal(row().props['aria-pressed'], true);
+  await p.toggleLogs();
+  assert.equal(p.panel().selectedKey, selectedKey);
   p.page.unmount();
 });
 
@@ -116,14 +119,15 @@ test('unsynced process rows switch turn recordings and remain selectable before 
     { name: 'video_turn_01.mp4', url: '/turn1', turnIndex: 1 },
   ] });
   await p.metadata();
-  await p.changeMode('all');
   await p.moveTime(1.25);
-  const explanation = () => findAll(p.page.output, 'p').flatMap(el => el.props.children).join(' ');
   const choose = async (node: TNode) => {
-    const row = findAll(p.page.output, 'button').find(button => button.props['data-replay-event'] === node.primary.event_id);
-    if (!row) throw new Error('the unsynced process is missing while waiting for metadata');
-    assert.equal(row.props['data-replay-sync'], 'unmapped');
-    (row.props.onClick as () => void)();
+    const panel = mount(ApiPythonPanel, p.panel());
+    try {
+      const row = findAll(panel.output, 'button').find(button => button.props['data-api-event'] === node.primary.event_id);
+      if (!row) throw new Error('the unsynced API is missing while waiting for metadata');
+      assert.equal(p.panel().apiCues.length, 0);
+      (row.props.onClick as () => void)();
+    } finally { panel.unmount(); }
     await p.accept();
     assert.equal(p.selections.at(-1)?.node.key, node.key);
   };
@@ -132,7 +136,6 @@ test('unsynced process rows switch turn recordings and remain selectable before 
     assert.equal(p.video().props.src, '/turn1');
     const slider = findAll(p.page.output, 'input').find(input => input.props['aria-label'] === '動画の再生位置');
     assert.equal(slider?.props.disabled, true, 'the newly selected video has not loaded metadata');
-    assert.match(explanation(), /実行の録画があれば切り替えます/);
     await choose(rec.first);
     assert.equal(p.video().props.src, '/turn0');
 
@@ -143,23 +146,21 @@ test('unsynced process rows switch turn recordings and remain selectable before 
     await choose(rec.later);
     await choose(rec.first);
     assert.equal(p.video().props.src, '/turn1', 'an explicitly selected recording stays pinned');
-    assert.match(explanation(), /現在位置で停止します/);
   } finally {
     p.page.unmount();
   }
 });
 
-test('entering API/Python while playing selects the API at this position without pausing or seeking', async () => {
+test('the default API/Python view follows playback and has no process display selector', async () => {
   resetBrowser(); const rec = recording(); const p = player(rec);
   await p.metadata(); await p.media.play(); await p.moveTime(.75);
   const pauses = p.media.pauses;
-  await p.changeMode('api-python');
+  assert.equal(findAll(p.page.output, 'select').some(element => element.props['aria-label'] === '表示する処理'), false);
   assert.equal(p.media.currentTime, .75);
   assert.equal(p.media.pauses, pauses);
   assert.equal(p.media.paused, false);
   assert.equal(p.panel().selectedKey, rec.same.key);
-  assert.equal(p.selections.at(-1)?.openDetail, true);
-  assert.equal(p.modes.at(-1), true);
+  assert.equal(p.visibility.at(-1), true);
   await p.moveTime(2.75);
   assert.equal(p.panel().selectedKey, rec.later.key, 'playback continues following API events');
   assert.equal(p.media.paused, false);
@@ -169,7 +170,7 @@ test('entering API/Python while playing selects the API at this position without
 
 test('API clicks pause and seek; individual same-frame selections survive late paused timeupdates', async () => {
   resetBrowser(); const rec = recording(); const p = player(rec);
-  await p.metadata(); await p.changeMode('api-python');
+  await p.metadata();
   await p.media.play(); await p.moveTime(2.75);
   p.panel().onSelect(rec.first); await p.accept();
   assert.equal(p.media.currentTime, .5);
@@ -190,9 +191,9 @@ test('API clicks pause and seek; individual same-frame selections survive late p
   p.page.unmount();
 });
 
-test('hover previews neither select APIs nor move the recording, and block navigation keeps API/Python mode', async () => {
+test('hover previews neither select APIs nor move the recording, and block navigation keeps the API/Python view', async () => {
   resetBrowser(); const rec = recording(); const p = player(rec);
-  await p.metadata(); await p.changeMode('api-python');
+  await p.metadata();
   p.panel().onSelect(rec.first); await p.accept();
   const panel = mount(ApiPythonPanel, p.panel());
   const row = findAll(panel.output, 'button').find(button => button.props['data-api-event'] === rec.later.primary.event_id)!;
@@ -208,43 +209,38 @@ test('hover previews neither select APIs nor move the recording, and block navig
   const next = findAll(panel.output, 'button').find(button => button.props['aria-label'] === '次のコードブロック')!;
   (next.props.onClick as Function)(); await p.accept();
   assert.equal(p.panel().selectedKey, rec.block2.key);
-  assert.equal(p.mode().props.value, 'api-python');
+  assert.equal(p.visibility.at(-1), true);
   assert.equal(p.media.currentTime, 2);
   panel.update(p.panel());
   const previous = findAll(panel.output, 'button').find(button => button.props['aria-label'] === '前のコードブロック')!;
   (previous.props.onClick as Function)(); await p.accept();
   assert.equal(p.panel().selectedKey, rec.block.key);
-  assert.equal(p.mode().props.value, 'api-python');
+  assert.equal(p.visibility.at(-1), true);
   assert.equal(p.media.currentTime, 0);
   assert.equal(p.media.paused, true);
   panel.unmount(); p.page.unmount();
 });
 
-test('API/Python mode callback follows log visibility, filter changes and unmount without moving paused video', async () => {
+test('the API/Python visibility callback follows detailed logs and unmount without moving paused video', async () => {
   resetBrowser(); const rec = recording(); const p = player(rec);
-  await p.metadata(); await p.changeMode('api-python');
+  await p.metadata();
   p.panel().onSelect(rec.first); await p.accept();
   const time = p.media.currentTime, pauses = p.media.pauses;
-  const toggle = (label: string) => findAll(p.page.output, 'button').find(button => button.props.children === label)!;
-  (toggle('詳細ログ').props.onClick as Function)(); await advance(0);
-  assert.equal(p.modes.at(-1), false);
+  await p.toggleLogs();
+  assert.equal(p.visibility.at(-1), false);
   assert.equal(findAll(p.page.output, ApiPythonPanel).length, 0);
-  (toggle('処理タイムライン').props.onClick as Function)(); await advance(0);
-  assert.equal(p.modes.at(-1), true);
+  await p.toggleLogs();
+  assert.equal(p.visibility.at(-1), true);
   assert.equal(p.panel().selectedKey, rec.first.key);
-  await p.changeMode('all');
-  assert.equal(p.modes.at(-1), false);
   assert.equal(p.media.currentTime, time);
   assert.equal(p.media.pauses, pauses);
-  await p.changeMode('api-python');
   p.page.unmount();
-  assert.equal(p.modes.at(-1), false, 'unmount clears the parent inspector mode');
+  assert.equal(p.visibility.at(-1), false, 'unmount clears the pane visibility');
 });
 
-test('entering API/Python aligns an active turn filter with the selected last API without seeking or pausing', async () => {
+test('selecting a turn with executed code and no APIs shows that code without an earlier turn API', async () => {
   resetBrowser(); const original = recording();
-  // Turn 2 contains executed code but no recorded API. At its video position,
-  // the last API is still the turn 1 call, which must not be hidden by filtering.
+  // Turn 2 contains executed code but no recorded API.
   const events = original.events.filter(event => event.event_id !== original.later.primary.event_id && event.parent_event_id !== original.later.primary.event_id);
   const rec = { ...original, model: buildEpisodeModel(events) };
   const p = player(rec); await p.metadata();
@@ -252,46 +248,42 @@ test('entering API/Python aligns an active turn filter with the selected last AP
   (turn().props.onChange as Function)({ target: { value: '2' } }); await p.accept();
   assert.equal(turn().props.value, 2);
   assert.equal(p.media.currentTime, 2);
-  const pauses = p.media.pauses;
-  await p.changeMode('api-python');
-  assert.equal(p.panel().selectedKey, rec.same.key);
-  assert.equal(p.panel().turn, 1);
-  assert.equal(turn().props.value, 1, 'the selected API must remain visible under the active turn filter');
-  assert.equal(p.media.currentTime, 2, 'changing the display filter must not rewind to the earlier API');
-  assert.equal(p.media.pauses, pauses);
+  assert.equal(p.panel().selectedKey, rec.block2.key);
+  assert.equal(p.panel().turn, 2);
+  assert.equal(turn().props.value, 2);
   assert.equal(p.media.paused, true);
   p.page.unmount();
 });
 
-test('page forwards API/Python mode and preserves API selection and seek state while inspecting all three tabs', async () => {
+test('API details always show the generating model and preserve selection across tabs and detailed logs', async () => {
   resetBrowser(); const rec = recording(); const run = makeRun();
   addEpisode(run, 'e1', { status: 'ended', trace_complete: true }, rec.events.map(event => ({ ...event, run_id: 'r1', episode_id: 'e1' })));
   serve(run); setLocation(`/traces?view=details&run=r1&episode=e1&event=${rec.first.primary.event_id}`);
   const page = mount(TraceViewerPage, {}); await advance(1000);
   const media = () => propsOf<MediaProps>(page.output, MediaPane);
   const details = () => propsOf<DetailsProps>(page.output, DetailTabs);
-  assert.equal(details().apiPythonMode, false);
-  media().onApiPythonModeChange!(true); await advance(0);
-  assert.equal(details().apiPythonMode, true);
+  const inspector = mount(DetailTabs, details());
+  assert.equal(findAll(inspector.output, ApiTurnModelTab).length, 1, 'an event URL opens the same model I/O presentation immediately');
+  media().onApiPythonVisibleChange!(true); await advance(0);
   const api = media().model.nodeOfEvent.get(rec.same.primary.event_id)!;
   media().onPlaybackSelect!(api, true); await advance(0);
   assert.equal(details().selection?.eventId, api.primary.event_id);
   assert.equal(media().selectionFromPlayback, true, 'a player selection stays tagged as the parent reflects it');
   assert.equal(media().seekRequest, null, 'playback selections do not create a manual seek token');
-  const inspector = mount(DetailTabs, details());
+  inspector.update(details());
   assert.equal(propsOf<Parameters<typeof ApiTurnModelTab>[0]>(inspector.output, ApiTurnModelTab).selection.node.key, api.key);
   for (const tab of [1, 2, 0]) {
     details().onTab(tab); await advance(0); inspector.update(details());
     assert.equal(media().selection?.node.key, api.key);
     assert.equal(media().seekRequest, null);
-    assert.equal(details().apiPythonMode, true);
     if (tab) assert.equal(propsOf<Parameters<typeof EnsembleTab>[0]>(inspector.output, EnsembleTab).mode, tab === 1 ? 'candidates' : 'synthesis');
     else assert.equal(findAll(inspector.output, ApiTurnModelTab).length, 1);
   }
-  media().onApiPythonModeChange!(false); await advance(0);
-  assert.equal(details().apiPythonMode, false);
+  media().onApiPythonVisibleChange!(false); await advance(0);
   details().onSelect(api); await advance(0);
   assert.equal(media().selectionFromPlayback, false);
   assert.equal(media().seekRequest?.key, api.key, 'an external event click still requests a seek');
+  inspector.update(details());
+  assert.equal(findAll(inspector.output, ApiTurnModelTab).length, 1, 'the same presentation is used when the detailed log is open');
   inspector.unmount(); page.unmount();
 });

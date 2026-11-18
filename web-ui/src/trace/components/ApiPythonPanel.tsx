@@ -87,13 +87,29 @@ function ApiDetails({ node, ep, ...access }: { node: TNode; ep: EpisodeRef } & E
   </details>;
 }
 
-function revealInPane(pane: HTMLElement, selector: string) {
-  const item = pane.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
-  if (!item) return;
-  const top = pane.getBoundingClientRect().top + pane.clientTop;
-  if (item.top < top || item.bottom > top + pane.clientHeight) {
-    pane.scrollTop += item.top - top - Math.max(0, (pane.clientHeight - item.height) / 2);
-  }
+function followSelectionInPane(pane: HTMLElement, selector: string) {
+  const reveal = (previousHeight?: number) => {
+    const item = pane.querySelector<HTMLElement>(selector)?.getBoundingClientRect();
+    if (!item) return;
+    const offset = item.top - pane.getBoundingClientRect().top - pane.clientTop;
+    // On shrink, keep following the selection only if the user could still see it.
+    if (previousHeight !== undefined && (offset + item.height <= 0 || offset >= previousHeight)) return;
+    if (offset < 0 || offset + item.height > pane.clientHeight) {
+      pane.scrollTop += offset - Math.max(0, (pane.clientHeight - item.height) / 2);
+    }
+  };
+  reveal();
+  if (typeof ResizeObserver === 'undefined') return;
+  let width = pane.clientWidth;
+  let height = pane.clientHeight;
+  const observer = new ResizeObserver(() => {
+    if (pane.clientWidth !== width || height === 0) reveal();
+    else if (pane.clientHeight < height) reveal(height);
+    width = pane.clientWidth;
+    height = pane.clientHeight;
+  });
+  observer.observe(pane);
+  return observer;
 }
 
 export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn = null, assetStates, onRetryAsset }: ApiPythonPanelProps) {
@@ -117,16 +133,12 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
     const codePane = codeScroll.current;
     if (!listPane || !codePane) return;
     if (marked.line === null) codePane.scrollTop = 0;
-    const revealSelection = () => {
-      revealInPane(listPane, '[data-api-selected="true"]');
-      revealInPane(codePane, '[data-code-highlighted="true"]');
+    const listObserver = followSelectionInPane(listPane, '[data-api-selected="true"]');
+    const codeObserver = followSelectionInPane(codePane, '[data-code-highlighted="true"]');
+    return () => {
+      listObserver?.disconnect();
+      codeObserver?.disconnect();
     };
-    revealSelection();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(revealSelection);
-    observer.observe(listPane);
-    observer.observe(codePane);
-    return () => observer.disconnect();
   }, [selectedKey, turn, block?.key, marked.line, code.text]);
 
   useEffect(() => {
