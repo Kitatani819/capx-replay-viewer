@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from capx_trace_viewer import evals, reader
 from capx_trace_viewer.trace_api import (
-    client_is_loopback, host_is_loopback, json_response, origin_is_loopback,
+    client_is_local, host_is_loopback, json_response, origin_is_loopback,
 )
 
 
@@ -177,13 +177,17 @@ class EvalService:
         }
 
 
-def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: Any = None) -> APIRouter:
+def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: Any = None,
+                       unix_socket: bool = False) -> APIRouter:
+    """``unix_socket``: the server listens on a ``--uds`` socket, whose requests carry no
+    client address; the gate then accepts requests without one, like the trace API."""
     service = EvalService(trace_root, gmo_service)
 
     def gate(request: Request) -> None:
         if expose:
             return
-        if not client_is_loopback(request) or not host_is_loopback(request.headers.get("host")):
+        if (not client_is_local(request, unix_socket=unix_socket)
+                or not host_is_loopback(request.headers.get("host"))):
             raise HTTPException(status_code=403, detail="the eval API answers loopback requests only")
         origin = request.headers.get("origin")
         if origin is not None and not origin_is_loopback(origin):

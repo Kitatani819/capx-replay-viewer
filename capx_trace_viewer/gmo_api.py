@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 
 from capx_trace_viewer import gmo, reader
 from capx_trace_viewer.trace_api import (
-    client_is_loopback, host_is_loopback, json_response, origin_is_loopback,
+    client_is_local, host_is_loopback, json_response, origin_is_loopback,
 )
 
 CACHE_SECONDS = 30
@@ -77,7 +77,7 @@ class GmoService:
 
     @staticmethod
     def _auto_enabled(settings: gmo.GmoSettings) -> bool:
-        return bool(settings.host and settings.mine and settings.interval_s > 0)
+        return bool(settings.host and (settings.shared_root or settings.mine) and settings.interval_s > 0)
 
     def _schedule_auto_locked(self, settings: gmo.GmoSettings) -> None:
         if self._closed or self._auto_paused or not self._auto_enabled(settings):
@@ -390,9 +390,12 @@ class GmoService:
             self._worker.join(timeout=5)
 
 
-def create_gmo_router(service: GmoService) -> APIRouter:
+def create_gmo_router(service: GmoService, *, unix_socket: bool = False) -> APIRouter:
+    """``unix_socket``: the server listens on a ``--uds`` socket, whose requests carry no
+    client address (see ``trace_api.client_is_local``)."""
     def gate(request: Request) -> None:
-        if not client_is_loopback(request) or not host_is_loopback(request.headers.get("host")):
+        if (not client_is_local(request, unix_socket=unix_socket)
+                or not host_is_loopback(request.headers.get("host"))):
             raise HTTPException(403, "The GMO API accepts loopback requests only")
         origin = request.headers.get("origin")
         if origin is not None and not origin_is_loopback(origin):

@@ -15,7 +15,7 @@ import { addEpisode, ev, makeRun, serve } from './pageServer';
 const browserFetch = globalThis.fetch;
 interface SentRequest { path: string; method: string; headers: Headers; body: unknown }
 function settings(overrides: Partial<GmoSettings> = {}): GmoSettings {
-  return { host: 'gmo', port: null, identity_file: null, mine: ['/mine/traces'], team: ['/team/traces'], interval_s: 120, ...overrides };
+  return { host: 'gmo', port: null, identity_file: null, shared_root: '', mine: ['/mine/traces'], team: ['/team/traces'], interval_s: 120, ...overrides };
 }
 function config(configured = true): GmoConfigResponse {
   return { enabled: true, configured, settings: configured ? settings() : settings({ host: '', mine: [], team: [] }), dest: '/local/traces', config_path: '/config/gmo.json' };
@@ -64,8 +64,8 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
       if (sent.method === 'PUT') {
         if (state.saveError) return { status: 400, json: { detail: state.saveError } };
         const saved = sent.body as GmoSettings;
-        state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.mine.length || saved.team.length)) };
-        state.auto = { ...state.auto, interval_s: saved.interval_s, enabled: Boolean(saved.host && saved.mine.length && saved.interval_s > 0) };
+        state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.shared_root || saved.mine.length || saved.team.length)) };
+        state.auto = { ...state.auto, interval_s: saved.interval_s, enabled: Boolean(saved.host && (saved.shared_root || saved.mine.length) && saved.interval_s > 0) };
       }
       return { json: state.config, latency: state.configLatency };
     }
@@ -326,7 +326,7 @@ for (const [label, mode] of [['GMO', 'gmo'], ['手元の記録', 'traced'], ['�
 test('unconfigured GMO opens the labelled connection settings without listing remotely', async () => {
   const state = setup([], false);
   const page = mountGmo(state.config); await advance(100);
-  for (const label of ['接続先', 'ポート', '鍵ファイル', '自分の記録の場所', 'チームの記録の場所']) {
+  for (const label of ['共有の記録フォルダー', '接続先', 'ポート', '鍵ファイル', '自分の記録の場所', 'チームの記録の場所']) {
     assert.ok(text(page.output).includes(label), label);
   }
   assert.ok(button(page.output, '保存して確かめる'));
@@ -334,7 +334,7 @@ test('unconfigured GMO opens the labelled connection settings without listing re
   assert.match(text(page.output), /ssh-agent/);
   assert.match(text(page.output), /パスフレーズ/);
   assert.equal(intervalSelect(page.output).props.value, '120');
-  assert.match(text(page.output), /接続先と自分の記録の場所を設定してください/);
+  assert.match(text(page.output), /接続先と共有の記録フォルダー、または自分の記録の場所を設定してください/);
   assert.equal(findAll(page.output, 'input').find(el => el.props.type === 'checkbox')?.props.disabled, true);
   assert.equal(state.sent.some(req => req.path === '/api/gmo/episodes'), false);
   page.unmount();
@@ -655,6 +655,83 @@ async function saveForm(output: unknown): Promise<void> {
   await advance(100);
 }
 
+function patternDetails(output: unknown): FakeElement {
+  const details = findAll(output, 'details').find(el => text(findAll(el, 'summary')[0]) === '場所を個別に指定する（詳細）');
+  assert.ok(details, 'individual patterns are grouped under a details disclosure');
+  return details!;
+}
+
+async function togglePatterns(output: unknown, open: boolean): Promise<void> {
+  const details = patternDetails(output);
+  (details.props.onToggle as (event: unknown) => void)({ currentTarget: { open } });
+  await advance(0);
+}
+
+test('GMO puts the shared folder first and collapses optional individual patterns', async () => {
+  const state = setup([], false);
+  const page = mountGmo(state.config); await advance(100);
+  const fieldset = findAll(page.output, 'fieldset')[0];
+  const shared = findAll(fieldset, 'input')[0];
+  assert.equal(shared.props['aria-label'], '共有の記録フォルダー');
+  assert.equal(shared.props.value, '');
+  assert.equal(shared.props.placeholder, '/path/to/shared/traces');
+  const label = findAll(fieldset, 'label').find(el => el.props.htmlFor === shared.props.id);
+  assert.equal(text(label), '共有の記録フォルダー');
+  const description = findAll(fieldset, 'p').find(el => el.props.id === shared.props['aria-describedby']);
+  assert.match(text(description), /ここだけで設定.*ユーザー名フォルダー.*自分とチーム.*絶対パス/);
+  assert.equal(patternDetails(page.output).props.open, false);
+  await togglePatterns(page.output, true);
+  assert.equal(patternDetails(page.output).props.open, true);
+  assert.deepEqual(findAll(patternDetails(page.output), 'textarea').map(el => el.props['aria-label']), ['自分の記録の場所', 'チームの記録の場所']);
+  assert.match(text(patternDetails(page.output)), /共有フォルダーに加えて/);
+  await togglePatterns(page.output, false);
+  assert.equal(patternDetails(page.output).props.open, false);
+  page.unmount();
+});
+
+test('GMO saves just the shared folder and connection without individual patterns', async () => {
+  const state = setup([], false);
+  const page = mountGmo(state.config); await advance(100);
+  change(page.output, '共有の記録フォルダー', ' /path/to/shared/traces '); await advance(0);
+  change(page.output, '接続先', 'host-alias'); await advance(0);
+  await saveForm(page.output);
+  const writes = state.sent.filter(req => req.method !== 'GET');
+  assert.deepEqual(writes.map(req => [req.method, req.path]), [['PUT', '/api/gmo/config'], ['POST', '/api/gmo/check']]);
+  assert.deepEqual(writes[0].body, settings({ host: 'host-alias', shared_root: '/path/to/shared/traces', mine: [], team: [] }));
+  assert.equal(state.config.configured, true);
+  assert.equal(autoCheckbox(page.output).props.checked, true);
+  assert.equal(patternDetails(page.output).props.open, false);
+  assert.match(text(page.output), /接続できました：自分 2 件、チーム 3 件/);
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO initializes shared settings with collapsed patterns and preserves edited patterns when collapsed', async () => {
+  const state = setup(); state.config.settings.shared_root = '/path/to/shared/traces';
+  const page = mountGmo(state.config); await advance(100);
+  click(page.output, '接続設定'); await advance(0);
+  assert.equal(findAll(page.output, 'input').find(el => el.props.name === 'gmo-shared-root')?.props.value, '/path/to/shared/traces');
+  assert.equal(patternDetails(page.output).props.open, false);
+  await togglePatterns(page.output, true);
+  change(page.output, '自分の記録の場所', '/path/to/extra/traces'); await advance(0);
+  await togglePatterns(page.output, false);
+  await saveForm(page.output);
+  assert.deepEqual(state.sent.find(req => req.method === 'PUT')?.body, settings({ shared_root: '/path/to/shared/traces', mine: ['/path/to/extra/traces'] }));
+  assert.equal(patternDetails(page.output).props.open, false);
+  page.unmount();
+});
+
+test('GMO opens existing individual-only settings for editing and allows them to be collapsed', async () => {
+  const state = setup();
+  const page = mountGmo(state.config); await advance(100);
+  click(page.output, '接続設定'); await advance(0);
+  assert.equal(patternDetails(page.output).props.open, true);
+  await togglePatterns(page.output, false);
+  assert.equal(patternDetails(page.output).props.open, false);
+  await saveForm(page.output);
+  assert.deepEqual(state.sent.find(req => req.method === 'PUT')?.body, settings());
+  page.unmount();
+});
+
 function intervalSelect(output: unknown): FakeElement {
   const label = findAll(output, 'label').find(el => text(el) === '自動取り込みの間隔');
   assert.ok(label, 'the interval select has a visible label');
@@ -736,6 +813,7 @@ test('GMO saves labelled settings as JSON then checks and reports counts', async
   change(page.output, '接続先', 'user@gmo.example'); await advance(0);
   change(page.output, 'ポート', '8822'); await advance(0);
   change(page.output, '鍵ファイル', '~/.ssh/gmo_key'); await advance(0);
+  await togglePatterns(page.output, true);
   change(page.output, '自分の記録の場所', ' /mine/a/traces \n\n/mine/b/traces\n'); await advance(0);
   change(page.output, 'チームの記録の場所', '/team/*/traces'); await advance(0);
   await saveForm(page.output);
@@ -767,6 +845,7 @@ test('GMO can repair an unreadable configuration by saving editable connection s
   assert.equal(intervalSelect(page.output).props.value, '120', 'missing settings default to two minutes');
   assert.notEqual(findAll(page.output, 'fieldset')[0].props.disabled, true, 'failed GET /config does not prevent repair');
   change(page.output, '接続先', 'gmo'); await advance(0);
+  await togglePatterns(page.output, true);
   change(page.output, '自分の記録の場所', '/mine/traces'); await advance(0);
   await saveForm(page.output);
   assert.deepEqual(state.sent.filter(req => req.method !== 'GET').map(req => [req.method, req.path]), [['PUT', '/api/gmo/config'], ['POST', '/api/gmo/check']]);

@@ -230,22 +230,24 @@ class GmoSettings:
     mine: tuple[str, ...] = ()
     team: tuple[str, ...] = ()
     interval_s: int = 120
+    shared_root: str = ""
 
     @property
     def configured(self) -> bool:
-        return bool(self.host and (self.mine or self.team))
+        return bool(self.host and (self.shared_root or self.mine or self.team))
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "host": self.host, "port": self.port, "identity_file": self.identity_file,
             "mine": list(self.mine), "team": list(self.team), "interval_s": self.interval_s,
+            "shared_root": self.shared_root,
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> GmoSettings:
         if not isinstance(value, dict):
             raise FetchError("Settings must be a JSON object")
-        allowed = {"host", "port", "identity_file", "mine", "team", "interval_s"}
+        allowed = {"host", "port", "identity_file", "mine", "team", "interval_s", "shared_root"}
         unknown = set(value) - allowed
         if unknown:
             raise FetchError(f"Unknown setting: {sorted(unknown)[0]}")
@@ -258,6 +260,11 @@ class GmoSettings:
         identity = value.get("identity_file")
         if identity is not None and (not isinstance(identity, str) or not identity or "\x00" in identity):
             raise FetchError("identity_file must be a nonempty path")
+        shared_root = value.get("shared_root", "")
+        if not isinstance(shared_root, str) or (shared_root and (
+            not SAFE_REMOTE_PATH.fullmatch(shared_root) or ".." in shared_root.split("/")
+        )):
+            raise FetchError("shared_root must be an absolute plain path without '..' or glob characters")
         patterns = {}
         for key in ("mine", "team"):
             items = value.get(key, [])
@@ -269,7 +276,7 @@ class GmoSettings:
         interval = value.get("interval_s", 120)
         if type(interval) is not int or not 0 <= interval <= MAX_INTERVAL_S:
             raise FetchError(f"interval_s must be an integer from 0 to {MAX_INTERVAL_S}")
-        return cls(host, port, identity, patterns["mine"], patterns["team"], interval)
+        return cls(host, port, identity, patterns["mine"], patterns["team"], interval, shared_root)
 
 
 def config_path() -> Path:
@@ -405,7 +412,7 @@ class ProcessRunner:
 
 
 REMOTE_EPISODE_LISTER = r"""
-import glob, hashlib, json, os, pwd, stat, sys, time
+import glob, hashlib, json, os, pwd, re, stat, sys, time
 
 def read_json(path, strict=False):
     try:
@@ -473,7 +480,17 @@ def stats(directory):
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
     return count, size, newest, digest, files
 
-mine, team = json.loads(sys.argv[1])
+config = json.loads(sys.argv[1])
+mine, team = config['mine'], config['team']
+shared_root = config['shared_root']
+shared_real = os.path.realpath(shared_root) if shared_root else None
+if shared_root:
+    # Resolve ssh aliases' User on the remote host during this same listing.
+    username = config['username'] or pwd.getpwuid(os.geteuid()).pw_name
+    if not re.fullmatch(r'[A-Za-z0-9._+@-]+', username) or username in ('.', '..'):
+        raise ValueError('Unsupported remote username for shared_root')
+    mine = [os.path.join(shared_root, username)] + mine
+    team = [os.path.join(shared_root, '*')] + team
 include_files = len(sys.argv) > 2 and sys.argv[2] == 'files'
 mine_only = len(sys.argv) > 3 and sys.argv[3] == 'mine'
 out = []
@@ -485,7 +502,11 @@ for scope, patterns in (('mine', mine), ('team', team)):
         roots = sorted(p for p in glob.glob(os.path.expanduser(pattern))
                        if os.path.isdir(p) and not os.path.islink(p))
         for root in roots:
-            for name in sorted(os.listdir(root)):
+            try:
+                run_names = sorted(os.listdir(root))
+            except OSError:
+                continue
+            for name in run_names:
                 run = os.path.join(root, name)
                 if os.path.islink(run) or not os.path.isdir(run):
                     continue
@@ -500,11 +521,15 @@ for scope, patterns in (('mine', mine), ('team', team)):
                 if mine_only and scope == 'team':
                     continue
                 try:
-                    owner_id = os.stat(run).st_uid
-                    try:
-                        owner = pwd.getpwuid(owner_id).pw_name
-                    except (KeyError, OSError):
-                        owner = str(owner_id)
+                    trace_root = os.path.dirname(real)
+                    if shared_real is not None and os.path.dirname(trace_root) == shared_real:
+                        owner = os.path.basename(trace_root)
+                    else:
+                        owner_id = os.stat(run).st_uid
+                        try:
+                            owner = pwd.getpwuid(owner_id).pw_name
+                        except (KeyError, OSError):
+                            owner = str(owner_id)
                     names = sorted(os.listdir(run))
                 except OSError:
                     continue
@@ -609,8 +634,11 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
 def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                          include_files: bool = False, mine_only: bool = False) -> dict[str, list[dict[str, Any]]]:
     if not settings.configured:
-        raise FetchError("GMO host and at least one trace pattern are required")
-    payload = json.dumps([settings.mine, settings.team])
+        raise FetchError("GMO host and a shared_root or at least one trace pattern are required")
+    payload = json.dumps({
+        "mine": settings.mine, "team": settings.team, "shared_root": settings.shared_root,
+        "username": settings.host.rsplit("@", 1)[0] if "@" in settings.host else "",
+    })
     args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
     listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
     if (not isinstance(listing, dict) or not isinstance(listing.get("episodes"), list)
@@ -832,14 +860,12 @@ def prefetch_mine(dest: Path) -> int:
     """Launcher prefetch: copy only episodes matched by the configured mine patterns."""
     try:
         settings = load_settings()
-        if not settings.host or not settings.mine:
+        if not settings.host or not (settings.shared_root or settings.mine):
             print("GMO settings for mine are missing; starting without prefetch.", file=sys.stderr)
             return 0
-        mine_only = GmoSettings(settings.host, settings.port, settings.identity_file,
-                                settings.mine, (), settings.interval_s)
         runner = ProcessRunner()
         try:
-            rows = list_remote_episodes(runner, mine_only)["episodes"]
+            rows = list_remote_episodes(runner, settings, mine_only=True)["episodes"]
             if any(row["conflict"] for row in rows):
                 raise FetchError("A run ID exists in more than one GMO location")
             # Plan every episode first. Reuse these manifests so only the files
@@ -848,7 +874,7 @@ def prefetch_mine(dest: Path) -> int:
             needed: dict[tuple[str, str], int] = {}
             for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
                               reverse=True):
-                run = _episode_files(runner, mine_only, row)
+                run = _episode_files(runner, settings, row)
                 files = _episode_changes(run, row["episode_id"], dest)
                 plans.append((row, run, files))
                 needed.update({(run.path, rel): size for rel, size, _ in files})
@@ -870,7 +896,7 @@ def prefetch_mine(dest: Path) -> int:
                       "1 GiB startup transfer budget; starting without them.", file=sys.stderr)
             total = 0
             for row, run in selected:
-                total += _transfer_episode(runner, mine_only, run, row["episode_id"], dest,
+                total += _transfer_episode(runner, settings, run, row["episode_id"], dest,
                                             max_bytes=MAX_FETCH_BYTES,
                                             deadline=time.monotonic() + 30 * 60)
             print(f"Fetched {len(selected)} mine episode(s); {human(total)} copied into {dest}")

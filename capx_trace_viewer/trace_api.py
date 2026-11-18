@@ -30,7 +30,11 @@ Rules this module keeps (sections 2 and 9.2):
   without ``Content-Length``, so if the file becomes shorter while it is sent, the body
   ends early and the response is still complete (see OpenFileResponse).
 - Unless the router is created with ``expose=True`` (``--expose-traces``), a request is
-  answered only when (1) the TCP peer is a loopback address, (2) the ``Host`` header names
+  answered only when (1) the TCP peer is a loopback address, or the router is created
+  with ``unix_socket=True`` (``--uds``) and the request has no peer address, as a request
+  through a Unix domain socket has (the socket's 0700 directory lets only its owner
+  connect; on a shared machine such as a GMO compute node any user can reach a loopback
+  port, so --uds is the only way to keep other users out), (2) the ``Host`` header names
   this machine (``localhost``, ``127.0.0.0/8``, ``[::1]``, or the unspecified address
   ``0.0.0.0``/``[::]``, which a browser reaches only on this machine; any port, so an SSH
   port forward to another local port still works), and (3) an ``Origin`` header, if
@@ -249,6 +253,15 @@ def client_is_loopback(request: Request) -> bool:
     if client is None or not client.host:
         return False
     return _is_loopback_ip(client.host)
+
+
+def client_is_local(request: Request, *, unix_socket: bool = False) -> bool:
+    """True if the peer is a loopback address, or, for a server that listens on a Unix
+    domain socket (``unix_socket``), if the request has no peer address: uvicorn reports
+    none for a connection through such a socket. A TCP server never accepts that."""
+    if unix_socket and request.client is None:
+        return True
+    return client_is_loopback(request)
 
 
 def _is_local_ip(text: str) -> bool:
@@ -708,6 +721,7 @@ def create_trace_router(
     expose: bool,
     runner_roots: Sequence[Path] = (),
     viser_probe: Callable[[int | None], int | None] | None = None,
+    unix_socket: bool = False,
 ) -> APIRouter:
     """Router for ``/api/traces`` (section 9.2) and the legacy views (section 9.4).
 
@@ -718,6 +732,8 @@ def create_trace_router(
         runner_roots: Experiment-runner output roots for the legacy views.
         viser_probe: Called with this server's own port (or None); returns the port the
             server's Viser proxy uses, or None. Full UI only.
+        unix_socket: The server listens on a Unix domain socket (``--uds``): requests
+            without a client address come through it and are answered.
     """
     base_dir = Path(trace_root)
     roots = [Path(p) for p in runner_roots]
@@ -727,7 +743,7 @@ def create_trace_router(
     def gate(request: Request) -> None:
         if expose:
             return
-        if not client_is_loopback(request):
+        if not client_is_local(request, unix_socket=unix_socket):
             raise HTTPException(
                 status_code=403,
                 detail=(

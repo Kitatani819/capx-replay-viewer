@@ -8,6 +8,7 @@ trace_root="${2:-$project_dir/demo/traces}"
 runner_root="${3:-$project_dir/demo/runner}"
 python_bin="${4:-}"
 from_gmo="${5:-}"
+uds="${6:-}"
 if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
     echo 'Port must be a number from 1 to 65535.' >&2
     exit 2
@@ -18,6 +19,9 @@ if [[ ! -f "$project_dir/web-ui/dist/index.html" ]]; then
 fi
 case "$trace_root" in /*) ;; *) trace_root="$project_dir/$trace_root" ;; esac
 case "$runner_root" in /*) ;; *) runner_root="$project_dir/$runner_root" ;; esac
+if [[ -n "$uds" ]]; then
+    case "$uds" in /*) ;; *) uds="$project_dir/$uds" ;; esac
+fi
 case "$(uname -s)" in
     Darwin) cache_base="${XDG_CACHE_HOME:-$HOME/Library/Caches}" ;;
     Linux) cache_base="${XDG_CACHE_HOME:-$HOME/.cache}" ;;
@@ -89,8 +93,13 @@ if [[ -n "$from_gmo" ]]; then
     # Prefetch only mine; a missing configuration is a warning, not a launch failure.
     "$python_bin" -c 'import sys; from pathlib import Path; from capx_trace_viewer.gmo import prefetch_mine; sys.exit(prefetch_mine(Path(sys.argv[1])))' "$trace_root"
 fi
-printf 'Replay viewer: http://127.0.0.1:%s/traces\n' "$port"
-server_args=(--viewer-only --host 127.0.0.1 --port "$port" --trace-root "$trace_root" --runner-root "$runner_root")
+if [[ -n "$uds" ]]; then
+    # The server checks the directory (yours, mode 700) and prints how to forward the socket.
+    server_args=(--viewer-only --uds "$uds" --trace-root "$trace_root" --runner-root "$runner_root")
+else
+    printf 'Replay viewer: http://127.0.0.1:%s/traces\n' "$port"
+    server_args=(--viewer-only --host 127.0.0.1 --port "$port" --trace-root "$trace_root" --runner-root "$runner_root")
+fi
 if [[ -n "$from_gmo" ]]; then
     server_args+=(--gmo)
 fi

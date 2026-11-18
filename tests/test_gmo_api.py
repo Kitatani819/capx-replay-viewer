@@ -176,6 +176,34 @@ def test_overlapping_scopes_choose_mine_once(client, remote):
         ("run_a", True, False), ("run_b", False, False)]
 
 
+def test_shared_root_config_listing_adds_patterns_and_uses_directory_owner(client, remote):
+    shared = remote["config"].parent.parent / "shared"
+    _episode(shared / "trace_user", "shared_own", "ep_own")
+    _episode(shared / "team_user", "shared_team", "ep_team")
+    response = _configure(client, remote, host="trace_user@fakehost", shared_root=str(shared),
+                          mine=[str(remote["mine"]), str(shared / "team_user")],
+                          team=[str(remote["team"]), str(shared / "*")])
+    assert response.status_code == 200 and response.json()["configured"] is True
+    assert response.json()["settings"]["shared_root"] == str(shared)
+    assert client.get("/api/gmo/config").json()["settings"]["shared_root"] == str(shared)
+    checked = client.post("/api/gmo/check", json={}, headers=WRITE).json()
+    assert checked == {"ok": True, "mine_episodes": 3, "team_episodes": 1, "error": None}
+    rows = {row["run_id"]: row for row in client.get("/api/gmo/episodes").json()}
+    assert len(rows) == 4
+    assert rows["shared_own"]["mine"] is True and rows["shared_own"]["owner"] == "trace_user"
+    # An explicit mine pattern wins the shared team scope, retaining folder ownership.
+    assert rows["shared_team"]["mine"] is True and rows["shared_team"]["owner"] == "team_user"
+    assert rows["run_a"]["mine"] is True and rows["run_b"]["mine"] is False
+    assert rows["run_a"]["owner"] == pwd.getpwuid(os.getuid()).pw_name
+    assert not any(row["conflict"] for row in rows.values())
+
+
+@pytest.mark.parametrize("shared_root", [None, "relative", "/path/../traces", "/path/*", "/path\ntraces"])
+def test_shared_root_api_rejects_invalid_input(client, remote, shared_root):
+    response = _configure(client, remote, shared_root=shared_root)
+    assert response.status_code == 400 and "shared_root" in response.json()["detail"]
+
+
 def test_check_without_configuration_reports_error(client):
     response = client.post("/api/gmo/check", json={}, headers=WRITE)
     assert response.status_code == 200

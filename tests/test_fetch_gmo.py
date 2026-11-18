@@ -310,7 +310,7 @@ def test_prefetch_plans_all_episodes_then_fits_newest_under_total_limit(tmp_path
     planned = []
     copied = []
     monkeypatch.setattr(gmo, "load_settings", lambda: settings)
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: {"episodes": rows, "evals": []})
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a, **kw: {"episodes": rows, "evals": []})
 
     def manifest(runner, config, row):
         assert not copied  # Every remote manifest must precede the first copy.
@@ -342,7 +342,7 @@ def test_prefetch_skips_exact_one_gib_and_starts(tmp_path, monkeypatch, capsys):
     row = {"run_id": "run_a", "episode_id": "ep_1", "path": "/remote/run_a",
            "conflict": False, "max_mtime": 1}
     monkeypatch.setattr(gmo, "load_settings", lambda: gmo.GmoSettings(host="alias", mine=("/remote",)))
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: {"episodes": [row], "evals": []})
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a, **kw: {"episodes": [row], "evals": []})
     monkeypatch.setattr(gmo, "_episode_files", lambda *a: gmo.RemoteRun(
         "run_a", "/remote/run_a", [("ep_1/events.jsonl", gmo.MAX_FETCH_BYTES, 1)]))
     monkeypatch.setattr(gmo, "_transfer_episode", lambda *a, **kw: pytest.fail("over-budget transfer"))
