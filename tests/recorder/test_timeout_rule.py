@@ -54,8 +54,10 @@ import pytest
 from capx_trace_recorder.hooks.common import guard
 
 REPO = Path(__file__).resolve().parents[2]
+# eval.py is the `python -m capx_trace_recorder eval` wrapper: only __main__ imports it, in
+# its own process that runs the evaluation as a child, so it never runs on a trial thread.
 MODULES = sorted(p for p in (REPO / "capx_trace_recorder").rglob("*.py")
-                 if p.name not in {"pth.py", "__main__.py"})
+                 if p.name not in {"pth.py", "__main__.py", "eval.py"})
 
 # names (last component of a dotted name) that catch TimeoutError: the class, its
 # bases and their aliases

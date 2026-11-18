@@ -71,7 +71,9 @@ def check(base_url: str, fixture: Path, output: Path) -> None:
             page.route("**/api/gmo/fetch", fetch)
             page.route("**/api/gmo/jobs", jobs)
             page.goto(trial_url)
-            expect(page.get_by_text("GMOから取り込み中（2.0 KB）", exact=True)).to_be_visible()
+            # The collapsed trial details repeat the status; check the visible notice.
+            missing = page.get_by_role("region", name="手元にない試行", exact=True)
+            expect(missing.get_by_text("GMOから取り込み中（2.0 KB）", exact=True)).to_be_visible()
             expect(page.get_by_role("link", name="比較ページへ戻る", exact=True)).to_have_attribute("href", f"/evals/{run_id}")
             page.wait_for_function("document.querySelector('video')?.readyState >= 2")
             assert posts == [{"run_id": run_id, "episode_id": episode_id}]

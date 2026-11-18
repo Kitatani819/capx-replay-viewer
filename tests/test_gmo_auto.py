@@ -140,7 +140,7 @@ def test_shared_root_username_with_at_uses_last_separator(auto_source, mine_only
     _episode(shared / "alice@domain", "ep_own")
     _episode(shared / "alice", "ep_other", run="other_run")
     settings = gmo.GmoSettings.from_dict({"host": "alice@domain@fakehost", "shared_root": str(shared)})
-    rows = gmo.list_remote_episodes(service.runner, settings, mine_only=mine_only)
+    rows = gmo.list_remote_episodes(service.runner, settings, mine_only=mine_only)["episodes"]
     expected = [("run_a", True, "alice@domain")]
     if not mine_only:
         expected.append(("other_run", False, "alice"))

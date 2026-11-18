@@ -97,7 +97,7 @@ os.listdir = guarded_listdir
     monkeypatch.setattr(runner, "run", local_remote)
     settings = gmo.GmoSettings(host="alice@example.com", shared_root=str(shared))
     try:
-        rows = gmo.list_remote_episodes(runner, settings, mine_only=mine_only, include_files=mine_only)
+        rows = gmo.list_remote_episodes(runner, settings, mine_only=mine_only, include_files=mine_only)["episodes"]
     finally:
         runner.close()
     assert attempted.is_file()
