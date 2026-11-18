@@ -74,8 +74,13 @@ def bind_private_unix_socket(path: str | Path) -> tuple[socket.socket, Path]:
     On a shared machine (a GMO compute node runs other teams' jobs), any local user can
     connect to a TCP port on 127.0.0.1, so ``--uds`` listens on a socket file instead. Its
     directory must already exist, be owned by this user and have mode 700 (a setgid bit
-    inherited from ``$HOME`` is fine), and the socket is created with mode 0600. An existing file at the path is never replaced: on a
-    ``$HOME`` shared between nodes it may be the socket of a viewer on another node.
+    inherited from ``$HOME`` is fine), and the socket is created with mode 0600. An
+    existing file at the path is never replaced: on a ``$HOME`` shared between nodes it
+    may be the socket of a viewer on another node.
+
+    Linux POSIX ACLs are covered by the mode check: with an ACL, the group bits of the
+    mode are the ACL mask, so a directory of mode 700 grants named users nothing. A macOS
+    ACL that the owner adds to the directory is not checked.
 
     Returns the listening socket and its absolute path.
     """
@@ -199,23 +204,10 @@ def _serve_unix_socket(app: FastAPI, sock: socket.socket, sock_path: Path) -> No
     """Serve on a socket bound by ``bind_private_unix_socket``. uvicorn's own ``uds=``
     would make the file 0666, so it is not used. ``proxy_headers`` is off: no address from
     ``X-Forwarded-For`` replaces the missing peer address."""
-    config = uvicorn.Config(app, proxy_headers=False)
-    # uvicorn restores this handler and re-raises SIGTERM after a graceful shutdown; exiting
-    # through SystemExit lets the caller remove the socket file (Slurm ends jobs with SIGTERM).
-    try:
-        previous = signal.signal(signal.SIGTERM, _exit_on_sigterm)
-    except ValueError:  # not the main thread; uvicorn does not handle signals there either
-        previous = None
     print(f'Replay viewer: unix socket {sock_path} (mode 600). Forward it from your PC with '
           f'ssh -N -L 127.0.0.1:18390:{sock_path} ... and open http://127.0.0.1:18390/traces',
           file=sys.stderr)
-    try:
-        uvicorn.Server(config).run(sockets=[sock])
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if previous is not None:
-            signal.signal(signal.SIGTERM, previous)
+    uvicorn.Server(uvicorn.Config(app, proxy_headers=False)).run(sockets=[sock])
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -237,13 +229,22 @@ def main(argv: Sequence[str] | None = None) -> None:
         parser.error('--uds cannot be combined with --host or --port')
     dist = _cli_path(args.frontend_dist) if args.frontend_dist is not None else _DEFAULT_FRONTEND_DIST
     roots = [root for group in args.runner_root for root in group]
-    sock = sock_path = None
+    sock = sock_path = previous_sigterm = None
     if args.uds is not None:
+        # SIGTERM (Slurm ends jobs with it) exits through SystemExit from here on, so the
+        # finally below removes the socket even while the app is still being created.
+        # uvicorn >= 0.29 restores this handler and re-raises SIGTERM after a graceful
+        # shutdown; older versions return normally.
         try:
-            sock, sock_path = bind_private_unix_socket(args.uds)
-        except SocketPathError as exc:
-            parser.error(str(exc))
+            previous_sigterm = signal.signal(signal.SIGTERM, _exit_on_sigterm)
+        except ValueError:  # not the main thread; uvicorn does not handle signals there either
+            pass
     try:
+        if args.uds is not None:
+            try:
+                sock, sock_path = bind_private_unix_socket(args.uds)
+            except SocketPathError as exc:
+                parser.error(str(exc))
         try:
             app = create_app(trace_root=args.trace_root, runner_roots=roots or None,
                              expose_traces=args.expose_traces, frontend_dist=args.frontend_dist,
@@ -253,7 +254,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         if not (dist / 'index.html').is_file():
             print(f'Frontend dist is missing or has no index.html: {dist}', file=sys.stderr)
         if sock is not None:
-            _serve_unix_socket(app, sock, sock_path)
+            try:
+                _serve_unix_socket(app, sock, sock_path)
+            except KeyboardInterrupt:
+                pass
             return
         if os.environ.get('SLURM_JOB_ID'):
             print('Warning: this is a Slurm job. On a shared compute node, other users can connect to '
@@ -265,6 +269,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         if sock is not None:
             sock.close()
             _remove_socket_file(sock_path)
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == '__main__':

@@ -230,7 +230,8 @@ def test_server_answers_through_the_socket(sock_dir, tmp_path):
                               headers={"X-CapX-Request": "gmo", "Origin": "https://attacker.example"}).status_code == 403
     finally:
         returncode, output = _stop(proc)
-    assert returncode == 128 + signal.SIGTERM, output
+    # uvicorn >= 0.29 re-raises SIGTERM after shutting down (143); 0.27-0.28 exit with 0.
+    assert returncode in (0, 128 + signal.SIGTERM), output
     assert f"unix socket {sock}" in output
     assert not os.path.lexists(sock)  # removed on SIGTERM (Slurm ends jobs with it)
 
@@ -292,6 +293,24 @@ def test_uds_cannot_be_combined_with_tcp_options(sock_dir, no_serve, extra, caps
         server.main(["--uds", str(sock_dir / "v.sock"), *extra])
     assert exc.value.code == 2 and "cannot be combined" in capsys.readouterr().err
     assert no_serve == [] and not os.path.lexists(sock_dir / "v.sock")
+
+
+def test_sigterm_while_the_app_is_created_removes_the_socket(sock_dir, tmp_path):
+    """The SIGTERM handler is in place before the socket exists, not only while serving."""
+    sock = sock_dir / "v.sock"
+    code = (
+        "import os, signal, sys\n"
+        "from capx_trace_viewer import server\n"
+        "def slow_create_app(**kwargs):\n"
+        "    os.kill(os.getpid(), signal.SIGTERM)\n"
+        "    raise AssertionError('SIGTERM did not stop startup')\n"
+        "server.create_app = slow_create_app\n"
+        "server.main(sys.argv[1:])\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code, "--uds", str(sock), "--trace-root", str(tmp_path)],
+                            cwd=REPO_ROOT, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 128 + signal.SIGTERM, result.stderr
+    assert not os.path.lexists(sock)
 
 
 def test_launcher_refuses_uds_with_port(sock_dir):
