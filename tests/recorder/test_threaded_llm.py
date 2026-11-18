@@ -361,7 +361,8 @@ def test_thread_start_install_failure_is_reported(tmp_path, monkeypatch):
     bootstrap._patch_requests(requests.sessions)
 
     assert requests.Session.send.__capx_trace_wrapper__ is True
-    status = json.loads((tmp_path / f"recorder_status.{os.getpid()}.json").read_text())
+    status_path, = tmp_path.glob(f"recorder_status.{os.getpid()}.*.json")
+    status = json.loads(status_path.read_text())
     assert status["active"] == "public"
     assert status["hooks_failed"] == [{"hook": "H1", "target": "threading.Thread.start",
                                        "reason": "Thread.start: AttributeError"}]

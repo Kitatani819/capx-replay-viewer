@@ -31,7 +31,14 @@ Recorded traces identify recorder hooks by these ids. The short names below are 
 
 The trace recorder observes a trial without changing its model inputs, results, simulator state, exceptions, or timing. API wrappers call the original method once and return the original object or raise the original exception. Hooks do not add simulator calls. The trial thread queues small summaries; a writer thread processes payloads and files.
 
-The runner's trial alarm is a `TimeoutError` without an OS error number. Recorder handlers re-raise that alarm. A file-system `ETIMEDOUT` has an error number and follows the normal recorder error path, so a failed trace read does not end the trial.
+The recorder recognizes the runner's trial alarm as CaP-X's `TrialTimeout` (a
+`BaseException`), using the actual class from the already-loaded
+`capx.envs.tasks.base` module without importing it. An unrelated exception with the
+same name is not an alarm. It also recognizes a `TimeoutError` without an OS error
+number. Recorder handlers re-raise these alarms, and H4 records
+`end_reason: "timeout_alarm"` and `alarm_seen: true`. A file-system `ETIMEDOUT` has an
+error number and follows the normal recorder error path, so a failed trace read does
+not end the trial.
 
 The recorder avoids printing, logging, Python warnings, and changes to randomness. Only a startup-hook failure prints one short line to stderr. It hides recorder frames from tracebacks that the model may receive. It keeps HTTP headers, raw launch arguments, and environment dumps out of traces. It records configured model names and endpoint host/port from launch arguments. It redacts known secret fields and URL credentials before storage. Prompts, model replies, stdout, stderr, and images can still contain secrets, so protect the trace root.
 
@@ -85,8 +92,8 @@ To trace a single process, use `python -m capx_trace_recorder run -m module [arg
 
 ```
 <CAPX_TRACE_DIR>/                           # the trace root
-  recorder_status.<pid>.json                # active public recorder after CaP-X import; absent when it stands down
-  recorder_warnings.<pid>.jsonl             # H4 install failures before any episode opens
+  recorder_status.<pid>.<token>.json         # active public recorder after CaP-X import; absent when it stands down
+  recorder_warnings.<pid>.<token>.jsonl      # H4 install failures before any episode opens
   <run_id>/
     run.json                                # created once with O_EXCL, never replaced
     runner_records.jsonl                    # redacted copies of the runner's trial records (runner parent process)
@@ -106,6 +113,10 @@ To trace a single process, use `python -m capx_trace_recorder run -m module [arg
       videos/video_combined_<camera>.mp4
       assets/<sha256[:2]>/<sha256>.<ext>    # png, jpg, mp4, npy, npz, txt.gz, json.gz, ...
 ```
+
+The diagnostic files use one UUID-derived hex token per recorder import, shared by
+its status and warning filenames. The token avoids collisions when machines write
+to the same trace root with the same PID, without including a host or user name.
 
 The first process that records something for a run writes the trace's `run.json`:
 `schema_version`, `tracer_version`, `run_id`, `created_wall_time`, `created_at`,
@@ -228,6 +239,16 @@ counters, gaps and summary), and the recorder drops its references to the env, t
 the segments and the web session. A late event after that point carries `sim_step` and
 `sim_time` null and has no key frames or state.
 
+Worker results. At `capx.envs.runner._run_single_trial_worker`, the recorder waits
+without a deadline for queued writes, including video copies and the final events,
+before returning the result or propagating the trial's error. This runs after the
+runner disables the trial alarm and before `parallel_eval.py` receives the result,
+so its later 5 s worker shutdown wait does not limit these writes.
+If queue insertion fails with `MemoryError`, the store rolls back the pending-item
+count and any queued-byte reservation before propagating the error. A rejected
+item or flush barrier therefore does not keep a later worker drain waiting after
+memory recovers.
+
 Process exit. An `atexit` handler queues a stop marker and waits at most 10 s. SIGKILL and
 SIGTERM skip it: the events still in the queue (normally a few milliseconds' worth) are
 lost, and the viewer later shows the episode as incomplete.
@@ -341,8 +362,9 @@ itself. Missing videos and stale files produce warnings but no gaps. Each attemp
 that fails counts one gap.
 
 Limits. The copy runs on the single writer thread. Very large videos on a slow disk can
-delay later events. In a sequential run, they can also bring the next episode closer to
-`queue_full`. If the copy is interrupted, `videos/.video_*.tmp.*` files may remain, the
+delay later events. Outside the runner's worker drain boundary (section 4.4), they can
+also bring the next episode closer to `queue_full`. If the copy is interrupted,
+`videos/.video_*.tmp.*` files may remain, the
 pending marker stays true, and the viewer reports that the videos may not have been
 saved. The viewer keeps polling while the copy is pending and the heartbeat is fresh. It
 reads the summary every 20 seconds once the heartbeat is two minutes old and the
@@ -832,7 +854,7 @@ the variable to an empty string to turn the note off.
 
 ## 7. Hook installation and compatibility
 
-The recorder installs hooks after each target module loads. A missing required symbol or an invalid callable goes in `hooks_failed` and counts as a trace gap. An absent symbol explicitly listed in `bootstrap.OPTIONAL_SYMBOLS` goes in `hooks_skipped`. Competition CaP-X `ac68084` omits the legacy prompt builder. The recorder attempts an install only for modules that are imported. If H4 cannot install, `recorder_warnings.<pid>.jsonl` at the trace root explains why no episodes were recorded.
+The recorder installs hooks after each target module loads. A missing required symbol or an invalid callable goes in `hooks_failed` and counts as a trace gap. An absent symbol explicitly listed in `bootstrap.OPTIONAL_SYMBOLS` goes in `hooks_skipped`. Competition CaP-X `ac68084` omits the legacy prompt builder. The recorder attempts an install only for modules that are imported. If H4 cannot install, `recorder_warnings.<pid>.<token>.jsonl` at the trace root explains why no episodes were recorded.
 
 ### 7.1 Table
 
@@ -865,8 +887,9 @@ never applied twice to the same callable.
 
 Install order. H11 is installed first and runs a self-test (section 7.4). H1, H4 and H7
 put recorder frames on the stack while generated code runs, and so do H8, H9 and H10,
-which H4 and H7 install later. The bootstrap installs these hooks only when the H11
-self-test passed. Otherwise it records each of them in `hooks_failed`.
+which H4 and H7 install later. The worker drain wrapper follows the same rule.
+The bootstrap installs these hooks only when the H11 self-test passed. Otherwise it
+records each of them in `hooks_failed`.
 
 Hooks that fail. A public function that H8 cannot wrap, or a service closure that H9
 cannot replace, makes the install partial. The episode records a partial install as
@@ -937,7 +960,7 @@ workers and threads without a target are excluded. Only H1 reads this reference,
 only when the worker's own context stack is empty. The wrapper marks the call closed
 on return or exception, so a daemon that starts an HTTP send after the call finishes
 cannot use that reference. Forking invalidates inherited references in the child.
-A failure to install the thread wrapper is reported in `recorder_status.<pid>.json`.
+A failure to install the thread wrapper is reported in `recorder_status.<pid>.<token>.json`.
 
 An event with no enclosing context of its own finds its episode by these steps; the first
 one that gives an answer wins:
@@ -976,7 +999,7 @@ after the original returned. H4 clears whatever is still on the trial thread whe
 episode starts or ends, records it as `stale_context`, and ends an episode that an
 interrupted exit path left open (`end_reason: error`, with an `end_note`). An alarm that
 lands after the original `_run_single_trial` returned still ends the episode, as
-`timeout_alarm`, before the `TimeoutError` leaves H4.
+`timeout_alarm`, before the trial alarm leaves H4.
 
 ### 7.4 Traceback protection (H11)
 
@@ -991,7 +1014,7 @@ the same frames as in an untraced run. For `walk_stack(None)` the start frame co
 visible frames, with the number of hops measured from the running interpreter's own
 `walk_stack` (2 on Python 3.10, 4 on 3.12).
 
-On any internal error a replacement yields the original sequence, and a `TimeoutError`
+On any internal error a replacement yields the original sequence, and a trial alarm
 that lands inside it is re-raised, as it would be from the stdlib code in an untraced run.
 The self-test runs a toy exception through a wrapper and checks that the traceback text
 is the same with and without it, that `print_stack` inside a wrapped call matches too, and

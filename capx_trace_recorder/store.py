@@ -864,7 +864,13 @@ class TraceStore:
             self._in_flight += 1
             # counted and queued under the lock, so the writer never subtracts an
             # item's bytes before they were added
-            self._queue.put(item)
+            try:
+                self._queue.put(item)
+            except MemoryError:
+                # SimpleQueue allocation failed before accepting the item.
+                self._in_flight -= 1
+                self._queued_bytes -= item.nbytes
+                raise
         return True
 
     def queued_bytes(self) -> int:
@@ -881,10 +887,14 @@ class TraceStore:
         item.line = line  # type: ignore[assignment]
         return self.submit(item)
 
-    def flush(self, timeout: float = 10.0) -> bool:
+    def flush(self, timeout: float | None = 10.0) -> bool:
         """Wait until the queue is empty, including items the writer queued
-        while processing (its own warnings). For tests; never on a trial thread."""
-        deadline = time.monotonic() + timeout
+        while processing (its own warnings).
+
+        ``None`` drains without a deadline at the runner's worker boundary, after
+        its trial alarm has been disabled. Never wait inside that alarm window.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             if not self.writer_alive():
                 return False
@@ -892,14 +902,19 @@ class TraceStore:
             item.done = threading.Event()
             with self._bytes_lock:
                 self._in_flight += 1
-                self._queue.put(item)
-            if not item.done.wait(max(0.0, deadline - time.monotonic())):
-                return False
+                try:
+                    self._queue.put(item)
+                except MemoryError:
+                    self._in_flight -= 1
+                    raise
+            while not item.done.wait(0.1 if deadline is None else max(0.0, min(0.1, deadline - time.monotonic()))):
+                if not self.writer_alive() or (deadline is not None and time.monotonic() >= deadline):
+                    return False
             with self._bytes_lock:
                 idle = self._in_flight == 0
             if idle:
                 return True
-            if time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 return False
             time.sleep(0.001)
 

@@ -1,6 +1,7 @@
 """Every recorder handler that can catch the trial alarm re-raises it (docs/trace-format.md, section 2).
 
-The alarm is a ``TimeoutError`` without an errno, raised by a SIGALRM handler.
+CaP-X's SIGALRM handler raises ``TrialTimeout(BaseException)``; older runners
+raise a ``TimeoutError`` without an errno. Both count as trial alarms.
 An OS ``ETIMEDOUT`` is also a ``TimeoutError`` and must be handled as recorder
 I/O failure. Any ``except Exception`` / ``except OSError``
 / bare ``except`` / ``except BaseException`` in code that runs on the trial
@@ -47,11 +48,14 @@ import ast
 import errno
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from capx_trace_recorder.hooks.common import guard
+from capx_trace_recorder.timeout import is_trial_alarm
+from inprocess import Recorder, by_type
+from trace_reader import read_events
 
 REPO = Path(__file__).resolve().parents[2]
 MODULES = sorted(p for p in (REPO / "capx_trace_recorder").rglob("*.py")
@@ -188,6 +192,73 @@ def test_guard_distinguishes_trial_alarm_from_io_timeout(monkeypatch):
                         lambda exc, where: recorded.append(exc))
     guard(lambda: (_ for _ in ()).throw(OSError(errno.ETIMEDOUT, "timed out")))
     assert len(recorded) == 1 and recorded[0].errno == errno.ETIMEDOUT
+
+
+@pytest.fixture()
+def capx_trial_timeout(monkeypatch):
+    # Same contract as capx/envs/tasks/base.py, without simulator imports.
+    base = ModuleType("capx.envs.tasks.base")
+
+    class TrialTimeout(BaseException):
+        pass
+
+    base.TrialTimeout = TrialTimeout
+    monkeypatch.setitem(sys.modules, base.__name__, base)
+    return TrialTimeout
+
+
+def test_trial_alarm_recognizes_the_loaded_capx_class(capx_trial_timeout):
+    class DerivedTimeout(capx_trial_timeout):
+        pass
+
+    unrelated = type("TrialTimeout", (BaseException,), {})
+    assert is_trial_alarm(capx_trial_timeout("deadline"))
+    assert is_trial_alarm(DerivedTimeout("deadline"))
+    assert not is_trial_alarm(unrelated("same name, different class"))
+    assert not is_trial_alarm(None)
+    assert not is_trial_alarm(TimeoutError(errno.ETIMEDOUT, "filesystem timeout"))
+    assert is_trial_alarm(TimeoutError("legacy trial alarm"))
+
+
+def test_trial_alarm_does_not_import_capx_or_require_its_timeout(monkeypatch):
+    monkeypatch.delitem(sys.modules, "capx.envs.tasks.base", raising=False)
+    assert not is_trial_alarm(RuntimeError("not an alarm"))
+    assert "capx.envs.tasks.base" not in sys.modules
+    base = ModuleType("capx.envs.tasks.base")
+    base.TrialTimeout = None
+    monkeypatch.setitem(sys.modules, base.__name__, base)
+    assert not is_trial_alarm(RuntimeError("not an alarm"))
+
+
+def test_capx_trial_timeout_keeps_its_identity_and_episode_reason(tmp_path, monkeypatch, capx_trial_timeout):
+    from capx_trace_recorder.hooks.trial import make_run_single_trial_wrapper
+
+    monkeypatch.setenv("CAPX_TRACE_RUN_ID", "run")
+    rec = Recorder(tmp_path / "traces", monkeypatch)
+    error = capx_trial_timeout("trial deadline exceeded")
+    calls = []
+
+    def trial(env, trial, args, config):
+        calls.append(trial)
+        raise error
+
+    try:
+        with pytest.raises(capx_trial_timeout) as caught:
+            make_run_single_trial_wrapper(trial)(SimpleNamespace(), 1, SimpleNamespace(), {})
+        assert caught.value is error
+        assert calls == [1]
+        rec.flush()
+        paths = list(rec.root.rglob("events.jsonl"))
+        assert len(paths) == 1
+        events, corrupt, torn = read_events(paths[0])
+        assert not corrupt and not torn
+        ends = by_type(events, "episode_end")
+        assert len(ends) == 1
+        assert ends[0]["data"]["end_reason"] == "timeout_alarm"
+        assert ends[0]["data"]["alarm_seen"] is True
+        assert ends[0]["data"]["exception"]["type"] == "TrialTimeout"
+    finally:
+        rec.close()
 
 
 def test_bad_exception_str_keeps_original_error():

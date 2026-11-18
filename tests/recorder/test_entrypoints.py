@@ -3,6 +3,7 @@
 import sys
 import types
 import os
+import json
 import subprocess
 from pathlib import Path
 
@@ -259,8 +260,49 @@ def test_bundled_recorder_is_untouched_and_public_stands_down(tmp_path, order):
     else:
         assert public_active and not bundled_active and calls == 0
         assert chosen == "public"
-        status = __import__("json").loads(next((tmp_path / "traces").glob("recorder_status.*.json")).read_text())
+        status_path, = (tmp_path / "traces").glob("recorder_status.*.*.json")
+        status = json.loads(status_path.read_text())
         assert status == {"active": chosen, "reason": reason}
+
+
+def test_independent_writers_with_same_pid_keep_separate_diagnostics(tmp_path):
+    code = """
+import os, sys
+from types import SimpleNamespace
+from capx_trace_recorder import bootstrap
+# Model writers on different machines sharing a trace root and a PID.
+bootstrap.os = SimpleNamespace(environ=os.environ, getpid=lambda: 7)
+bootstrap._record_choice('public', sys.argv[1])
+for _ in range(2):
+    bootstrap._write_status()
+    bootstrap._write_orphan_h4_warning({'hook': 'H4', 'reason': sys.argv[1]})
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    env["CAPX_TRACE_DIR"] = str(tmp_path)
+    reasons = {"first writer", "second writer"}
+    for reason in sorted(reasons):
+        proc = subprocess.run([sys.executable, "-c", code, reason], cwd=tmp_path,
+                              env=env, text=True, capture_output=True, timeout=15)
+        assert proc.returncode == 0, proc.stderr
+
+    statuses = list(tmp_path.glob("recorder_status.*.json"))
+    warnings = list(tmp_path.glob("recorder_warnings.*.jsonl"))
+    assert len(statuses) == len(warnings) == 2
+    assert {json.loads(path.read_text())["reason"] for path in statuses} == reasons
+    assert {path.name.split(".")[1] for path in statuses + warnings} == {"7"}
+    tokens = {path.name.split(".")[2] for path in statuses}
+    assert len(tokens) == 2
+    assert all(len(token) == 32 and int(token, 16) >= 0 for token in tokens)
+    assert {path.name.split(".")[2] for path in warnings} == tokens
+    # Repeated writes update one status and append to one warning file per writer.
+    warning_reasons = set()
+    for path in warnings:
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        assert len(records) == 2 and records[0] == records[1]
+        assert records[0]["code"] == "hook_install_failed"
+        warning_reasons.add(records[0]["reason"])
+    assert warning_reasons == reasons
 
 
 def test_active_bundled_recorder_prevents_double_hooks(monkeypatch, tmp_path):
@@ -298,7 +340,8 @@ def test_required_symbol_and_wrong_type_are_failures(monkeypatch, tmp_path):
     assert [f["hook"] for f in context.REGISTRY.hooks_failed] == ["H4", "H13"]
     assert context.REGISTRY.hooks_skipped == []
     assert context.REGISTRY.h4_failed()
-    assert "hook_install_failed" in next(tmp_path.glob("recorder_warnings.*.jsonl")).read_text()
+    warning_path, = tmp_path.glob("recorder_warnings.*.*.jsonl")
+    assert "hook_install_failed" in warning_path.read_text()
 
 
 def test_late_environment_setting_can_activate(monkeypatch):

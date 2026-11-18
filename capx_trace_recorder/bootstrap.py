@@ -20,6 +20,7 @@ Hooks that put recorder frames on the stack while generated code runs (H1, H4,
 H7 and the lazily installed H8, H9, H10) are installed only when H11 passed.
 The spec names H1, H8, H9 and H10; H4 and H7 are added here because their
 frames are also on the stack during ``exec`` (visible to ``print_stack``).
+The runner's worker drain wrapper follows the same rule.
 
 Related: every module in ``capx_trace_recorder/hooks/``; ``capx_trace_recorder/tbfilter.py``.
 """
@@ -32,6 +33,7 @@ import importlib.util
 import os
 import sys
 import threading
+import uuid
 from typing import Any, Callable
 
 from capx_trace_recorder import context as C
@@ -47,6 +49,9 @@ _CAPX_FINDER: "_FirstCapxFinder | None" = None
 _PATCH_LOCK = threading.RLock()
 _ACTIVE_RECORDER = "inactive"
 _STAND_DOWN_REASON = ""
+# A shared trace root can receive writers on different machines with the same
+# PID. Use an opaque token rather than a host or user identifier.
+_DIAGNOSTIC_TOKEN = uuid.uuid4().hex
 # Some CaP-X variants omit the LIBERO goal helper or the legacy prompt builder.
 # Other symbols are required once their target module is imported. Experiment
 # modules are optional as modules and are never patched unless imported.
@@ -60,6 +65,10 @@ def _record_choice(active: str, reason: str) -> None:
     """Keep the process decision in memory without writing at interpreter startup."""
     global _ACTIVE_RECORDER, _STAND_DOWN_REASON
     _ACTIVE_RECORDER, _STAND_DOWN_REASON = active, reason
+
+
+def _diagnostic_filename(stem: str, suffix: str) -> str:
+    return f"{stem}.{os.getpid()}.{_DIAGNOSTIC_TOKEN}.{suffix}"
 
 
 def _write_status() -> None:
@@ -80,7 +89,7 @@ def _write_status() -> None:
             failures = list(C.REGISTRY.hooks_failed)
         if failures:
             status["hooks_failed"] = failures
-        (root / f"recorder_status.{os.getpid()}.json").write_text(
+        (root / _diagnostic_filename("recorder_status", "json")).write_text(
             json.dumps(status, ensure_ascii=True) + "\n", encoding="utf-8")
     except (KeyError, OSError, ValueError) as exc:
         if is_trial_alarm(exc):
@@ -139,7 +148,7 @@ def _write_orphan_h4_warning(failure: dict[str, Any]) -> None:
             return
         path = Path(root)
         path.mkdir(parents=True, exist_ok=True)
-        warning = path / f"recorder_warnings.{os.getpid()}.jsonl"
+        warning = path / _diagnostic_filename("recorder_warnings", "jsonl")
         with warning.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps({"code": "hook_install_failed", **failure}, ensure_ascii=True) + "\n")
     except Exception as exc:  # noqa: BLE001 - a warning write cannot break the target import
@@ -344,7 +353,10 @@ def _patch_trial(module: Any) -> None:
 def _patch_runner_aliases(module: Any) -> None:
     from capx_trace_recorder.hooks import trial
 
-    trial.install_runner_aliases(module)
+    if not _requires_h11("worker_flush", "capx.envs.runner._run_single_trial_worker"):
+        return
+    for problem in trial.install_runner_aliases(module):
+        _record_problem("worker_flush", "capx.envs.runner", problem, module)
 
 
 def _patch_env_base(module: Any) -> None:
