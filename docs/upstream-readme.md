@@ -70,7 +70,8 @@ Then open `http://127.0.0.1:8290/traces`.
 |---|---|
 | `--trace-root` | Directory that holds the trace runs (`<run_id>/<episode_id>/events.jsonl`, assets, frames). Defaults to `CAPX_TRACE_DIR`, then `outputs/traces` relative to the working directory. |
 | `--runner-root` | One or more directories with the runner's trial outputs (`trials.jsonl`, trial directories with videos). Defaults to `outputs/runner`. |
-| `--host`, `--port` | Address to listen on. |
+| `--host`, `--port` | TCP address to listen on (default `127.0.0.1:8290`). |
+| `--uds PATH` | Listen on a Unix domain socket instead of TCP. The socket's directory must already exist, be owned by you and have mode 700, or the server refuses to start; the socket is created with mode 600 and removed on exit. Cannot be combined with `--host` or `--port`. Forward it with `ssh -L 127.0.0.1:18390:/absolute/path/to/socket`. |
 | `--expose-traces` | Allow trace API access from non-loopback clients. Without it, trace routes answer only loopback requests. The option does not add authentication. |
 | `--frontend-dist` | Built frontend directory; defaults to this source checkout's `web-ui/dist`. A missing `index.html` returns 503. |
 | `--viewer-only` | Accepted and ignored; the viewer always runs in viewer-only mode. |
@@ -79,7 +80,7 @@ The viewer serves `/traces` and `/api/traces`; `/` redirects to `/traces`. Relat
 
 ### Security
 
-The viewer has no authentication. Use `--expose-traces` only on a trusted network or behind an authenticating reverse proxy. Anyone who can reach the trace API port can read every file under the trace root. An exposed viewer also shows absolute paths and host names recorded in traces. Review prompts, host names, absolute paths and fallback run ids before sharing a trace. Keep secrets out of traces.
+The viewer has no authentication. Use `--expose-traces` only on a trusted network or behind an authenticating reverse proxy. Anyone who can reach the trace API port can read every file under the trace root. The loopback restriction does not tell local users apart: on a shared machine such as a GMO compute node, other users' jobs can connect to `127.0.0.1`, so use `--uds` there. An exposed viewer also shows absolute paths and host names recorded in traces. Review prompts, host names, absolute paths and fallback run ids before sharing a trace. Keep secrets out of traces.
 
 ### Frontend development
 
