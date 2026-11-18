@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import stat
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from capx_trace_viewer import gmo
+from capx_trace_viewer import evals, gmo
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "fetch_gmo.py"
 spec = importlib.util.spec_from_file_location("fetch_gmo", SCRIPT)
@@ -163,6 +164,33 @@ def test_episode_fetch_includes_eval_metadata(episode_import):
     assert gmo.fetch_episode(runner, settings, row, remote["dest"]) == 0
 
 
+def test_episode_fetch_preserves_runner_verdict(episode_import):
+    remote, runner, settings, row = episode_import
+    run = remote["root"] / "run_a"
+    (run / "ep_1" / "episode.json").write_text(json.dumps({
+        "task": "cube", "condition": "M1", "seed": 401, "attempt_index": 1,
+        "status": "completed", "trace_complete": True,
+        "harness_summary": {"task_completed": True},
+    }))
+    source = run / "runner_records.jsonl"
+    source.write_text(json.dumps({"task": "cube", "condition": "M1", "seed": 401,
+                                 "attempts": [{"attempt_id": 1, "task_success": False}]}) + "\n")
+    expected = evals.summarize_run(remote["root"], "run_a")
+    assert expected["failure"] == 1 and expected["verdict_sources"] == {"runner_record": 1}
+    assert gmo.fetch_episode(runner, settings, row, remote["dest"]) > 0
+    assert (remote["dest"] / "run_a" / source.name).read_bytes() == source.read_bytes()
+    assert evals.summarize_run(remote["dest"], "run_a") == expected
+    assert gmo.fetch_episode(runner, settings, row, remote["dest"]) == 0
+
+
+def test_episode_fetch_counts_runner_records_in_transfer_limit(episode_import):
+    remote, runner, settings, row = episode_import
+    (remote["root"] / "run_a" / "runner_records.jsonl").write_bytes(b"x" * 8192)
+    with pytest.raises(gmo.FetchError, match="exceeds"):
+        gmo.fetch_episode(runner, settings, row, remote["dest"], max_bytes=8192)
+    assert not remote["dest"].exists()
+
+
 def test_episode_fetch_uses_one_listing_and_one_rsync_ssh(episode_import, monkeypatch, tmp_path):
     remote, runner, settings, row = episode_import
     source = remote["root"] / "run_a"
@@ -278,7 +306,8 @@ def test_episode_fetch_rejects_exactly_one_gib_before_copy(tmp_path, monkeypatch
         runner.close()
 
 
-@pytest.mark.parametrize("relative", ["run.json", "eval.json", "ep_1/events.jsonl", "ep_1/nested/other"])
+@pytest.mark.parametrize("relative", ["run.json", "eval.json", "runner_records.jsonl",
+                                      "ep_1/events.jsonl", "ep_1/nested/other"])
 def test_episode_fetch_rejects_existing_hardlinks(tmp_path, monkeypatch, relative):
     dest = tmp_path / "dest"
     target = dest / "run_a" / relative
@@ -301,6 +330,26 @@ def test_episode_fetch_rejects_existing_hardlinks(tmp_path, monkeypatch, relativ
         runner.close()
 
 
+def test_episode_fetch_rejects_existing_runner_records_symlink(tmp_path, monkeypatch):
+    dest = tmp_path / "dest"
+    local_run = dest / "run_a"
+    local_run.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.write_text("original")
+    (local_run / "runner_records.jsonl").symlink_to(outside)
+    monkeypatch.setattr(gmo, "_remote_python", lambda *a, **kw: {
+        "files": [["runner_records.jsonl", 2, 1]],
+    })
+    runner = gmo.ProcessRunner()
+    try:
+        with pytest.raises(gmo.FetchError, match="symlink"):
+            gmo.fetch_episode(runner, gmo.GmoSettings(host="fakehost"),
+                              {"run_id": "run_a", "episode_id": "ep_1", "path": "/remote/run_a"}, dest)
+        assert outside.read_text() == "original"
+    finally:
+        runner.close()
+
+
 def test_prefetch_plans_all_episodes_then_fits_newest_under_total_limit(tmp_path, monkeypatch, capsys):
     settings = gmo.GmoSettings(host="fakehost", mine=("/remote",))
     rows = [{"run_id": "run_a", "episode_id": name, "path": "/remote/run_a",
@@ -316,7 +365,8 @@ def test_prefetch_plans_all_episodes_then_fits_newest_under_total_limit(tmp_path
         assert not copied  # Every remote manifest must precede the first copy.
         planned.append(row["episode_id"])
         return gmo.RemoteRun(row["run_id"], row["path"], [
-            ("run.json", 2, 1), (row["episode_id"] + "/events.jsonl", sizes[row["episode_id"]], 1)
+            ("run.json", 2, 1), ("runner_records.jsonl", 3, 1),
+            (row["episode_id"] + "/events.jsonl", sizes[row["episode_id"]], 1)
         ])
 
     def transfer(runner, config, run, episode_id, dest, **kwargs):
@@ -330,8 +380,9 @@ def test_prefetch_plans_all_episodes_then_fits_newest_under_total_limit(tmp_path
     assert gmo.prefetch_mine(tmp_path / "dest") == 0
     assert planned == ["new", "middle", "old"]
     assert [name for name, _ in copied] == ["new", "old"]
-    assert sum(size for _, files in copied for _, size, _ in files) == 800 * 1024**2 + 2
+    assert sum(size for _, files in copied for _, size, _ in files) == 800 * 1024**2 + 5
     assert sum(rel == "run.json" for _, files in copied for rel, _, _ in files) == 1
+    assert sum(rel == "runner_records.jsonl" for _, files in copied for rel, _, _ in files) == 1
     output = capsys.readouterr()
     assert output.err.count("\n") == 1
     assert "Skipped 1 mine episode(s); 500.0 MB" in output.err

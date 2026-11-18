@@ -50,6 +50,8 @@ def test_stdlib_only_imports():
     (("git",), {"commit": "a" * 40, "dirty": "yes"}),
     (("git",), {"commit": "a" * 40, "dirty": True, "diff_sha256": "invalid"}),
     (("end", "exit_code"), True), (("end", "signal"), "TERM"),
+    (("end", "workers_left_running"), 1), (("end", "workers_left_running"), None),
+    (("end", "unknown"), True),
 ])
 def test_invalid_records_are_bounded_and_rejected(path, value):
     data = record()
@@ -69,6 +71,13 @@ def test_valid_record_and_run_id_match():
     data["command"] = "secret"
     with pytest.raises(evals.EvalValidationError):
         evals.validate_eval_record(data)
+
+
+@pytest.mark.parametrize("workers_left_running", [False, True])
+def test_worker_wait_result_is_an_optional_boolean(workers_left_running):
+    data = record()
+    data["end"]["workers_left_running"] = workers_left_running
+    assert evals.validate_eval_record(data) == data
 
 
 def test_aggregate_keeps_task_results_and_only_model_names():

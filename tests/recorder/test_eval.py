@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -110,6 +111,97 @@ def test_heartbeat_is_atomic_and_interval_injectable(tmp_path, monkeypatch):
     assert not list(tmp_path.glob("*/.eval-*"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="file permissions require POSIX")
+@pytest.mark.parametrize("existing_mode", [None, 0o664])
+def test_record_permissions_survive_heartbeat_and_final_writes(tmp_path, monkeypatch, existing_mode):
+    modes = []
+    original = wrapper._write_record
+
+    def observe(path, data, **kwargs):
+        original(path, data, **kwargs)
+        if kwargs.get("initial"):
+            assert stat.S_IMODE(path.stat().st_mode) == 0o640
+            if existing_mode is not None:
+                path.chmod(existing_mode)
+        modes.append((data["status"], stat.S_IMODE(path.stat().st_mode)))
+
+    monkeypatch.setattr(wrapper, "_write_record", observe)
+    previous_umask = os.umask(0o027)
+    try:
+        assert wrapper.run_eval([sys.executable, "-c", "import time; time.sleep(.1)"], trace_root=tmp_path,
+                                heartbeat_interval=.01) == 0
+    finally:
+        os.umask(previous_umask)
+    assert len([status for status, _mode in modes if status == "running"]) >= 2
+    assert modes[-1][0] == "completed"
+    assert {mode for _status, mode in modes} == {0o640 if existing_mode is None else existing_mode}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group waiting requires POSIX")
+def test_summary_waits_for_workers_after_leader_exits(tmp_path, monkeypatch):
+    checks = []
+
+    class Child:
+        pid = 12345
+
+        def wait(self, timeout):
+            checks.append("leader exited")
+            return -signal.SIGTERM
+
+    def killpg(pgid, signum):
+        assert (pgid, signum) == (Child.pid, 0)
+        assert checks[0] == "leader exited"
+        checks.append("workers checked")
+        if len(checks) == 3:
+            run = next(tmp_path.iterdir())
+            episode = run / "trial"
+            episode.mkdir()
+            (episode / "episode.json").write_text(json.dumps({
+                "status": "ended", "episode_end_written": True, "trace_complete": True,
+                "task": "cube", "seed": 1, "end_reason": "completed",
+                "harness_summary": {"task_completed": True}}))
+            raise ProcessLookupError
+
+    monkeypatch.setattr(wrapper, "git_revision", lambda _repo: None)
+    monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
+    monkeypatch.setattr(wrapper.os, "killpg", killpg)
+    assert wrapper.run_eval(["evaluation"], trace_root=tmp_path, worker_wait_timeout=1) == -signal.SIGTERM
+    assert checks == ["leader exited", "workers checked", "workers checked"]
+    data = read_record(tmp_path)
+    assert data["summary"]["trials"] == data["summary"]["success"] == 1
+    assert "workers_left_running" not in data["end"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group waiting requires POSIX")
+def test_worker_wait_timeout_is_bounded_and_recorded(tmp_path, monkeypatch):
+    class Child:
+        pid = 12345
+
+        def wait(self, timeout):
+            return 0
+
+    checks = []
+    sleeps = []
+    clock = [0.0]
+
+    def sleep(duration):
+        sleeps.append(duration)
+        clock[0] += duration
+
+    monkeypatch.setattr(wrapper, "git_revision", lambda _repo: None)
+    monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
+    monkeypatch.setattr(wrapper.os, "killpg", lambda *args: checks.append(args))
+    monkeypatch.setattr(wrapper.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(wrapper.time, "sleep", sleep)
+    assert wrapper.run_eval(["evaluation"], trace_root=tmp_path, worker_wait_timeout=.25) == 0
+    assert checks == [(Child.pid, 0)] * 4
+    assert sum(sleeps) == pytest.approx(.25)
+    data = read_record(tmp_path)
+    assert data["status"] == "completed"
+    assert data["end"] == {"exit_code": 0, "signal": None, "workers_left_running": True}
+    assert data["summary"]["trials"] == 0
+
+
 def test_dirty_git_checkout(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -170,8 +262,13 @@ def test_sigterm_is_forwarded_to_child_process_group(tmp_path):
                   f"signal.signal(signal.SIGTERM, lambda *_: (Path({str(terminated)!r}).write_text('terminated'), exit(0))); "
                   f"Path({str(grandchild_ready)!r}).write_text('ready'); time.sleep(20)")
     code = "\n".join([
-        "import os,subprocess,sys,time", "from pathlib import Path",
-        f"subprocess.Popen([sys.executable,'-c',{grandchild!r}])",
+        "import os,signal,subprocess,sys,time", "from pathlib import Path",
+        f"worker=subprocess.Popen([sys.executable,'-c',{grandchild!r}])",
+        "def terminate(signum, _frame):",
+        "    worker.wait()",
+        "    signal.signal(signum, signal.SIG_DFL)",
+        "    os.kill(os.getpid(), signum)",
+        "signal.signal(signal.SIGTERM, terminate)",
         f"ready=Path({str(grandchild_ready)!r})", "while not ready.exists(): time.sleep(.01)",
         f"Path({str(child_ready)!r}).write_text(str(os.getpid()))", "time.sleep(20)",
     ])

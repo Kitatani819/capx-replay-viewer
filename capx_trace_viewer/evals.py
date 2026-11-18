@@ -105,9 +105,12 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
         _require(_time(value["ended_at"]) is not None, "ended_at")
     end = value["end"]
     if end is not None:
-        _require(isinstance(end, dict) and set(end) == {"exit_code", "signal"}, "end")
+        _require(isinstance(end, dict) and {"exit_code", "signal"}.issubset(end)
+                 and set(end).issubset({"exit_code", "signal", "workers_left_running"}), "end")
         _require(type(end["exit_code"]) is int and -255 <= end["exit_code"] <= 255, "end.exit_code")
         _require(end["signal"] is None or (type(end["signal"]) is int and 1 <= end["signal"] <= 255), "end.signal")
+        if "workers_left_running" in end:
+            _require(type(end["workers_left_running"]) is bool, "end.workers_left_running")
     if value["status"] == "running":
         _require(end is None and value["ended_at"] is None and value["summary"] is None, "running record")
     else:

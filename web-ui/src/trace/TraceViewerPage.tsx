@@ -117,7 +117,7 @@ export default function TraceViewerPage() {
     events.refresh();
   }, [summary.reload, runDetail.reload, events.refresh]);
   const missing = missingEpisode === epKey && !!epKey && !summary.data;
-  const episodeImport = useMissingEpisodeImport(runId, episodeId, missing, importReady);
+  const episodeImport = useMissingEpisodeImport(runId, episodeId, missing, importReady, summary);
   useInterval(summary.poll, plan.summaryMs ?? 1000, plan.summaryMs !== null && !!runId && !!episodeId);
   // Copied heartbeats retain their source mtime and can expire before the next
   // import. Keep detecting new data without claiming that the writer is alive.
@@ -526,6 +526,7 @@ export default function TraceViewerPage() {
       ) : missing ? (
         <section className="p-8 space-y-4" aria-label="手元にない試行">
           <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? '手元にないため、GMO の記録を確認中…'}</p>
+          {episodeImport?.retry && <button type="button" className="underline text-accent" onClick={episodeImport.retry}>もう一度読み込む</button>}
           <a className="underline text-accent" href={`/evals/${encodeURIComponent(runId!)}`}>比較ページへ戻る</a>
         </section>
       ) : simple ? (

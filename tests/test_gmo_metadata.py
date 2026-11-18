@@ -19,8 +19,9 @@ from capx_trace_viewer.gmo_api import GmoService
 class LocalPythonRunner:
     """Execute only the remote Python payload on this machine for these tests."""
 
-    def __init__(self, *, now: float | None = None):
+    def __init__(self, *, now: float | None = None, preamble: str = ""):
         self.now = now
+        self.preamble = preamble
 
     def run(self, command: list[str], *, timeout: float):
         argv = shlex.split(command[-1])
@@ -28,6 +29,7 @@ class LocalPythonRunner:
         argv[0] = sys.executable
         if self.now is not None:
             argv[2] = f"import time; time.time = lambda: {self.now!r}\n" + argv[2]
+        argv[2] = self.preamble + argv[2]
         return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
 
     def close(self):
@@ -228,6 +230,67 @@ def test_remote_evals_preserve_metadata_errors_without_breaking_discovery(metada
     assert row["eval_json"] is None and row["eval_json_error"] == error
 
 
+@pytest.mark.parametrize("name,field", [("run.json", "run_json"), ("episode.json", "episode_json"),
+                                       ("eval.json", "eval_json")])
+@pytest.mark.parametrize("replacement,error", [("symlink", "not_a_regular_file"),
+                                               ("directory", "not_a_regular_file"),
+                                               ("too_large", "too_large")])
+def test_remote_json_checks_opened_file_when_path_is_replaced(metadata_source, name, field,
+                                                            replacement, error):
+    episode, service, settings = metadata_source
+    (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
+    target = (episode if name == "episode.json" else episode.parent) / name
+    target.write_text("{}")
+    outside = episode.parent.parent / "outside.json"
+    outside.write_text('{"private":true}')
+    # Swap immediately before either opening API. This also reproduces the old
+    # lstat/open race, rather than only testing an already-present symlink.
+    service.runner = LocalPythonRunner(preamble=f"""
+import builtins, os
+target = {str(target)!r}
+original_open, original_os_open = builtins.open, os.open
+def replace(path):
+    if path != target:
+        return
+    os.unlink(target)
+    if {replacement!r} == 'symlink':
+        os.symlink({str(outside)!r}, target)
+    elif {replacement!r} == 'directory':
+        os.mkdir(target)
+    else:
+        with original_open(target, 'wb') as stream:
+            stream.write(b' ' * (256 * 1024 + 1))
+def swapping_open(path, *args, **kwargs):
+    replace(path)
+    return original_open(path, *args, **kwargs)
+def swapping_os_open(path, *args, **kwargs):
+    replace(path)
+    return original_os_open(path, *args, **kwargs)
+builtins.open, os.open = swapping_open, swapping_os_open
+""")
+    listing = gmo.list_remote_episodes(service.runner, settings)
+    row, = listing["evals" if name == "eval.json" else "episodes"]
+    assert row[field] is None and row[field + "_error"] == error
+
+
+def test_remote_evals_skip_invalid_run_without_discarding_valid_rows(metadata_source):
+    episode, service, settings = metadata_source
+    (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
+    (episode.parent / "eval.json").write_text("{}")
+    invalid = episode.parent.parent / "bad name"
+    invalid.mkdir()
+    (invalid / "eval.json").write_text("{}")
+    listing = gmo.list_remote_episodes(service.runner, settings)
+    assert [row["run_id"] for row in listing["episodes"]] == ["run_a"]
+    assert [row["run_id"] for row in listing["evals"]] == ["run_a"]
+    # Invalid episode rows still reject the listing, as they did before.
+    bad_episode = invalid / "ep_1"
+    bad_episode.mkdir()
+    (bad_episode / "episode.json").write_text("{}")
+    with pytest.raises(gmo.FetchError, match="unexpected run name"):
+        gmo.list_remote_episodes(service.runner, settings)
+
+
 def test_remote_mine_only_evals_and_conflicts_without_team_episode_walk(metadata_source, tmp_path):
     episode, service, settings = metadata_source
     (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
@@ -248,14 +311,17 @@ def test_remote_mine_only_evals_and_conflicts_without_team_episode_walk(metadata
     ]
 
 
-def test_eval_metadata_is_in_discovery_and_manual_episode_manifests(metadata_source):
+def test_run_metadata_is_in_discovery_and_manual_episode_manifests(metadata_source):
     episode, service, settings = metadata_source
     (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
     (episode.parent / "eval.json").write_text("{}")
+    (episode.parent / "runner_records.jsonl").write_text('{"task_success":true}\n')
     row, = gmo.list_remote_episodes(service.runner, settings, include_files=True)["episodes"]
     discovery = gmo.episode_manifest(row, row)
     manual = gmo._episode_files(service.runner, settings, row)
     assert sorted(discovery.files) == sorted(manual.files)
-    assert {rel for rel, _, _ in manual.files} >= {"run.json", "eval.json", "ep_1/events.jsonl"}
+    assert {rel for rel, _, _ in manual.files} >= {
+        "run.json", "eval.json", "runner_records.jsonl", "ep_1/events.jsonl",
+    }
     with pytest.raises(gmo.FetchError, match="Unexpected file path"):
         gmo.episode_manifest(row, {"files": [["other/eval.json", 2, 1]]})

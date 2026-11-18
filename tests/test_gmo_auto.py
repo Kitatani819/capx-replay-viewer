@@ -263,12 +263,12 @@ def test_auto_skips_run_collision_with_team_without_overwriting(auto_source, mon
 
 
 @pytest.mark.parametrize("metadata", [None, b'{"partial":'])
-@pytest.mark.parametrize("name", ["run.json", "eval.json"])
+@pytest.mark.parametrize("name", ["run.json", "eval.json", "runner_records.jsonl"])
 def test_auto_repairs_run_metadata_without_episode_changes(auto_source, monkeypatch, metadata, name):
     service, mine, _, log, _, _ = auto_source
     first = _episode(mine, "ep_1")
     _episode(mine, "ep_2")
-    if name == "eval.json":
+    if name != "run.json":
         (first.parent / name).write_text('{"schema":"capx-eval/1"}')
     shutil.copytree(first.parent, service.dest / "run_a")
     local_metadata = service.dest / "run_a" / name
@@ -302,6 +302,7 @@ def test_auto_budget_newest_fit_shared_run_metadata_and_skipped(auto_source, mon
             stream.truncate(sizes[name])
         for path in episode.iterdir():
             os.utime(path, (100 + index, 100 + index))
+    (episode.parent / "runner_records.jsonl").write_text('{"task_success":true}\n')
     copied = []
 
     def transfer(runner, settings, run, episode_id, dest, **kwargs):
@@ -315,10 +316,23 @@ def test_auto_budget_newest_fit_shared_run_metadata_and_skipped(auto_source, mon
     total = sum(size for _, files in copied for _, size, _ in files)
     assert 800 * 1024**2 < total < gmo.MAX_FETCH_BYTES
     assert sum(rel == "run.json" for _, files in copied for rel, _, _ in files) == 1
+    assert sum(rel == "runner_records.jsonl" for _, files in copied for rel, _, _ in files) == 1
     assert state["queued_in_last_run"] == 2
     assert [(row["run_id"], row["episode_id"]) for row in state["skipped_large"]] == [("run_a", "middle")]
     assert state["skipped_large"][0]["size_bytes"] >= sizes["middle"]
     assert log.read_text().splitlines() == ["list"]
+
+
+def test_auto_budget_includes_runner_records(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    episode = _episode(mine, "ep_1")
+    (episode.parent / "runner_records.jsonl").write_bytes(b"x" * 128)
+    service.max_fetch_bytes = 128
+    monkeypatch.setattr(gmo, "_transfer_episode", lambda *a, **kw: pytest.fail("over-budget transfer"))
+    state = service.run_auto_once()
+    assert state["queued_in_last_run"] == 0
+    assert state["skipped_large"][0]["size_bytes"] > 128
+    assert not service.dest.exists()
 
 
 def test_auto_exactly_one_gib_is_manual(auto_source):

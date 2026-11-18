@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, errorText, gmoApi } from './api';
 import { fmtBytes } from './format';
 
-export interface EpisodeImportState { busy: boolean; message: string }
+export interface EpisodeImportState { busy: boolean; message: string; retry?: () => void }
 function waitForPoll(signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = () => { window.clearTimeout(timer); reject(new Error('aborted')); };
@@ -11,9 +11,10 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
     signal.addEventListener('abort', abort, { once: true });
   });
 }
-export function useMissingEpisodeImport(runId: string | null, episodeId: string | null, missing: boolean, onReady: () => void): EpisodeImportState | null {
+export function useMissingEpisodeImport(runId: string | null, episodeId: string | null, missing: boolean, onReady: () => void,
+  load: { loading: boolean; error: string | null }): EpisodeImportState | null {
   const key = JSON.stringify([runId, episodeId]);
-  const [state, setState] = useState<{ key: string; value: EpisodeImportState } | null>(null);
+  const [state, setState] = useState<{ key: string; value: EpisodeImportState; imported?: boolean } | null>(null);
   useEffect(() => {
     if (!missing || !runId || !episodeId) return;
     const controller = new AbortController();
@@ -48,14 +49,26 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
         const row = matches[0];
         if (row.size_bytes >= 1024 ** 3) { update(false, '1 GiB の上限を超えるため、この試行は自動で取り込めません。'); return; }
         update(true, `GMOから取り込み中（${fmtBytes(row.size_bytes)}）`);
-        const { job_id: jobId } = await gmoApi.fetch(runId, episodeId, signal);
+        let jobId: string;
+        try { jobId = (await gmoApi.fetch(runId, episodeId, signal)).job_id; }
+        catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 409) throw error;
+          const jobs = (await gmoApi.jobs(signal)).filter(job => job.run_id === runId && job.episode_id === episodeId);
+          const existing = jobs.find(job => job.state === 'queued' || job.state === 'running') ?? jobs[0];
+          if (!existing) throw error;
+          jobId = existing.job_id;
+        }
         while (!signal.aborted) {
           const jobs = await gmoApi.jobs(signal);
           if (signal.aborted) return;
           const job = jobs.find(item => item.job_id === jobId);
           if (!job) throw new Error('取り込み状況が見つかりません。');
           if (job.state === 'failed') throw new Error(job.error || '取り込みに失敗しました。');
-          if (job.state === 'done') { onReady(); return; }
+          if (job.state === 'done') {
+            setState({ key, value: { busy: true, message: '取り込んだ試行を読み込み中…' }, imported: true });
+            onReady();
+            return;
+          }
           await waitForPoll(signal);
         }
       } catch (error) {
@@ -65,5 +78,11 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
     void start();
     return () => controller.abort();
   }, [key, missing, runId, episodeId, onReady]);
-  return missing && state?.key === key ? state.value : null;
+  if (!missing || state?.key !== key) return null;
+  if (state.imported && !load.loading) return {
+    busy: false,
+    message: `取り込みは完了しましたが、試行を読み込めません：${load.error ?? '試行が見つかりません。'}`,
+    retry: onReady,
+  };
+  return state.value;
 }

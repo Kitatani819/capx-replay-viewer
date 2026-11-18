@@ -412,17 +412,22 @@ class ProcessRunner:
 
 
 REMOTE_EPISODE_LISTER = r"""
-import glob, hashlib, json, os, pwd, re, stat, sys, time
+import errno, glob, hashlib, json, os, pwd, re, stat, sys, time
 
 def read_json(path, strict=False):
     try:
-        st = os.lstat(path)
-        if not stat.S_ISREG(st.st_mode):
-            return None, 'not_a_regular_file', None
-        if st.st_size > 256 * 1024:
-            return None, 'too_large', st.st_mtime
-        with open(path, 'rb') as stream:
-            data = stream.read(256 * 1024 + 1)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
+                     | getattr(os, 'O_NONBLOCK', 0))
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return None, 'not_a_regular_file', None
+            if st.st_size > 256 * 1024:
+                return None, 'too_large', st.st_mtime
+            with os.fdopen(fd, 'rb', closefd=False) as stream:
+                data = stream.read(256 * 1024 + 1)
+        finally:
+            os.close(fd)
         if len(data) > 256 * 1024:
             return None, 'too_large', st.st_mtime
         try:
@@ -436,8 +441,8 @@ def read_json(path, strict=False):
             return None, 'invalid_json', st.st_mtime
     except FileNotFoundError:
         return None, 'missing', None
-    except OSError:
-        return None, 'unreadable', None
+    except OSError as exc:
+        return None, 'not_a_regular_file' if exc.errno == errno.ELOOP else 'unreadable', None
 
 def regular(path):
     try:
@@ -563,12 +568,10 @@ for scope, patterns in (('mine', mine), ('team', team)):
                                      files_digest=digest))
                     if include_files:
                         manifest = [[episode_id + '/' + rel, size, mtime] for rel, size, mtime in files]
-                        run_st = regular(os.path.join(run, 'run.json'))
-                        if run_st:
-                            manifest.append(['run.json', run_st.st_size, int(run_st.st_mtime)])
-                        eval_st = regular(os.path.join(run, 'eval.json'))
-                        if eval_st:
-                            manifest.append(['eval.json', eval_st.st_size, int(eval_st.st_mtime)])
+                        for metadata in ('run.json', 'eval.json', 'runner_records.jsonl'):
+                            st = regular(os.path.join(run, metadata))
+                            if st:
+                                manifest.append([metadata, st.st_size, int(st.st_mtime)])
                         rows[-1]['files'] = manifest
                 out.extend(rows)
 remote_now = time.time()
@@ -596,12 +599,10 @@ if regular(os.path.join(episode, 'events.jsonl')) is None and regular(os.path.jo
     print(json.dumps({'error': 'Episode is no longer available'}))
     sys.exit(0)
 files = []
-run_json = regular(os.path.join(run, 'run.json'))
-if run_json:
-    files.append(['run.json', run_json.st_size, int(run_json.st_mtime)])
-eval_json = regular(os.path.join(run, 'eval.json'))
-if eval_json:
-    files.append(['eval.json', eval_json.st_size, int(eval_json.st_mtime)])
+for metadata in ('run.json', 'eval.json', 'runner_records.jsonl'):
+    st = regular(os.path.join(run, metadata))
+    if st:
+        files.append([metadata, st.st_size, int(st.st_mtime)])
 for base, dirs, names in os.walk(episode):
     dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(base, d)))
     for name in sorted(names):
@@ -667,6 +668,7 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
             raise FetchError("Unexpected episode list from GMO") from exc
         locations.setdefault(run_id, set()).add(path)
         valid.append(row)
+    valid_evals: list[dict[str, Any]] = []
     for row in evals:
         try:
             run_id, path = row["run_id"], row["path"]
@@ -684,12 +686,13 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                     continue
                 if type(value) not in (int, float) or not math.isfinite(value):
                     raise FetchError("Unexpected evaluation clock value from GMO")
-        except (KeyError, TypeError, AttributeError) as exc:
-            raise FetchError("Unexpected evaluation list from GMO") from exc
+        except (FetchError, KeyError, TypeError, AttributeError):
+            continue
         locations.setdefault(run_id, set()).add(path)
-    for row in valid + evals:
+        valid_evals.append(row)
+    for row in valid + valid_evals:
         row["conflict"] = bool(row.get("conflict")) or len(locations[row["run_id"]]) > 1
-    return {"episodes": valid, "evals": evals}
+    return {"episodes": valid, "evals": valid_evals}
 
 
 def local_episode_stats(episode: Path) -> tuple[int, int, int | None, str] | None:
@@ -781,7 +784,8 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
         check_runs([run])
         if len({rel for rel, _, _ in run.files}) != len(run.files):
             raise FetchError("Duplicate episode file from GMO")
-        if any(rel not in ("run.json", "eval.json") and not rel.startswith(episode_id + "/")
+        if any(rel not in ("run.json", "eval.json", "runner_records.jsonl")
+               and not rel.startswith(episode_id + "/")
                for rel, _, _ in run.files):
             raise FetchError("Unexpected file path from GMO")
     except (KeyError, TypeError, ValueError) as exc:
@@ -794,8 +798,8 @@ def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[
     if local_run.is_symlink():
         raise FetchError("Local destination contains a symlink")
     _check_local_links(local_run / episode_id)
-    _check_local_links(local_run / "run.json")
-    _check_local_links(local_run / "eval.json")
+    for metadata in ("run.json", "eval.json", "runner_records.jsonl"):
+        _check_local_links(local_run / metadata)
     return changed_files(run, local_run)
 
 

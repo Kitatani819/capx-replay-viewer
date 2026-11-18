@@ -9,15 +9,18 @@ import hashlib
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
 from capx_trace_viewer import evals, reader
 
 HEARTBEAT_INTERVAL_S = 60.0
+WORKER_WAIT_TIMEOUT_S = 60.0
 # Phase 2 can provide objects with publish(eval_record). Nothing is sent in phase 1.
 SINKS: list[Any] = []
 
@@ -62,9 +65,11 @@ def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False) 
         with path.open("xb") as stream:
             stream.write(data)
         return
+    mode = stat.S_IMODE(path.stat().st_mode)
     fd, temporary = tempfile.mkstemp(prefix=".eval-", suffix=".json.tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as stream:
+            os.chmod(temporary, mode)
             stream.write(data)
         os.replace(temporary, path)
     finally:
@@ -74,13 +79,30 @@ def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False) 
             pass
 
 
+def _wait_for_workers(pgid: int, timeout: float) -> bool:
+    """Return whether the process group emptied before the deadline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(.1, remaining))
+
+
 def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              baseline: str | None = None, eval_set: str | None = None, by: str = "",
              repo: Path | None = None, heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
+             worker_wait_timeout: float = WORKER_WAIT_TIMEOUT_S,
              sinks: Sequence[Any] | None = None) -> int:
-    """Return the child's returncode; heartbeat interval is injectable for tests."""
+    """Return the child's returncode; heartbeat and worker waits are injectable."""
     if heartbeat_interval <= 0:
         raise ValueError("heartbeat interval must be positive")
+    if worker_wait_timeout < 0:
+        raise ValueError("worker wait timeout must be nonnegative")
     trace_root = Path(os.path.abspath(os.path.expanduser(trace_root)))
     sinks = SINKS if sinks is None else sinks
     moment = dt.datetime.now(dt.timezone.utc)
@@ -146,8 +168,11 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
                         _write_record(path, record)
                     except (OSError, ValueError) as exc:
                         print(f"eval: heartbeat write failed ({type(exc).__name__})", file=sys.stderr)
+        end = {"exit_code": returncode, "signal": -returncode if returncode < 0 else None}
+        if child is not None and os.name == "posix" and not _wait_for_workers(child.pid, worker_wait_timeout):
+            end["workers_left_running"] = True
         record.update({"status": "completed" if returncode == 0 else "interrupted",
-                       "end": {"exit_code": returncode, "signal": -returncode if returncode < 0 else None},
+                       "end": end,
                        "ended_at": _now(), "heartbeat_at": _now(),
                        "summary": evals.summarize_run(trace_root, eval_id)})
         try:

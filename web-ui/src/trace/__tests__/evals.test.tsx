@@ -59,6 +59,28 @@ test('comparison renders regression text and border, retry, blanks, condition di
   assert.match(html, /href="\/traces\?run=improved&amp;episode=c1-retry"/);
   assert.match(html, /集計と試行の表の数が異なります/);
 });
+test('condition differences show only changed config flags and preserve the API data', () => {
+  const d = detail();
+  d.differences = [{ field: 'config_flags',
+    baseline: { multi_turn: true, use_parallel_ensemble: false, nested: { count: 2, options: ['a', 'b'] }, removed: 'old' },
+    current: { multi_turn: true, use_parallel_ensemble: true, nested: { options: ['a', 'b'], count: 2 }, added: 'new' } }];
+  const original = JSON.stringify(d.differences);
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /use_parallel_ensemble（基準 false \/ 今回 true）/);
+  assert.match(html, /added（基準 未記録 \/ 今回 new）/);
+  assert.match(html, /removed（基準 old \/ 今回 未記録）/);
+  assert.doesNotMatch(html, /multi_turn|nested|設定（/);
+  assert.equal(JSON.stringify(d.differences), original);
+});
+test('condition differences show only changed model names including an initially missing model map', () => {
+  const d = detail();
+  d.differences = [{ field: 'models', baseline: { code_generator: 'old-model', planner: 'shared-model' }, current: { code_generator: 'new-model', planner: 'shared-model' } }];
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /code_generator（基準 old-model \/ 今回 new-model）/);
+  assert.doesNotMatch(html, /planner|shared-model|モデル（/);
+  d.differences = [{ field: 'models', baseline: null, current: { code_generator: 'new-model' } }];
+  assert.match(renderToStaticMarkup(<EvalComparison detail={d} />), /code_generator（基準 未記録 \/ 今回 new-model）/);
+});
 test('baseline evaluations show only current row and all four verdict symbols have labels', () => {
   const d = detail(); d.eval = record('baseline'); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
   d.trials = ['success', 'failure', 'unknown', 'running'].map((v, i) => trial(`e${i}`, i, v as EvalTrial['verdict']));

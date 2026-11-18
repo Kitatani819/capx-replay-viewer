@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { useAsync, useInterval } from '../trace/hooks';
 import { VERDICT_LABELS } from '../trace/outcome';
-import { evalApi, type EvalCounts, type EvalDetail, type EvalListEntry, type EvalRecord } from './api';
+import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import './evals.css';
 
@@ -18,6 +18,25 @@ function valueText(value: unknown): string {
   if (Array.isArray(value)) return value.map(valueText).join('、') || 'なし';
   if (typeof value === 'object') return Object.entries(value).map(([key, item]) => `${key}: ${valueText(item)}`).join('、') || 'なし';
   return String(value);
+}
+function equalValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((value, index) => equalValue(value, right[index]));
+  if (left && right && typeof left === 'object' && typeof right === 'object' && !Array.isArray(left) && !Array.isArray(right)) {
+    const entries = Object.entries(left);
+    return entries.length === Object.keys(right).length && entries.every(([key, value]) => Object.hasOwn(right, key) && equalValue(value, (right as Record<string, unknown>)[key]));
+  }
+  return false;
+}
+function differenceItems(diff: EvalDifference) {
+  if (diff.field !== 'models' && diff.field !== 'config_flags') return [{ ...diff, key: diff.field, label: FIELDS[diff.field] || diff.field }];
+  const baseline = (diff.baseline || {}) as Record<string, unknown>;
+  const current = (diff.current || {}) as Record<string, unknown>;
+  return [...new Set([...Object.keys(baseline), ...Object.keys(current)])].sort()
+    .map(key => ({ key: `${diff.field}.${key}`, label: key,
+      baseline: Object.hasOwn(baseline, key) ? baseline[key] : undefined,
+      current: Object.hasOwn(current, key) ? current[key] : undefined }))
+    .filter(item => !equalValue(item.baseline, item.current));
 }
 function Counts({ value }: { value: EvalCounts | null }) { return <>{value ? `${value.success}/${value.trials}` : '—'}</>; }
 function Rate({ entry }: { entry: EvalListEntry }) {
@@ -67,6 +86,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   if (!record) return <p role="alert" className="eval-error">評価の記録を読み取れません：{detail.error || '記録が不正です'}</p>;
   const table = comparisonTable(detail.trials, detail.baseline_trials);
   const mismatch = summaryDiffers(detail.summary, detail.trials) || (baseline && summaryDiffers(detail.baseline_summary, detail.baseline_trials));
+  const differences = detail.differences.flatMap(differenceItems);
   return <>
     <div className="eval-comparison-heading"><div><h1>{title(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time>{detail.display_status && <> · {STATUS[detail.display_status]}</>}</p></div>
       <p className="eval-score">{baseline && <>基準 <Counts value={detail.baseline_summary} /> → </>}今回 <Counts value={detail.summary} />{delta(detail.summary, detail.baseline_summary)}</p>
@@ -74,7 +94,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     {detail.error && <p role="status" className="eval-note">{detail.error}</p>}
     {detail.remote_error && <p role="status" className="eval-note">{detail.remote_error}</p>}
     {detail.baseline_error && <p className="eval-note">{detail.baseline_error}</p>}
-    {detail.differences.length > 0 && <div className="eval-note"><p>条件の違い：</p><ul>{detail.differences.map(diff => <li key={diff.field}>{FIELDS[diff.field] || diff.field}（基準 {valueText(diff.baseline)} / 今回 {valueText(diff.current)}）</li>)}</ul></div>}
+    {differences.length > 0 && <div className="eval-note"><p>条件の違い：</p><ul>{differences.map(diff => <li key={diff.key}>{diff.label}（基準 {valueText(diff.baseline)} / 今回 {valueText(diff.current)}）</li>)}</ul></div>}
     <div className="eval-table-heading"><p>タスク・seed ごとの結果</p>{baseline && <p>悪化 {table.regressions}件</p>}</div>
     {table.rows.length > 0 ? <div className="eval-table-scroll"><table className="eval-comparison" aria-label="評価の比較">
       <thead><tr><th scope="col">タスク{table.showConditions ? '・条件' : ''}</th><th scope="col">評価</th>{table.seeds.map(seed => <th key={String(seed)} scope="col">seed {seed ?? '—'}</th>)}</tr></thead>
