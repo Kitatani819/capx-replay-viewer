@@ -53,6 +53,21 @@ def test_cli_preserves_exit_and_records_empty_eval(tmp_path, exit_code):
     assert "command" not in data and str(tmp_path) not in json.dumps(data)
 
 
+def test_child_inherits_the_same_absolute_trace_root_after_chdir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    child_dir = tmp_path / "child"
+    child_dir.mkdir()
+    code = (
+        "import os; from pathlib import Path; "
+        f"os.chdir({str(child_dir)!r}); "
+        "root = Path(os.environ['CAPX_TRACE_DIR']); "
+        "assert root.is_absolute(); "
+        "assert (root / os.environ['CAPX_TRACE_RUN_ID'] / 'eval.json').is_file()"
+    )
+    assert wrapper.run_eval([sys.executable, "-c", code], trace_root=Path("traces")) == 0
+    assert read_record(tmp_path / "traces")["status"] == "completed"
+
+
 @pytest.mark.parametrize("case", ["unset_dir", "set_run_id", "empty_run_id"])
 def test_cli_refuses_conflicting_environment(tmp_path, case):
     trace_root = tmp_path / "trace"
@@ -243,6 +258,17 @@ def test_dirty_git_checkout(tmp_path):
         "commit": git("rev-parse", "HEAD").decode().strip(), "dirty": True,
         "diff_sha256": hashlib.sha256(git("diff", "HEAD")).hexdigest()}
     assert wrapper.git_revision(tmp_path) is None
+
+
+def test_unavailable_git_revision_warns_and_keeps_eval_result(tmp_path):
+    repo = tmp_path / "non-git"
+    repo.mkdir()
+    trace_root = tmp_path / "trace"
+    result = run_cli(trace_root, "pass", "--repo", str(repo))
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("Git metadata unavailable") == 1
+    assert str(repo) not in result.stderr
+    assert read_record(trace_root)["git"] is None
 
 
 def test_sink_failures_at_start_and_end_preserve_exit(tmp_path, capsys):

@@ -25,11 +25,25 @@ python -m capx_trace_recorder eval \
 
 `CAPX_TRACE_DIR` が未設定、または `CAPX_TRACE_RUN_ID` がすでに設定されている場合は起動を拒否します。基準の記録が記録先の隣のユーザーディレクトリにも見つからなければ、警告を1行表示して実行を続けます。
 
-評価IDは自動で作り、子プロセスの `CAPX_TRACE_RUN_ID` に渡します。CaP-Xのrunnerを通した各試行は、同じ評価IDの下に記録されます。recorderが対応していない評価コマンドでは試行は記録されず、試行数は0になります。
+評価IDは自動で作り、記録先の絶対パスを `CAPX_TRACE_DIR`、評価IDを `CAPX_TRACE_RUN_ID` として子プロセスに渡します。CaP-Xのrunnerを通した各試行は、同じ評価IDの下に記録されます。recorderが対応していない評価コマンドでは試行は記録されず、試行数は0になります。
 
 ## 記録されるもの
 
 `<CAPX_TRACE_DIR>/<評価ID>/eval.json` に、開始時刻、実行者、変更した部品、基準ID、評価セット名、gitのコミット、未コミットの変更の有無を保存します。変更があれば `git diff HEAD` のSHA-256も残します。gitの情報が取れなければ `git` は `null` です。
+
+Gitの情報を取得できない場合は、評価開始時に警告します。別のメンバーが所有するチェックアウトを信頼して使う場合は、そのパスだけを許可した一時的な設定を渡せます。GMOのGit 2.34.1では、コマンドラインの `git -c safe.directory=…` で指定しても所有者チェックを通りません。
+
+```bash
+capx_checkout=/absolute/path/to/shared/CaP-X
+(
+  set -e
+  git_config=$(mktemp)
+  trap 'rm -f -- "$git_config"' EXIT
+  git config --file "$git_config" --add safe.directory "$capx_checkout"
+  GIT_CONFIG_GLOBAL="$git_config" python -m capx_trace_recorder eval \
+    --repo "$capx_checkout" -- /path/to/run-evaluation.sh
+)
+```
 
 実行中は60秒ごとに生存時刻を更新します。終了コード0で「完了」、それ以外で「中断」として、成功・失敗・未判定・不完全な記録の数、タスク・seed、モデル名、設定フラグを集計します。終了コードは子プロセスの結果を引き継ぎます。`Ctrl+C` とSIGTERMは子のプロセスグループに送り、終了を待って集計します。
 

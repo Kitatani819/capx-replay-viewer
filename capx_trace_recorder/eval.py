@@ -39,8 +39,10 @@ def _publish(record: dict[str, Any], sinks: Sequence[Any]) -> None:
 
 def git_revision(repo: Path) -> dict[str, Any] | None:
     """Fingerprint the checkout, without saving its path, diff or command line."""
+    git_env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+
     def git(*args: str) -> bytes:
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=10)
+        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=10, env=git_env)
         if result.returncode:
             raise OSError("git failed")
         return result.stdout
@@ -135,6 +137,8 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
     path = run / "eval.json"
     _write_record(path, record, initial=True)
+    if record["git"] is None:
+        print("eval: Git metadata unavailable; check --repo and Git access to the checkout", file=sys.stderr)
     _warn_group_access(path)
     _publish(record, sinks)
     if baseline is not None:
@@ -164,6 +168,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     returncode = 127
     try:
         env = os.environ.copy()
+        env["CAPX_TRACE_DIR"] = str(trace_root)
         env["CAPX_TRACE_RUN_ID"] = eval_id
         try:
             options = {"start_new_session": True} if os.name == "posix" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
