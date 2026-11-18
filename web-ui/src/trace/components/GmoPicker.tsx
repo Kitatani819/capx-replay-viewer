@@ -22,6 +22,7 @@ interface SettingsDraft {
   identityFile: string;
   mine: string;
   team: string;
+  interval: string;
 }
 
 function settingsDraft(settings?: GmoSettings): SettingsDraft {
@@ -29,6 +30,7 @@ function settingsDraft(settings?: GmoSettings): SettingsDraft {
     host: settings?.host ?? '', port: settings?.port?.toString() ?? '',
     identityFile: settings?.identity_file ?? '', mine: settings?.mine.join('\n') ?? '',
     team: settings?.team.join('\n') ?? '',
+    interval: String(settings?.interval_s ?? 120),
   };
 }
 
@@ -36,6 +38,12 @@ const rowKey = (row: { run_id: string; episode_id: string }) => `${row.run_id}\0
 const activeJob = (job: GmoJob) => job.state === 'queued' || job.state === 'running';
 const LOCAL_LABELS = { remote: '未取得', local: '取り込み済み', stale: '更新あり', fetching: '取り込み中' };
 const INPUT_CLASS = 'w-full px-2 py-1 bg-surface-sunken border border-surface-border rounded text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent/40';
+const INTERVAL_OPTIONS = [
+  { value: 60, label: '1 分' },
+  { value: 120, label: '2 分（既定）' },
+  { value: 300, label: '5 分' },
+  { value: 0, label: '取り込まない' },
+];
 
 export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryConfig, onDisabled, onPick }: GmoPickerProps) {
   const [config, setConfig] = useState(initialConfig);
@@ -232,7 +240,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
       const saved = await gmoApi.saveConfig({
         host: draft.host.trim(), port: draft.port.trim() ? Number(draft.port) : null,
         identity_file: draft.identityFile.trim() || null, mine: lines(draft.mine), team: lines(draft.team),
-        interval_s: config?.settings.interval_s ?? 120,
+        interval_s: Number(draft.interval),
       }, controller.signal);
       if (controller.signal.aborted) return;
       setConfig(saved);
@@ -258,6 +266,8 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const connectionError = checkError || listing.error || initialConfigError;
   const connectionStatus = saving ? '接続を確認中…' : connectionError ? '接続エラー' : !configured ? '未設定' : listing.data || checkMessage ? '接続できました' : listing.loading ? '接続中…' : '未確認';
   const updateDraft = (key: keyof SettingsDraft, value: string) => setDraft(previous => ({ ...previous, [key]: value }));
+  const configuredInterval = config?.settings.interval_s ?? 120;
+  const customInterval = !INTERVAL_OPTIONS.some(option => option.value === configuredInterval);
   const autoStatus = auto.data;
   const autoFollowing = autoStatus?.enabled === true && !autoStatus.paused;
   const secondsUntilNext = autoStatus?.next_run_at ? Math.max(0, Math.ceil((Date.parse(autoStatus.next_run_at) - now) / 1000)) : null;
@@ -297,6 +307,14 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
               <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="gmo または user@host" className={INPUT_CLASS} /></label>
               <label className="space-y-1">ポート<input aria-label="ポート" name="gmo-port" type="number" min="1" max="65535" step="1" value={draft.port} onChange={event => updateDraft('port', event.target.value)} placeholder="SSH の設定を使う" className={INPUT_CLASS} /></label>
               <label className="space-y-1">鍵ファイル<input aria-label="鍵ファイル" name="gmo-identity-file" value={draft.identityFile} onChange={event => updateDraft('identityFile', event.target.value)} placeholder="~/.ssh/id_ed25519（省略可）" className={INPUT_CLASS} /></label>
+              <div className="space-y-1">
+                <label htmlFor="gmo-interval">自動取り込みの間隔</label>
+                <select id="gmo-interval" name="gmo-interval" value={draft.interval} onChange={event => updateDraft('interval', event.target.value)} aria-describedby={draft.interval === '0' ? 'gmo-interval-help' : undefined} className={INPUT_CLASS}>
+                  {INTERVAL_OPTIONS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  {customInterval && <option value={configuredInterval}>{configuredInterval % 60 === 0 ? `${configuredInterval / 60} 分` : `${configuredInterval} 秒`}（設定ファイルの値）</option>}
+                </select>
+                {draft.interval === '0' && <p id="gmo-interval-help" className="text-text-tertiary">保存すると自動取り込みが止まります。</p>}
+              </div>
               <label className="space-y-1">自分の記録の場所<textarea aria-label="自分の記録の場所" name="gmo-mine" rows={3} value={draft.mine} onChange={event => updateDraft('mine', event.target.value)} placeholder="/home/user/outputs/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
               <label className="space-y-1">チームの記録の場所<textarea aria-label="チームの記録の場所" name="gmo-team" rows={3} value={draft.team} onChange={event => updateDraft('team', event.target.value)} placeholder="/shared/team/*/traces" className={`${INPUT_CLASS} font-mono`} /><span className="text-text-tertiary">1 行に 1 つ。* や ? を使えます。</span></label>
               <div className="sm:col-span-2"><button type="submit" className="px-2 py-1 rounded border border-surface-border-light bg-surface-sunken text-xs text-text-secondary hover:text-text-primary disabled:opacity-40">{saving ? '保存して確認中…' : '保存して確かめる'}</button></div>
