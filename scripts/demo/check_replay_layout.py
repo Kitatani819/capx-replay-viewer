@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, expect, sync_playwright
 from check_api_python import check_api_python
 
 
@@ -279,16 +279,28 @@ def check(base_url: str, root: Path, output: Path):
             api_panel.locator('[data-api-event]').first.click()
             reduced = api_panel.locator('[data-api-selected="true"]').evaluate("el => getComputedStyle(el).animationDuration")
             assert all(float(value.strip().removesuffix('s')) <= .001 for value in reduced.split(',')), reduced
+            def resize_and_settle(width: int, height: int) -> None:
+                # On macOS, Chromium can report the new innerWidth while the page is
+                # still laid out for the previous size (the left pane kept its 1600px
+                # width at 760px). Wait until the layout uses the new width: the
+                # narrow media query matches exactly when it should and the left pane
+                # fits in the viewport. Overflow is asserted strictly afterwards.
+                page.set_viewport_size({"width": width, "height": height})
+                try:
+                    page.wait_for_function("""w => innerWidth === w
+                        && matchMedia('(max-width: 900px)').matches === (w <= 900)
+                        && document.querySelector('[data-replay-pane="left"]').getBoundingClientRect().right <= innerWidth + 1""",
+                        arg=width, timeout=5000)
+                except PlaywrightTimeoutError:
+                    pass  # A real overflow: the assertions below report the elements.
+                page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+
             # Width saved on a large display must not squeeze details to a few pixels.
-            page.set_viewport_size({"width": 1000, "height": 900})
-            page.evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            resize_and_settle(1000, 900)
             right = page.locator('[data-replay-pane="details"]').bounding_box()
             assert right["width"] >= 420, right
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth + 1")
-            page.set_viewport_size({"width": 760, "height": 900})
-            # Chromium may report the new innerWidth before viewport-relative CSS
-            # is laid out. Inspect responsive geometry after the next paint.
-            page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
+            resize_and_settle(760, 900)
             left = page.locator('[data-replay-pane="left"]').bounding_box()
             right = page.locator('[data-replay-pane="details"]').bounding_box()
             assert right["y"] >= left["y"] + left["height"] - 1
