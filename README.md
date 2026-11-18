@@ -49,6 +49,14 @@ viewerをGMOの計算ノードで動かす場合は **[GMOへの接続・計算�
 
 GMOから取得済みの記録はローカル環境で表示確認していますが、**GMOの計算ノード上でのviewer起動と、そのノードのソケットへのSSH転送は未確認**です。`--uds` のソケットでの応答と権限の検査はPythonテストで確認しています。ノードの接続制限は利用環境の案内に従ってください。
 
+### 記録を作る
+
+チームのhype-agentは、route A（`target=bench`）の試行を標準で記録します。記録用の `capx_trace_recorder` は同梱済みです。記録を止めるには `trace=none` を指定します。`target=package` では記録しません。
+
+hype-agentの実行時に `HYPE_TRACE_ROOT=<共有フォルダー>` を指定し、viewerの「接続設定」→「共有の記録フォルダー」に同じ場所を入れると、自分とチームの試行をGMOタブから選べます。記録は `<共有フォルダー>/<GMOのユーザー名>/<run id>/<episode>/…` に保存され、実行者はGMOのユーザー名です。共有先の正式な場所は未定です。`HYPE_TRACE_ROOT` が未設定なら、hype-agentのrunフォルダー内（`runs/hype/<日時>_.../bench/<family>/traces/`）に保存します。
+
+hype-agent以外でCaP-Xを直接動かす場合は、従来どおり[記録器の導入と `CAPX_TRACE_DIR` の設定](docs/upstream-readme.md#recording-traces)を使います。
+
 ## 評価を記録して比べる
 
 `python -m capx_trace_recorder eval --changed "変更した部品" --baseline <基準の評価ID> -- <評価コマンド>` で評価を記録し、試行画面の「評価一覧」から基準との比較や試行の録画・ログを開けます。チームで見るにはグループで読める共有先に記録し、各メンバーが手元のviewerのGMO設定に `shared_root` を指定します（[実行方法・チームの設定](docs/evals.md)）。
