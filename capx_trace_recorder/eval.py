@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import datetime as dt
 import hashlib
 import json
 import os
+import re
 import signal
 import stat
 import subprocess
@@ -37,23 +39,66 @@ def _publish(record: dict[str, Any], sinks: Sequence[Any]) -> None:
             print(f"eval: sink failed ({type(exc).__name__})", file=sys.stderr)
 
 
-def git_revision(repo: Path) -> dict[str, Any] | None:
+def _git_commit(repo: Path) -> str | None:
+    """Read Git files directly; importing store would register its fork handler."""
+    try:
+        git = repo / ".git"
+        if git.is_file():
+            text = git.read_text().strip()
+            if not text.startswith("gitdir:"):
+                return None
+            git = repo / text.split(":", 1)[1].strip()
+        head = (git / "HEAD").read_text().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            common = git
+            commondir = git / "commondir"
+            if commondir.is_file():
+                common = git / commondir.read_text().strip()
+            for directory in (git, common):
+                ref_path = directory / ref
+                if ref_path.is_file():
+                    head = ref_path.read_text().strip()
+                    break
+            else:
+                for line in (common / "packed-refs").read_text().splitlines():
+                    parts = line.split()
+                    if len(parts) == 2 and parts[1] == ref:
+                        head = parts[0]
+                        break
+        return head if re.fullmatch(r"[0-9a-f]{40,64}", head) else None
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def git_revision(repo: Path, *, trust_repo: bool = False) -> dict[str, Any] | None:
     """Fingerprint the checkout, without saving its path, diff or command line."""
+    git_env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+
     def git(*args: str) -> bytes:
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=10)
+        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=10, env=git_env)
         if result.returncode:
             raise OSError("git failed")
         return result.stdout
 
     try:
-        commit = git("rev-parse", "HEAD").decode("ascii").strip()
-        dirty = bool(git("status", "--porcelain"))
-        revision: dict[str, Any] = {"commit": commit, "dirty": dirty}
-        if dirty:
-            revision["diff_sha256"] = hashlib.sha256(git("diff", "HEAD")).hexdigest()
-        return revision
+        with contextlib.ExitStack() as stack:
+            if trust_repo:
+                temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="capx-eval-git-")))
+                config = temporary / "config"
+                value = (str(repo.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+                         .replace("\n", "\\n").replace("\t", "\\t").replace("\b", "\\b"))
+                config.write_text(f'[safe]\n\tdirectory = "{value}"\n', encoding="utf-8")
+                git_env["GIT_CONFIG_GLOBAL"] = str(config)
+            commit = git("rev-parse", "HEAD").decode("ascii").strip()
+            dirty = bool(git("status", "--porcelain"))
+            revision: dict[str, Any] = {"commit": commit, "dirty": dirty}
+            if dirty:
+                revision["diff_sha256"] = hashlib.sha256(git("diff", "HEAD")).hexdigest()
+            return revision
     except (OSError, UnicodeError, subprocess.TimeoutExpired):
-        return None
+        commit = _git_commit(repo)
+        return {"commit": commit, "dirty": None, "diff_sha256": None} if commit else None
 
 
 def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False) -> None:
@@ -109,7 +154,8 @@ def _wait_for_workers(pgid: int, timeout: float) -> bool:
 
 def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              baseline: str | None = None, eval_set: str | None = None, by: str = "",
-             repo: Path | None = None, heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
+             repo: Path | None = None, trust_repo: bool = False,
+             heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
              worker_wait_timeout: float = WORKER_WAIT_TIMEOUT_S,
              sinks: Sequence[Any] | None = None) -> int:
     """Return the child's returncode; heartbeat and worker waits are injectable."""
@@ -125,7 +171,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     record = {
         "schema": evals.SCHEMA, "eval_id": eval_id, "status": "running", "end": None,
         "by": by, "changed": changed, "baseline_eval_id": baseline, "eval_set": eval_set,
-        "git": git_revision(Path.cwd() if repo is None else repo), "started_at": started,
+        "git": git_revision(Path.cwd() if repo is None else repo, trust_repo=trust_repo), "started_at": started,
         "heartbeat_at": started, "ended_at": None, "summary": None,
     }
     # Validate options before creating a directory or starting a command.
@@ -135,6 +181,11 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
     path = run / "eval.json"
     _write_record(path, record, initial=True)
+    if record["git"] is None:
+        print("eval: Git metadata unavailable; check --repo and Git access to the checkout", file=sys.stderr)
+    elif record["git"]["dirty"] is None:
+        print("eval: Git commit recorded, but uncommitted changes are unknown; "
+              "use --trust-repo only for a checkout you trust", file=sys.stderr)
     _warn_group_access(path)
     _publish(record, sinks)
     if baseline is not None:
@@ -164,6 +215,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     returncode = 127
     try:
         env = os.environ.copy()
+        env["CAPX_TRACE_DIR"] = str(trace_root)
         env["CAPX_TRACE_RUN_ID"] = eval_id
         try:
             options = {"start_new_session": True} if os.name == "posix" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -210,6 +262,7 @@ def main(words: Sequence[str] | None = None) -> int:
     parser.add_argument("--eval-set")
     parser.add_argument("--by", default=os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""))
     parser.add_argument("--repo", type=Path, default=Path.cwd())
+    parser.add_argument("--trust-repo", action="store_true")
     if words in (["-h"], ["--help"]):
         parser.parse_args(words)
     if "--" not in words:
@@ -230,7 +283,8 @@ def main(words: Sequence[str] | None = None) -> int:
         parser.error("--changed is required with --baseline")
     try:
         result = run_eval(command, trace_root=Path(trace_dir), changed=args.changed,
-                          baseline=args.baseline, eval_set=args.eval_set, by=args.by, repo=args.repo)
+                          baseline=args.baseline, eval_set=args.eval_set, by=args.by, repo=args.repo,
+                          trust_repo=args.trust_repo)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot start evaluation: {exc}")
     return 128 - result if result < 0 else result

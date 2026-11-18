@@ -21,7 +21,7 @@ export interface EvalRecord {
   changed: string;
   baseline_eval_id: string | null;
   eval_set: string | null;
-  git: { commit: string; dirty: boolean; diff_sha256?: string | null } | null;
+  git: { commit: string; dirty: boolean | null; diff_sha256?: string | null } | null;
   started_at: string;
   heartbeat_at: string;
   ended_at: string | null;

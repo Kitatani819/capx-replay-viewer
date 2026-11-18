@@ -39,6 +39,9 @@ function differenceItems(diff: EvalDifference) {
     .filter(item => !equalValue(item.baseline, item.current));
 }
 function Counts({ value }: { value: EvalCounts | null }) { return <>{value ? `${value.success}/${value.trials}` : '—'}</>; }
+function GitCommit({ git }: { git: EvalRecord['git'] }) {
+  return git ? <span title={git.dirty === null ? '未コミットの変更の有無は不明' : undefined}>{git.commit.slice(0, 7)}{git.dirty ? '＋未コミット' : ''}</span> : <>—</>;
+}
 function Rate({ entry }: { entry: EvalListEntry }) {
   return <>{entry.baseline_summary && <>基準 {rate(entry.baseline_summary)} → </>}{rate(entry.summary)}{delta(entry.summary, entry.baseline_summary)}</>;
 }
@@ -52,7 +55,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
         <td><a href={href}>{title(record)}</a></td><td className="eval-numbers"><Rate entry={entry} /></td>
-        <td>{record.git ? <>{record.git.commit.slice(0, 7)}{record.git.dirty ? '＋未コミット' : ''}</> : '—'}</td>
+        <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status ? STATUS[entry.display_status] : ''}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
     })}</tbody>
@@ -88,7 +91,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const mismatch = summaryDiffers(detail.summary, detail.trials) || (baseline && summaryDiffers(detail.baseline_summary, detail.baseline_trials));
   const differences = detail.differences.flatMap(differenceItems);
   return <>
-    <div className="eval-comparison-heading"><div><h1>{title(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time>{detail.display_status && <> · {STATUS[detail.display_status]}</>}</p></div>
+    <div className="eval-comparison-heading"><div><h1>{title(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · {STATUS[detail.display_status]}</>}</p></div>
       <p className="eval-score">{baseline && <>基準 <Counts value={detail.baseline_summary} /> → </>}今回 <Counts value={detail.summary} />{delta(detail.summary, detail.baseline_summary)}</p>
     </div>
     {detail.error && <p role="status" className="eval-note">{detail.error}</p>}

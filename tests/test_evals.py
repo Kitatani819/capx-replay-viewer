@@ -48,7 +48,11 @@ def test_stdlib_only_imports():
     (("summary", "config_flags"), {"x": 10 ** 400}),
     (("summary", "config_flags"), {"x": {"x": {"x": {"x": {"x": True}}}}}),
     (("git",), {"commit": "a" * 40, "dirty": "yes"}),
+    (("git",), {"commit": "a" * 40, "dirty": 0, "diff_sha256": None}),
     (("git",), {"commit": "a" * 40, "dirty": True, "diff_sha256": "invalid"}),
+    (("git",), {"commit": "a" * 40, "dirty": True, "diff_sha256": None}),
+    (("git",), {"commit": "a" * 40, "dirty": False, "diff_sha256": "b" * 64}),
+    (("git",), {"commit": "a" * 40, "dirty": None, "diff_sha256": "b" * 64}),
     (("end", "exit_code"), True), (("end", "signal"), "TERM"),
     (("end", "workers_left_running"), 1), (("end", "workers_left_running"), None),
     (("end", "unknown"), True),
@@ -71,6 +75,13 @@ def test_valid_record_and_run_id_match():
     data["command"] = "secret"
     with pytest.raises(evals.EvalValidationError):
         evals.validate_eval_record(data)
+
+
+@pytest.mark.parametrize("dirty,diff", [(False, None), (True, "b" * 64), (None, None)])
+def test_valid_git_metadata_states(dirty, diff):
+    data = record()
+    data["git"] = {"commit": "a" * 40, "dirty": dirty, "diff_sha256": diff}
+    assert evals.validate_eval_record(data) == data
 
 
 @pytest.mark.parametrize("workers_left_running", [False, True])
