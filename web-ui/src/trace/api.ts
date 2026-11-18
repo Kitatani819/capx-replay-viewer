@@ -95,7 +95,7 @@ async function readError(resp: Response): Promise<{ message: string; body: unkno
   }
 }
 
-async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+export async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const resp = await fetch(url, { signal, headers: { Accept: 'application/json' } });
   if (!resp.ok) {
     const e = await readError(resp);
@@ -106,7 +106,7 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     // The chat server's SPA fallback answers unknown GETs with index.html.
     throw new ApiError(
       resp.status,
-      'JSON ではない応答です。このサーバーに /api/traces が無い可能性があります。',
+      `JSON ではない応答です。このサーバーに ${url.split('?')[0]} が無い可能性があります。`,
       url,
     );
   }

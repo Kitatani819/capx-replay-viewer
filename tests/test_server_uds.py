@@ -141,6 +141,17 @@ def test_trace_api_accepts_requests_without_a_client_only_on_a_socket(tmp_path):
     assert raw_get(tcp_app, "/api/traces/config", client=None)[0] == 403  # type: ignore[arg-type]
 
 
+def test_eval_api_accepts_requests_without_a_client_only_on_a_socket(tmp_path):
+    uds_app = create_app(trace_root=tmp_path, frontend_dist=tmp_path / "no-dist", unix_socket=True)
+    assert raw_get(uds_app, "/api/evals", client=None)[0] == 200  # type: ignore[arg-type]
+    status, _, _ = raw_get(uds_app, "/api/evals", client=None,  # type: ignore[arg-type]
+                           headers=[(b"host", b"rebind.attacker.example:18390")])
+    assert status == 403
+    assert raw_get(uds_app, "/api/evals", client=("10.0.0.5", 40000))[0] == 403
+    tcp_app = create_app(trace_root=tmp_path, frontend_dist=tmp_path / "no-dist")
+    assert raw_get(tcp_app, "/api/evals", client=None)[0] == 403  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize("unix_socket", [True, False])
 def test_gmo_gate_accepts_requests_without_a_client_only_on_a_socket(tmp_path, unix_socket):
     service = GmoService(tmp_path)

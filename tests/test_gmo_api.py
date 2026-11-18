@@ -233,7 +233,7 @@ def test_large_episode_json_and_conflict(client, remote):
     rows = client.get("/api/gmo/episodes?refresh=1").json()
     huge = next(r for r in rows if r["run_id"] == "run_big")
     assert huge["episode"] is None and huge["episode_json_error"] == "too_large"
-    raw = gmo.list_remote_episodes(client.app.state.gmo_service.runner, gmo.load_settings())
+    raw = gmo.list_remote_episodes(client.app.state.gmo_service.runner, gmo.load_settings())["episodes"]
     assert next(r for r in raw if r["run_id"] == "run_big")["run_json_error"] == "too_large"
     assert sum(r["conflict"] for r in rows if r["run_id"] == "run_a") == 2
     assert client.post("/api/gmo/fetch", json={"run_id": "run_a", "episode_id": "ep_1"}, headers=WRITE).status_code == 409
@@ -416,7 +416,7 @@ def test_settings_change_discards_inflight_listing(tmp_path, monkeypatch):
         if settings == old:
             entered.set()
             assert release.wait(timeout=3)
-        return [{"path": "/" + settings.host}]
+        return {"episodes": [{"path": "/" + settings.host}], "evals": []}
 
     def refresh():
         try:
@@ -450,7 +450,7 @@ def test_enqueue_rejects_settings_changed_after_snapshot(tmp_path, monkeypatch):
     service = GmoService(tmp_path / "dest")
     service.update_settings(old)
     row = {"run_id": "run", "episode_id": "ep", "path": "/old/run", "conflict": False}
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *_: [row])
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *_: {"episodes": [row], "evals": []})
     snapshot = service._remote_snapshot
 
     def changed_snapshot():
@@ -474,7 +474,7 @@ def test_cached_listing_retains_its_settings_for_queued_fetch(tmp_path, monkeypa
     row = {"run_id": "run", "episode_id": "ep", "path": "/old/run", "conflict": False}
     service = GmoService(tmp_path / "dest")
     service.update_settings(old)
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *_: [row])
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *_: {"episodes": [row], "evals": []})
     captured = []
     entered, release = threading.Event(), threading.Event()
 

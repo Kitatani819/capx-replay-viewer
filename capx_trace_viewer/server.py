@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from capx_trace_viewer.trace_api import create_trace_router
+from capx_trace_viewer.eval_api import create_eval_router
 from capx_trace_viewer.platform_support import UnsupportedBackendPlatform, require_supported_backend
 
 _CWD = Path.cwd()
@@ -154,6 +155,7 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
     app.state.trace_root = trace_dir
     app.include_router(create_trace_router(trace_dir, viewer_only=True, expose=expose_traces, runner_roots=roots,
                                            unix_socket=unix_socket))
+    gmo_service = None
     if gmo:
         from capx_trace_viewer.gmo_api import GmoService, create_gmo_router
         gmo_service = GmoService(trace_dir)
@@ -161,6 +163,8 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
         app.include_router(create_gmo_router(gmo_service, unix_socket=unix_socket))
         app.router.add_event_handler('startup', gmo_service.start_auto)
         app.router.add_event_handler('shutdown', gmo_service.close)
+    app.include_router(create_eval_router(trace_dir, expose=expose_traces, gmo_service=gmo_service,
+                                          unix_socket=unix_socket))
 
     @app.api_route('/api/gmo', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
     @app.api_route('/api/gmo/{path:path}', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
@@ -178,6 +182,8 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
                             status_code=503, media_type='text/plain')
         @app.get('/{path:path}')
         async def frontend_missing_file(path: str):
+            if path.startswith(_VIEWER_ONLY_MISSING):
+                return JSONResponse({'detail': 'not available in --viewer-only mode'}, status_code=404)
             return Response('Frontend dist is missing or has no index.html. Build the frontend or pass --frontend-dist.\n',
                             status_code=503, media_type='text/plain')
         return app

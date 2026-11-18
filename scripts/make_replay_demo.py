@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +18,7 @@ import numpy as np
 import make_demo_trace as d
 
 
-def build(root: Path) -> dict:
+def build(root: Path, *, evals: bool = False) -> dict:
     root = root.resolve()
     if root.exists():
         raise SystemExit(f"Refusing to overwrite {root}; choose a fresh --out directory")
@@ -135,12 +138,86 @@ def build(root: Path) -> dict:
     (trial/"video_combined.mp4").write_bytes(video)
     manifest={"run":d.RUN_ID,"episode":ep.episode_id,"events":ids,"video_frames":len(ep.buffer),
         "legacy":{"run":"video_only","task":"cube_lifting","condition":"DEMO","trial":"trial_307"}}
+    if evals:
+        manifest["evals"] = build_evals(root, manifest, now)
     (root/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
     return manifest
+
+
+def build_evals(root: Path, manifest: dict, now: float) -> dict:
+    """Add two clearly synthetic evaluations; reuse the replay's recorded assets."""
+    # Direct script execution should use this checkout, including in a worktree
+    # whose interpreter has another checkout installed as an editable package.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from capx_trace_viewer import evals
+
+    baseline_id = "ev-20261118T090000Z-de01"
+    improved_id = "ev-20261118T100000Z-de02"
+    source = root / "traces" / manifest["run"] / manifest["episode"]
+    regression = None
+    for run_id, improved in ((baseline_id, False), (improved_id, True)):
+        run = root / "traces" / run_id
+        run.mkdir()
+        (run / "run.json").write_text(json.dumps({"run_id": run_id, "synthetic": True}), encoding="utf-8")
+        records = []
+        for task in ("cube_lifting", "two_arm_lift"):
+            for seed in (401, 402, 403):
+                success = seed == 401
+                if improved:
+                    success = (task == "cube_lifting" and seed == 402) or (task == "two_arm_lift" and seed in (401, 402))
+                retry = improved and task == "cube_lifting" and seed == 402
+                attempts = []
+                for attempt in range(1, 3 if retry else 2):
+                    result = success and (not retry or attempt == 2)
+                    episode_id = f"{task}__DEMO__s{seed}__i1__a{attempt}"
+                    episode = run / episode_id
+                    shutil.copytree(source, episode)
+                    metadata = json.loads((episode / "episode.json").read_text(encoding="utf-8"))
+                    metadata.update(run_id=run_id, episode_id=episode_id, task=task, seed=seed, attempt_index=attempt,
+                                    models={"code_generator": {"model": "synthetic-same-model"}},
+                                    config_flags={"multi_turn": True, "use_parallel_ensemble": improved})
+                    metadata["harness_summary"].update(task_completed=result, reward=1. if result else 0.)
+                    events = []
+                    for line in (episode / "events.jsonl").read_text(encoding="utf-8").splitlines():
+                        event = json.loads(line)
+                        event.update(run_id=run_id, episode_id=episode_id)
+                        if event["event_type"] == "episode_start":
+                            event["data"].update({key: metadata[key] for key in (
+                                "task", "seed", "attempt_index", "models", "config_flags")})
+                        if event["event_type"] == "episode_end":
+                            event["data"]["harness_summary"].update(task_completed=result, reward=1. if result else 0.)
+                        if not result and event["event_type"] in ("code_block_end", "evaluator_result"):
+                            event["data"].update(task_completed=False, reward=0.)
+                        events.append(event)
+                    (episode / "events.jsonl").write_bytes(b"".join(d.event_line(event) for event in events))
+                    metadata["events_bytes"] = (episode / "events.jsonl").stat().st_size
+                    (episode / "episode.json").write_text(json.dumps(metadata), encoding="utf-8")
+                    attempts.append({"attempt_id": attempt, "status": "completed", "task_success": result,
+                                     "started_at": datetime.fromtimestamp(metadata["started_wall_time"], timezone.utc).isoformat(),
+                                     "ended_at": datetime.fromtimestamp(metadata["ended_wall_time"], timezone.utc).isoformat()})
+                    if improved and task == "cube_lifting" and seed == 401:
+                        regression = episode_id
+                records.append({"task": task, "condition": "DEMO", "seed": seed, "attempts": attempts,
+                                "outcome": {"task_success": success}})
+        (run / "runner_records.jsonl").write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        started = datetime.fromtimestamp(now - (180 if improved else 300), timezone.utc).isoformat().replace("+00:00", "Z")
+        ended = datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z")
+        record = {
+            "schema": "capx-eval/1", "eval_id": run_id, "status": "completed",
+            "end": {"exit_code": 0, "signal": None}, "by": "合成デモ",
+            "changed": "並列候補の変更（合成デモ）" if improved else "",
+            "baseline_eval_id": baseline_id if improved else None, "eval_set": "synthetic-2x3",
+            "git": None, "started_at": started, "heartbeat_at": ended, "ended_at": ended,
+            "summary": evals.summarize_run(root / "traces", run_id),
+        }
+        evals.validate_eval_record(record, eval_id=run_id)
+        (run / "eval.json").write_text(json.dumps(record, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
+    return {"baseline": baseline_id, "improved": improved_id, "regression_episode": regression}
 
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out",default="outputs/geniac_demo")
+    parser.add_argument("--evals", action="store_true", help="基準・改良の合成評価と悪化・再試行の例を追加する")
     args=parser.parse_args()
-    print(json.dumps(build(Path(args.out)),indent=2))
+    print(json.dumps(build(Path(args.out), evals=args.evals),indent=2))

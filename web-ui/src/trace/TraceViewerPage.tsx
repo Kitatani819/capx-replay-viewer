@@ -38,12 +38,13 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './replay.css';
-import { traceApi } from './api';
+import { ApiError, traceApi } from './api';
 import { applyDataAssets, dataAssetTargets, withTargetsLoading } from './dataAsset';
 import { nextFocusToken } from './focus';
 import { fmtClock } from './format';
 import { useAsync, useDataAssets, useEpisodeEvents, useInterval, useStoredState, useUrlParams } from './hooks';
 import { LABELS } from './labels';
+import { useMissingEpisodeImport } from './importEpisode';
 import { GRACE_MAX_MS, INCOMPLETE_POLL_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
 import { awaitingOracleHookEvidence, episodeRecordingWarnings } from './recordingWarnings';
@@ -86,12 +87,22 @@ export default function TraceViewerPage() {
   }, []);
 
   const config = useAsync((s) => traceApi.config(s), []);
-  const summary = useAsync(runId && episodeId ? (s) => traceApi.episode(runId, episodeId, s) : null, [runId, episodeId]);
+  const [missingEpisode, setMissingEpisode] = useState<string | null>(null);
+  const epKey = runId && episodeId ? `${runId}\u0000${episodeId}` : '';
+  const summary = useAsync(runId && episodeId ? async (s) => {
+    try {
+      const result = await traceApi.episode(runId, episodeId, s);
+      if (!s.aborted) setMissingEpisode(null);
+      return result;
+    } catch (error) {
+      if (!s.aborted && error instanceof ApiError && error.status === 404) setMissingEpisode(epKey);
+      throw error;
+    }
+  } : null, [runId, episodeId]);
   const runDetail = useAsync(runId ? (s) => traceApi.run(runId, s) : null, [runId]);
   const status = summary.data?.status ?? null;
   const running = status === 'running';
   const videoPending = summary.data?.episode?.video_copy_pending === true;
-  const epKey = runId && episodeId ? `${runId}\u0000${episodeId}` : '';
 
   // Live: newest event selected; start in Browse when the URL names an event.
   const [live, setLive] = useState<boolean>(() => !new URLSearchParams(window.location.search).get('event'));
@@ -100,6 +111,13 @@ export default function TraceViewerPage() {
   const plan = pollPlan({ live, running, incomplete: status === 'incomplete', grace: grace !== null, videoPending,
     videoCopyInterrupted: videoCopyInterrupted(summary.data) });
   const events = useEpisodeEvents(runId, episodeId, plan.events && !!runId && !!episodeId);
+  const importReady = useCallback(() => {
+    summary.reload();
+    runDetail.reload();
+    events.refresh();
+  }, [summary.reload, runDetail.reload, events.refresh]);
+  const missing = missingEpisode === epKey && !!epKey && !summary.data;
+  const episodeImport = useMissingEpisodeImport(runId, episodeId, missing, importReady, summary);
   useInterval(summary.poll, plan.summaryMs ?? 1000, plan.summaryMs !== null && !!runId && !!episodeId);
   // Copied heartbeats retain their source mtime and can expire before the next
   // import. Keep detecting new data without claiming that the writer is alive.
@@ -331,6 +349,7 @@ export default function TraceViewerPage() {
 
   const graceOn = grace !== null;
   const pollStatus: PollStatus = useMemo(() => {
+    if (episodeImport) return { text: episodeImport.message, tone: episodeImport.busy ? 'gold' : 'neutral' };
     if (events.error) return { text: `取得エラー: ${events.error}`, tone: 'red' };
     if (events.replaced && events.loading) return { text: 'events.jsonl が置き換えられたため読み直し中', tone: 'amber' };
     if (events.loading) return { text: '読み込み中', tone: 'gold' };
@@ -342,7 +361,7 @@ export default function TraceViewerPage() {
     if (status === 'unscoped') return { text: '自動更新なし（「更新」で再取得）', tone: 'neutral' };
     if (status) return { text: '更新停止（エピソード終了）', tone: 'neutral' };
     return { text: '更新停止', tone: 'neutral' };
-  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data]);
+  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data, episodeImport]);
 
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
   const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-a-left-width', Math.round((window.innerWidth - 112) * .6));
@@ -504,6 +523,12 @@ export default function TraceViewerPage() {
         <LegacyTrialView key={JSON.stringify([legacyRun, legacyTrial.root, legacyTrial.task, legacyTrial.condition, legacyTrial.trialDir])} runId={legacyRun} trial={legacyTrial} />
       ) : !ep ? (
         <div className="flex-1 min-h-0">{picker}</div>
+      ) : missing ? (
+        <section className="p-8 space-y-4" aria-label="手元にない試行">
+          <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? '手元にないため、GMO の記録を確認中…'}</p>
+          {episodeImport?.retry && <button type="button" className="underline text-accent" onClick={episodeImport.retry}>もう一度読み込む</button>}
+          <a className="underline text-accent" href={`/evals/${encodeURIComponent(runId!)}`}>比較ページへ戻る</a>
+        </section>
       ) : simple ? (
         <ErrorBoundary label="動画と入力" resetKey={epKey}>
           <SimpleViewer model={model} ep={ep} selection={selection} videos={videos} onSelect={onPlaybackSelect} error={events.error ?? summary.error ?? config.error} />

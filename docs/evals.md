@@ -1,0 +1,74 @@
+# 評価を記録して比べる
+
+1回の評価を1つのrunとして記録し、基準版と改良版の成功率を比べます。比較表の試行を押すと、その録画とログを開けます。
+
+## 評価を実行する
+
+CaP-Xを実行するPython環境にrecorderと起動フックを[導入](trace-format.md#3-enable-recording)し、記録先を指定します。GMOでは、共用ストレージの自分用ディレクトリを使います。
+
+```bash
+export CAPX_TRACE_DIR=<共用ストレージ>/<ユーザー名>
+python -m capx_trace_recorder eval --eval-set robosuite-5x4 -- <いつもの評価コマンド>
+```
+
+`--` より後ろは子プロセスにそのまま渡します。`--baseline` を省略した評価は、画面で「（基準）」と表示します。改良版では、変更した部品と基準の評価IDを指定します。
+
+```bash
+python -m capx_trace_recorder eval \
+  --changed "把持位置の修正" \
+  --baseline ev-20261118T093000Z-3f2a \
+  --eval-set robosuite-5x4 \
+  -- <いつもの評価コマンド>
+```
+
+`--changed` は最大200文字で、基準を指定するときに必須です。`--by` で実行者名を指定できます。省略時は `CAPX_EVAL_BY`、次に `$USER` を使います。`--repo` はコミットを記録するチェックアウトで、省略時は現在のディレクトリです。`--eval-set` は評価セットの名前だけを記録します。
+
+`CAPX_TRACE_DIR` が未設定、または `CAPX_TRACE_RUN_ID` がすでに設定されている場合は起動を拒否します。基準の記録が記録先の隣のユーザーディレクトリにも見つからなければ、警告を1行表示して実行を続けます。
+
+評価IDは自動で作り、子プロセスの `CAPX_TRACE_RUN_ID` に渡します。CaP-Xのrunnerを通した各試行は、同じ評価IDの下に記録されます。recorderが対応していない評価コマンドでは試行は記録されず、試行数は0になります。
+
+## 記録されるもの
+
+`<CAPX_TRACE_DIR>/<評価ID>/eval.json` に、開始時刻、実行者、変更した部品、基準ID、評価セット名、gitのコミット、未コミットの変更の有無を保存します。変更があれば `git diff HEAD` のSHA-256も残します。gitの情報が取れなければ `git` は `null` です。
+
+実行中は60秒ごとに生存時刻を更新します。終了コード0で「完了」、それ以外で「中断」として、成功・失敗・未判定・不完全な記録の数、タスク・seed、モデル名、設定フラグを集計します。終了コードは子プロセスの結果を引き継ぎます。`Ctrl+C` とSIGTERMは子のプロセスグループに送り、終了を待って集計します。
+
+子の終了後も同じプロセスグループのワーカーを最大60秒待ち、残っていれば `end.workers_left_running: true` を記録して集計します。
+
+成功の判定は、試行に対応するrunnerの `task_success`、最後の試行の `outcome.task_success`、完了した試行の `harness_summary.task_completed` の順です。コードがエラーなく動いたことを表す `harness_summary.success` は使いません。「未判定」や「記録に欠損がある」ことと、タスクの失敗は別に表示します。
+
+コマンドライン、ホスト名、絶対パス、モデルの接続先、試行ごとの一覧は `eval.json` に保存しません。試行の内容は従来のトレースから読みます。画面から評価の記録は編集できません。Notionへの送信は含みません。
+
+## 一覧と比較を開く
+
+手元の記録を指定してviewerを起動します。
+
+```bash
+bash Start-Replay.sh --trace-root /absolute/path/to/traces
+```
+
+同じPCのブラウザで **http://127.0.0.1:8390/evals** を開くと、新しい順の評価一覧が表示されます。行を押すと `/evals/<評価ID>` の比較ページに進みます。評価コマンドの終了時にも、このURLを表示します。別のポートで起動した場合はURLのポートを置き換えてください。
+
+一覧の状態は「実行中」「中断」「欠損あり」です。正常に完了した評価の状態欄は空欄です。SIGKILLなどで終了処理ができなかった評価も、生存時刻が5分以上更新されなければ「中断」と表示します。不正な `eval.json` は理由を表示し、ほかの評価は引き続き閲覧できます。
+
+比較ページはタスクごとに基準と今回を並べ、seedごとの結果を表示します。成功は●、失敗は×、未判定は–、実行中は…、記録がないセルは空欄です。同じseedの再試行は最後を表示し、「再試行あり」と示します。基準が成功で今回が失敗なら、「悪化」の文字と枠を付けます。条件の違いと、記録された集計と表の件数が一致しない場合の案内も表示します。
+
+GMOの記録も一覧に含めるには、[GMOの接続設定](gmo.md#gmoの記録を手元へ取ってくる)を用意し、`bash Start-Replay.sh --from-gmo`、またはサーバーの `--gmo` を使います。比較表から開いた試行が手元になければ、その1件を自動で取り込んで開きます。取り込みは1 GiB未満で、同じrun IDが複数の場所にあれば停止して理由を表示します。取り込む際に `eval.json` も保存するため、取り込み済みの評価はGMOへ接続できないときも比較できます。
+
+## 合成デモで確かめる
+
+実際の評価・モデル推論を使わず、基準と改良の2評価を作れます。既存の出力先は上書きしません。
+
+```bash
+.venv/bin/python scripts/make_replay_demo.py --evals --out outputs/evals_demo
+bash Start-Replay.sh --python .venv/bin/python \
+  --trace-root outputs/evals_demo/traces --runner-root outputs/evals_demo/runner
+```
+
+`/evals` で「並列候補の変更（合成デモ）」を開き、`cube_lifting` のseed 401の悪化したセルを押すと、試行の録画とログへ進めます。seed 402には再試行も含みます。`--evals` を付けない場合のデモ出力は従来どおりです。
+
+PlaywrightのChromiumを導入済みなら、起動したまま別端末で次を実行すると、一覧→比較→録画→戻ると、未取得の1試行を模擬GMOから取り込む流れを確認できます。
+
+```bash
+.venv/bin/python scripts/demo/check_evals.py --fixture outputs/evals_demo
+```
