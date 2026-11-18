@@ -65,6 +65,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
         if (state.saveError) return { status: 400, json: { detail: state.saveError } };
         const saved = sent.body as GmoSettings;
         state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.mine.length || saved.team.length)) };
+        state.auto = { ...state.auto, interval_s: saved.interval_s, enabled: Boolean(saved.host && saved.mine.length && saved.interval_s > 0) };
       }
       return { json: state.config, latency: state.configLatency };
     }
@@ -332,7 +333,7 @@ test('unconfigured GMO opens the labelled connection settings without listing re
   assert.match(text(page.output), /~\/\.ssh\/config/);
   assert.match(text(page.output), /ssh-agent/);
   assert.match(text(page.output), /パスフレーズ/);
-  assert.equal(findAll(page.output, 'select').some(el => el.props['aria-label'] === '自動取り込みの間隔'), false);
+  assert.equal(intervalSelect(page.output).props.value, '120');
   assert.match(text(page.output), /接続先と自分の記録の場所を設定してください/);
   assert.equal(findAll(page.output, 'input').find(el => el.props.type === 'checkbox')?.props.disabled, true);
   assert.equal(state.sent.some(req => req.path === '/api/gmo/episodes'), false);
@@ -654,6 +655,80 @@ async function saveForm(output: unknown): Promise<void> {
   await advance(100);
 }
 
+function intervalSelect(output: unknown): FakeElement {
+  const label = findAll(output, 'label').find(el => text(el) === '自動取り込みの間隔');
+  assert.ok(label, 'the interval select has a visible label');
+  assert.ok(label!.props.htmlFor, 'the label is associated with its control');
+  const select = findAll(output, 'select').find(el => el.props.id === label!.props.htmlFor);
+  assert.ok(select, 'the interval label refers to a select');
+  return select!;
+}
+
+for (const interval of [60, 120, 300, 0]) {
+  test(`GMO initializes the interval select from the current settings (${interval} seconds)`, async () => {
+    const state = setup(); state.config.settings.interval_s = interval;
+    const page = mountGmo(state.config); await advance(100);
+    click(page.output, '接続設定'); await advance(0);
+    const select = intervalSelect(page.output);
+    assert.equal(select.props.value, String(interval));
+    assert.deepEqual(findAll(select, 'option').map(el => [String(el.props.value), text(el)]), [
+      ['60', '1 分'], ['120', '2 分（既定）'], ['300', '5 分'], ['0', '取り込まない'],
+    ]);
+    page.unmount();
+  });
+}
+
+for (const interval of [60, 120, 300]) {
+  test(`GMO saves the selected interval with the other settings (${interval} seconds)`, async () => {
+    const state = setup(); state.config.settings.interval_s = interval === 120 ? 300 : 120;
+    const page = mountGmo(state.config); await advance(100);
+    click(page.output, '接続設定'); await advance(0);
+    change(page.output, '自動取り込みの間隔', String(interval)); await advance(0);
+    assert.equal(intervalSelect(page.output).props.value, String(interval));
+    await saveForm(page.output);
+    const saved = state.sent.find(req => req.path === '/api/gmo/config' && req.method === 'PUT');
+    assert.deepEqual(saved?.body, settings({ interval_s: interval }));
+    assertGmoHeaders(state.sent); page.unmount();
+  });
+}
+
+for (const [interval, label] of [[600, '10 分（設定ファイルの値）'], [90, '90 秒（設定ファイルの値）']] as const) {
+  test(`GMO preserves a custom configuration interval without editing it (${interval} seconds)`, async () => {
+    const state = setup(); state.config.settings.interval_s = interval;
+    const page = mountGmo(state.config); await advance(100);
+    click(page.output, '接続設定'); await advance(0);
+    const select = intervalSelect(page.output);
+    assert.equal(select.props.value, String(interval));
+    assert.deepEqual(findAll(select, 'option').map(el => String(el.props.value)), ['60', '120', '300', '0', String(interval)]);
+    assert.equal(text(findAll(select, 'option').find(el => String(el.props.value) === String(interval))), label);
+    await saveForm(page.output);
+    const saved = state.sent.find(req => req.path === '/api/gmo/config' && req.method === 'PUT');
+    assert.deepEqual(saved?.body, settings({ interval_s: interval }));
+    page.unmount();
+  });
+}
+
+test('GMO explains stopping automatic imports and shows disabled status after saving zero', async () => {
+  const state = setup();
+  const page = mountGmo(state.config); await advance(100);
+  click(page.output, '接続設定'); await advance(0);
+  assert.doesNotMatch(text(page.output), /自動取り込みは無効/);
+  change(page.output, '自動取り込みの間隔', '0'); await advance(0);
+  const descriptionId = intervalSelect(page.output).props['aria-describedby'];
+  assert.ok(descriptionId, 'the stopping explanation is associated with the interval select');
+  const description = findAll(page.output, 'p').find(el => el.props.id === descriptionId);
+  assert.match(text(description), /保存すると自動取り込みが止まります/);
+  assert.doesNotMatch(text(page.output), /自動取り込みは無効/, 'selection takes effect when saved');
+  await saveForm(page.output);
+  const saved = state.sent.find(req => req.path === '/api/gmo/config' && req.method === 'PUT');
+  assert.deepEqual(saved?.body, settings({ interval_s: 0 }));
+  assert.ok(findAll(page.output, 'span').some(el => el.props.role === 'status' && /自動取り込みは無効/.test(text(el))));
+  const autoToggle = findAll(page.output, 'input').find(el => el.props['aria-label'] === '自分の試行を自動で取り込む');
+  assert.equal(autoToggle?.props.checked, false);
+  assert.equal(autoToggle?.props.disabled, true);
+  assertGmoHeaders(state.sent); page.unmount();
+});
+
 test('GMO saves labelled settings as JSON then checks and reports counts', async () => {
   const state = setup([], false);
   state.config.settings.interval_s = 300;
@@ -689,6 +764,7 @@ test('GMO can repair an unreadable configuration by saving editable connection s
   const state = setup([], false);
   const page = mountGmo(null, () => {}, 'Invalid JSON in GMO settings'); await advance(100);
   assert.match(text(page.output), /Invalid JSON in GMO settings/);
+  assert.equal(intervalSelect(page.output).props.value, '120', 'missing settings default to two minutes');
   assert.notEqual(findAll(page.output, 'fieldset')[0].props.disabled, true, 'failed GET /config does not prevent repair');
   change(page.output, '接続先', 'gmo'); await advance(0);
   change(page.output, '自分の記録の場所', '/mine/traces'); await advance(0);
