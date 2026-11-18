@@ -2,7 +2,7 @@
 """GMO settings, remote discovery, and trace copying shared by the API and CLI.
 
 The legacy CLI copies whole runs; the server lists episodes and copies only the
-selected episode and its run.json. Both use ssh and rsync without GMO-side writes.
+selected episode and its run metadata. Both use ssh and rsync without GMO-side writes.
 The CLI retains CAPX_GMO_HOST, CAPX_GMO_TRACES and CAPX_GMO_SSH compatibility.
 """
 from __future__ import annotations
@@ -407,7 +407,7 @@ class ProcessRunner:
 REMOTE_EPISODE_LISTER = r"""
 import glob, hashlib, json, os, pwd, stat, sys, time
 
-def read_json(path):
+def read_json(path, strict=False):
     try:
         st = os.lstat(path)
         if not stat.S_ISREG(st.st_mode):
@@ -420,7 +420,11 @@ def read_json(path):
             return None, 'too_large', st.st_mtime
         try:
             replacements = {'NaN': 'nan', 'Infinity': 'inf', '-Infinity': '-inf'}
-            return json.loads(data, parse_constant=lambda value: replacements.get(value, value)), None, st.st_mtime
+            def constant(value):
+                if strict:
+                    raise ValueError('nonfinite JSON number')
+                return replacements.get(value, value)
+            return json.loads(data, parse_constant=constant), None, st.st_mtime
         except (UnicodeError, ValueError, RecursionError):
             return None, 'invalid_json', st.st_mtime
     except FileNotFoundError:
@@ -473,6 +477,7 @@ mine, team = json.loads(sys.argv[1])
 include_files = len(sys.argv) > 2 and sys.argv[2] == 'files'
 mine_only = len(sys.argv) > 3 and sys.argv[3] == 'mine'
 out = []
+evals = []
 seen = {}
 run_paths = {}
 for scope, patterns in (('mine', mine), ('team', team)):
@@ -505,6 +510,11 @@ for scope, patterns in (('mine', mine), ('team', team)):
                     continue
                 rows = []
                 run_json, run_error, run_mtime = read_json(os.path.join(run, 'run.json'))
+                eval_json, eval_error, eval_mtime = read_json(os.path.join(run, 'eval.json'), strict=True)
+                if eval_error != 'missing':
+                    evals.append(dict(run_id=name, path=real, owner=owner, mine=scope == 'mine',
+                                      eval_json=eval_json, eval_json_error=eval_error,
+                                      eval_mtime=eval_mtime))
                 for episode_id in names:
                     episode = os.path.join(run, episode_id)
                     if os.path.islink(episode) or not os.path.isdir(episode):
@@ -531,13 +541,16 @@ for scope, patterns in (('mine', mine), ('team', team)):
                         run_st = regular(os.path.join(run, 'run.json'))
                         if run_st:
                             manifest.append(['run.json', run_st.st_size, int(run_st.st_mtime)])
+                        eval_st = regular(os.path.join(run, 'eval.json'))
+                        if eval_st:
+                            manifest.append(['eval.json', eval_st.st_size, int(eval_st.st_mtime)])
                         rows[-1]['files'] = manifest
                 out.extend(rows)
 remote_now = time.time()
-for row in out:
+for row in out + evals:
     row['conflict'] = len(run_paths[row['run_id']]) > 1
     row['remote_now'] = remote_now
-print(json.dumps(out, ensure_ascii=True))
+print(json.dumps({'episodes': out, 'evals': evals}, ensure_ascii=True))
 """
 
 
@@ -561,6 +574,9 @@ files = []
 run_json = regular(os.path.join(run, 'run.json'))
 if run_json:
     files.append(['run.json', run_json.st_size, int(run_json.st_mtime)])
+eval_json = regular(os.path.join(run, 'eval.json'))
+if eval_json:
+    files.append(['eval.json', eval_json.st_size, int(eval_json.st_mtime)])
 for base, dirs, names in os.walk(episode):
     dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(base, d)))
     for name in sorted(names):
@@ -591,14 +607,16 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
 
 
 def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
-                         include_files: bool = False, mine_only: bool = False) -> list[dict[str, Any]]:
+                         include_files: bool = False, mine_only: bool = False) -> dict[str, list[dict[str, Any]]]:
     if not settings.configured:
         raise FetchError("GMO host and at least one trace pattern are required")
     payload = json.dumps([settings.mine, settings.team])
     args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
-    rows = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
-    if not isinstance(rows, list):
+    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
+    if (not isinstance(listing, dict) or not isinstance(listing.get("episodes"), list)
+            or not isinstance(listing.get("evals"), list)):
         raise FetchError("Unexpected episode list from GMO")
+    rows, evals = listing["episodes"], listing["evals"]
     locations: dict[str, set[str]] = {}
     valid: list[dict[str, Any]] = []
     for row in rows:
@@ -621,9 +639,29 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
             raise FetchError("Unexpected episode list from GMO") from exc
         locations.setdefault(run_id, set()).add(path)
         valid.append(row)
-    for row in valid:
+    for row in evals:
+        try:
+            run_id, path = row["run_id"], row["path"]
+            _validate_run_path(run_id, path)
+            if (type(row["mine"]) is not bool or not isinstance(row["owner"], str)
+                    or len(row["owner"]) > 200):
+                raise FetchError("Unexpected evaluation owner from GMO")
+            if (row["eval_json_error"] is not None
+                    and row["eval_json_error"] not in {"missing", "not_a_regular_file", "too_large",
+                                                       "invalid_json", "unreadable"}):
+                raise FetchError("Unexpected evaluation metadata error from GMO")
+            for key in ("eval_mtime", "remote_now"):
+                value = row[key]
+                if value is None and key == "eval_mtime":
+                    continue
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    raise FetchError("Unexpected evaluation clock value from GMO")
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise FetchError("Unexpected evaluation list from GMO") from exc
+        locations.setdefault(run_id, set()).add(path)
+    for row in valid + evals:
         row["conflict"] = bool(row.get("conflict")) or len(locations[row["run_id"]]) > 1
-    return valid
+    return {"episodes": valid, "evals": evals}
 
 
 def local_episode_stats(episode: Path) -> tuple[int, int, int | None, str] | None:
@@ -715,7 +753,8 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
         check_runs([run])
         if len({rel for rel, _, _ in run.files}) != len(run.files):
             raise FetchError("Duplicate episode file from GMO")
-        if any(rel != "run.json" and not rel.startswith(episode_id + "/") for rel, _, _ in run.files):
+        if any(rel not in ("run.json", "eval.json") and not rel.startswith(episode_id + "/")
+               for rel, _, _ in run.files):
             raise FetchError("Unexpected file path from GMO")
     except (KeyError, TypeError, ValueError) as exc:
         raise FetchError("Unexpected episode files from GMO") from exc
@@ -728,6 +767,7 @@ def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[
         raise FetchError("Local destination contains a symlink")
     _check_local_links(local_run / episode_id)
     _check_local_links(local_run / "run.json")
+    _check_local_links(local_run / "eval.json")
     return changed_files(run, local_run)
 
 
@@ -799,7 +839,7 @@ def prefetch_mine(dest: Path) -> int:
                                 settings.mine, (), settings.interval_s)
         runner = ProcessRunner()
         try:
-            rows = list_remote_episodes(runner, mine_only)
+            rows = list_remote_episodes(runner, mine_only)["episodes"]
             if any(row["conflict"] for row in rows):
                 raise FetchError("A run ID exists in more than one GMO location")
             # Plan every episode first. Reuse these manifests so only the files

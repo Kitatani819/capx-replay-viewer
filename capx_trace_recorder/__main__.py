@@ -41,6 +41,10 @@ def _read_hook_for_change(path: Path, parser: argparse.ArgumentParser) -> str | 
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "eval":
+        from capx_trace_recorder.eval import main as eval_main
+
+        raise SystemExit(eval_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "run":
         words = sys.argv[2:]
         if words in (["-h"], ["--help"]):
@@ -82,6 +86,7 @@ def main() -> None:
     for name in ("install-pth", "uninstall-pth", "status"):
         sub.add_parser(name)
     sub.add_parser("run")
+    sub.add_parser("eval")
     args = parser.parse_args()
     path = pth_path()
     detail = f"python={sys.executable} CAPX_TRACE_DIR={'set' if os.environ.get('CAPX_TRACE_DIR', '').strip() else 'unset'}"

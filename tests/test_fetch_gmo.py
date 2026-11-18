@@ -126,7 +126,7 @@ def episode_import(remote, monkeypatch):
     monkeypatch.setenv("CAPX_GMO_SSH_COMMAND", remote["ssh"])
     settings = gmo.GmoSettings(host="fakehost", mine=(str(remote["root"]),))
     runner = gmo.ProcessRunner()
-    row, = gmo.list_remote_episodes(runner, settings)
+    row, = gmo.list_remote_episodes(runner, settings)["episodes"]
     try:
         yield remote, runner, settings, row
     finally:
@@ -152,6 +152,15 @@ def test_episode_fetch_uses_only_preflight_manifest(episode_import, monkeypatch)
     assert (local / "events.jsonl").is_file()
     assert not (local / added.name).exists()
     assert not (local / "outside").exists()
+
+
+def test_episode_fetch_includes_eval_metadata(episode_import):
+    remote, runner, settings, row = episode_import
+    source = remote["root"] / "run_a" / "eval.json"
+    source.write_text('{"schema":"capx-eval/1","eval_id":"run_a"}')
+    assert gmo.fetch_episode(runner, settings, row, remote["dest"]) > 0
+    assert (remote["dest"] / "run_a" / "eval.json").read_bytes() == source.read_bytes()
+    assert gmo.fetch_episode(runner, settings, row, remote["dest"]) == 0
 
 
 def test_episode_fetch_uses_one_listing_and_one_rsync_ssh(episode_import, monkeypatch, tmp_path):
@@ -249,7 +258,7 @@ def test_episode_fetch_updates_empty_heartbeat_and_adds_empty_file(episode_impor
     local = remote["dest"] / "run_a" / "ep_1"
     assert int((local / "heartbeat").stat().st_mtime) == new_mtime
     assert (local / "new_empty").is_file()
-    refreshed, = gmo.list_remote_episodes(runner, settings)
+    refreshed, = gmo.list_remote_episodes(runner, settings)["episodes"]
     assert gmo.local_state(refreshed, remote["dest"]) == "local"
 
 
@@ -269,7 +278,7 @@ def test_episode_fetch_rejects_exactly_one_gib_before_copy(tmp_path, monkeypatch
         runner.close()
 
 
-@pytest.mark.parametrize("relative", ["run.json", "ep_1/events.jsonl", "ep_1/nested/other"])
+@pytest.mark.parametrize("relative", ["run.json", "eval.json", "ep_1/events.jsonl", "ep_1/nested/other"])
 def test_episode_fetch_rejects_existing_hardlinks(tmp_path, monkeypatch, relative):
     dest = tmp_path / "dest"
     target = dest / "run_a" / relative
@@ -301,7 +310,7 @@ def test_prefetch_plans_all_episodes_then_fits_newest_under_total_limit(tmp_path
     planned = []
     copied = []
     monkeypatch.setattr(gmo, "load_settings", lambda: settings)
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: rows)
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: {"episodes": rows, "evals": []})
 
     def manifest(runner, config, row):
         assert not copied  # Every remote manifest must precede the first copy.
@@ -333,7 +342,7 @@ def test_prefetch_skips_exact_one_gib_and_starts(tmp_path, monkeypatch, capsys):
     row = {"run_id": "run_a", "episode_id": "ep_1", "path": "/remote/run_a",
            "conflict": False, "max_mtime": 1}
     monkeypatch.setattr(gmo, "load_settings", lambda: gmo.GmoSettings(host="alias", mine=("/remote",)))
-    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: [row])
+    monkeypatch.setattr(gmo, "list_remote_episodes", lambda *a: {"episodes": [row], "evals": []})
     monkeypatch.setattr(gmo, "_episode_files", lambda *a: gmo.RemoteRun(
         "run_a", "/remote/run_a", [("ep_1/events.jsonl", gmo.MAX_FETCH_BYTES, 1)]))
     monkeypatch.setattr(gmo, "_transfer_episode", lambda *a, **kw: pytest.fail("over-budget transfer"))

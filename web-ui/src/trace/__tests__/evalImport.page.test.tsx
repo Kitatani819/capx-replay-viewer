@@ -1,0 +1,92 @@
+/** Only the missing URL episode is imported; failures keep a comparison link. */
+import { advance, findAll, net, propsOf, resetBrowser, setLocation, type FakeElement } from './harness/browser';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mount } from './harness/fakeReact';
+import TraceViewerPage from '../TraceViewerPage';
+import { TopBar } from '../components/TopBar';
+import type { GmoEpisodeSummary, GmoJob } from '../api';
+import { addEpisode, ev, makeRun, serve } from './pageServer';
+
+const browserFetch = globalThis.fetch;
+function text(node: unknown): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(text).join('');
+  if (typeof node === 'object' && 'props' in node) return text((node as FakeElement).props.children);
+  return '';
+}
+function setup() {
+  resetBrowser();
+  const run = makeRun('ev-demo');
+  serve(run); const traceHandler = net.handler;
+  const row: GmoEpisodeSummary = { run_id: run.runId, episode_id: 'target', task: 'cube', seed: 401, status: 'ended', owner: 'alice', mine: false, size_bytes: 2048, local_state: 'remote', conflict: false };
+  const state = { rows: [row], enabled: true, configured: true, configStatus: 200, fetchStatus: 200,
+    job: { job_id: 'job_1', run_id: run.runId, episode_id: 'target', state: 'queued', bytes: 0, error: null, note: null, started_at: null, finished_at: null } as GmoJob,
+    posts: [] as { path: string; body: unknown }[] };
+  globalThis.fetch = (input, init) => {
+    if (init?.method === 'POST') state.posts.push({ path: new URL(String(input), 'http://localhost').pathname, body: JSON.parse(String(init.body)) as unknown });
+    return browserFetch(input, init);
+  };
+  net.handler = req => {
+    if (req.path === '/api/gmo/config') return { status: state.configStatus, json: { enabled: state.enabled, configured: state.configured } };
+    if (req.path === '/api/gmo/episodes') { assert.equal(req.query.get('scope'), 'all'); return { json: state.rows }; }
+    if (req.path === '/api/gmo/fetch') return state.fetchStatus === 200 ? { json: { job_id: 'job_1' } } : { status: state.fetchStatus, json: { detail: '1 GiB transfer limit' } };
+    if (req.path === '/api/gmo/jobs') return { json: [state.job] };
+    return traceHandler(req);
+  };
+  setLocation('/traces?run=ev-demo&episode=target');
+  const complete = () => {
+    state.job.state = 'done';
+    addEpisode(run, 'target', { status: 'ended', task: 'cube', trace_complete: true }, [ev('target', 1, 'episode_start', { task: 'cube' }), ev('target', 2, 'episode_end', { end_reason: 'completed', trace_complete: true })]);
+  };
+  return { state, row, run, complete };
+}
+test('missing trial follows discovery, one fetch and jobs, then opens local trace', async () => {
+  const { state, complete } = setup();
+  state.rows.push({ ...state.rows[0], episode_id: 'unrelated' });
+  const page = mount(TraceViewerPage, {});
+  await advance(100);
+  assert.match(text(page.output), /GMOから取り込み中（2.0 KB）/);
+  assert.deepEqual(state.posts, [{ path: '/api/gmo/fetch', body: { run_id: 'ev-demo', episode_id: 'target' } }]);
+  assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo'));
+  complete(); await advance(1500);
+  assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
+  assert.doesNotMatch(text(page.output), /GMOから取り込み中/);
+  assert.equal(state.posts.length, 1);
+  page.unmount();
+});
+for (const reason of ['disabled', 'unconfigured', 'absent', 'large', 'conflict', 'duplicate', 'fetch-limit', 'job-failure'] as const) {
+  test(`missing trial explains ${reason} and links back without unrelated imports`, async () => {
+    const { state, row } = setup();
+    let expected: RegExp;
+    if (reason === 'disabled') { state.configStatus = 404; expected = /GMO連携を有効にすると自動で取り込みます/; }
+    else if (reason === 'unconfigured') { state.configured = false; expected = /GMO連携を有効にすると自動で取り込みます/; }
+    else if (reason === 'absent') { state.rows = []; expected = /GMO にも見つかりません/; }
+    else if (reason === 'large') { row.size_bytes = 1024 ** 3; expected = /1 GiB の上限/; }
+    else if (reason === 'conflict') { row.conflict = true; expected = /複数の場所/; }
+    else if (reason === 'duplicate') { state.rows.push({ ...row }); expected = /複数の場所/; }
+    else if (reason === 'fetch-limit') { state.fetchStatus = 413; expected = /1 GiB transfer limit/; }
+    else { state.job.state = 'failed'; state.job.error = 'rsync failed'; expected = /rsync failed/; }
+    const page = mount(TraceViewerPage, {}); await advance(100);
+    assert.match(text(page.output), expected);
+    assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo'));
+    assert.equal(state.posts.length, reason === 'fetch-limit' || reason === 'job-failure' ? 1 : 0);
+    page.unmount();
+  });
+}
+test('local trial never looks at GMO', async () => {
+  const { complete } = setup(); complete();
+  const page = mount(TraceViewerPage, {}); await advance(100);
+  assert.equal(net.log.filter(req => req.path.startsWith('/api/gmo/')).length, 0);
+  page.unmount();
+});
+test('navigation cancels pending discovery so it cannot import the previous trial', async () => {
+  const { state, complete } = setup();
+  const handler = net.handler;
+  net.handler = req => req.path === '/api/gmo/episodes' ? { json: state.rows, latency: 5000 } : handler(req);
+  const page = mount(TraceViewerPage, {}); await advance(100);
+  complete();
+  page.unmount(); await advance(6000);
+  assert.equal(state.posts.length, 0);
+});

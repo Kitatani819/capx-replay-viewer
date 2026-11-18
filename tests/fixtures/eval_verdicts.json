@@ -1,0 +1,1263 @@
+[
+  {
+    "name": "failed attempt before successful retry",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "successful last retry",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 2,
+      "start_wall_time": 1150,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "success"
+  },
+  {
+    "name": "running overrides recorded success",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "running"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "running"
+  },
+  {
+    "name": "harness task false overrides execution success",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": false,
+          "success": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "failure"
+  },
+  {
+    "name": "harness task true despite execution failure",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true,
+          "success": false
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "success"
+  },
+  {
+    "name": "generic execution success is not task success",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "success": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "sandbox zero permits harness task result",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "episode": {
+        "harness_summary": {
+          "sandbox_rc": 0,
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "success"
+  },
+  {
+    "name": "sandbox positive permits harness task result",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "episode": {
+        "harness_summary": {
+          "sandbox_rc": 1,
+          "task_completed": false
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "failure"
+  },
+  {
+    "name": "sandbox negative does not permit task result",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "episode": {
+        "harness_summary": {
+          "sandbox_rc": -15,
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "sandbox bool is not number",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "episode": {
+        "harness_summary": {
+          "sandbox_rc": true,
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "task_completed number is unknown",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": 1
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "harness array ignored",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": []
+      }
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "no metadata is unknown",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [],
+    "expected": "unknown"
+  },
+  {
+    "name": "null attempt result stops fallback",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": null
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "false attempt result wins over final outcome",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "missing earlier task result cannot inherit final",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z"
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "missing final task result uses final outcome",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 2,
+      "start_wall_time": 1150,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z"
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "success"
+  },
+  {
+    "name": "missing final outcome task success stops harness fallback",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": {}
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "null outcome permits harness fallback",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": null
+      }
+    ],
+    "expected": "success"
+  },
+  {
+    "name": "other task does not match",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "other",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "trial is an alias for seed",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        },
+        "trial": 1
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "bool seed does not match integer",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": true,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "different invocation selected by time",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      },
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:30:00Z",
+            "ended_at": "1970-01-01T00:40:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "ambiguous matching records do not decide outcome",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      },
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "untimed single record with known episode time is not matched",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "episode without time accepts single matching attempt",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "episode without time rejects ambiguous records",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      },
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "no index and one attempt accepts untimed episode",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": null,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "no index and multiple attempts remain unknown without time",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": null,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "time margin includes two seconds",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 998,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "time margin excludes beyond two seconds",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 997.9,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "point record outside episode time does not match",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:30:00Z",
+            "ended_at": "1970-01-01T00:30:00Z",
+            "task_success": false
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "point record containing episode time matches",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1000,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:16:40Z",
+            "task_success": false
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "missing runner keys are undefined not null",
+    "episode": {
+      "episode_id": "e",
+      "task": null,
+      "condition": null,
+      "seed": null,
+      "attempt_index": 1,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          }
+        ]
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "explicit null runner keys match null episode keys",
+    "episode": {
+      "episode_id": "e",
+      "task": null,
+      "condition": null,
+      "seed": null,
+      "attempt_index": 1,
+      "start_wall_time": null,
+      "status": "ended"
+    },
+    "runner_records": [
+      {
+        "task": null,
+        "condition": null,
+        "seed": null,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z",
+            "task_success": false
+          },
+          {
+            "attempt_id": 2,
+            "started_at": "1970-01-01T00:18:21Z",
+            "ended_at": "1970-01-01T00:20:00Z",
+            "task_success": true
+          }
+        ],
+        "outcome": {
+          "task_success": true
+        }
+      }
+    ],
+    "expected": "failure"
+  },
+  {
+    "name": "malformed array final outcome uses JavaScript truthiness",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": []
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "malformed boolean final outcome uses JavaScript truthiness",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": true
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "malformed string final outcome uses JavaScript truthiness",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": "bad"
+      }
+    ],
+    "expected": "unknown"
+  },
+  {
+    "name": "malformed false final outcome uses JavaScript truthiness",
+    "episode": {
+      "episode_id": "e",
+      "task": "cube",
+      "condition": "S",
+      "seed": 1,
+      "attempt_index": 1,
+      "start_wall_time": 1001,
+      "status": "ended",
+      "end_reason": "completed",
+      "episode": {
+        "harness_summary": {
+          "task_completed": true
+        }
+      }
+    },
+    "runner_records": [
+      {
+        "task": "cube",
+        "condition": "S",
+        "seed": 1,
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "started_at": "1970-01-01T00:16:40Z",
+            "ended_at": "1970-01-01T00:18:20Z"
+          }
+        ],
+        "outcome": false
+      }
+    ],
+    "expected": "success"
+  }
+]

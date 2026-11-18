@@ -22,3 +22,4 @@ def test_missing_frontend_omits_selected_dist(tmp_path):
         response = client.get(route)
         assert response.status_code == 503
         assert str(dist) not in response.text
+    assert client.get("/api/unregistered").status_code == 404

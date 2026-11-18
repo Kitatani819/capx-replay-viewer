@@ -174,3 +174,88 @@ def test_remote_first_event_accepts_64_kib_complete_line(metadata_source):
     (episode / "events.jsonl").write_bytes(first + b"x" * (128 * 1024))
     row, = service.remote_rows()
     assert row["first_event"] == event
+
+
+def test_remote_evals_include_empty_runs_and_share_episode_cache(metadata_source, monkeypatch):
+    episode, service, settings = metadata_source
+    (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
+    record = {"schema": "capx-eval/1", "eval_id": "run_a"}
+    (episode.parent / "eval.json").write_text(json.dumps(record))
+    empty = episode.parent.parent / "empty"
+    empty.mkdir()
+    (empty / "eval.json").write_text("{}")
+    calls = []
+    original = service.runner.run
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.runner, "run", counted)
+    listing = service.remote_listing()
+    assert len(listing["episodes"]) == 1
+    assert [row["run_id"] for row in listing["evals"]] == ["empty", "run_a"]
+    row = next(row for row in listing["evals"] if row["run_id"] == "run_a")
+    assert row["eval_json"] == record and row["eval_json_error"] is None
+    assert row["path"] == str(episode.parent) and row["mine"] is True
+    assert isinstance(row["owner"], str) and row["eval_mtime"] > 0
+    assert row["conflict"] is False
+    assert service.remote_evals() == listing["evals"]
+    assert service.remote_rows() == listing["episodes"]
+    assert len(calls) == 1
+    service.invalidate()
+    assert [row["eval_json"] for row in service.remote_evals()] == [{}, record]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("damage,error", [
+    ("invalid_json", "invalid_json"), ("nan", "invalid_json"), ("infinity", "invalid_json"),
+    ("too_large", "too_large"), ("not_a_regular_file", "not_a_regular_file"),
+])
+def test_remote_evals_preserve_metadata_errors_without_breaking_discovery(metadata_source, damage, error):
+    episode, service, _settings = metadata_source
+    target = episode.parent / "eval.json"
+    if damage == "invalid_json":
+        target.write_bytes(b"{broken")
+    elif damage in ("nan", "infinity"):
+        target.write_text('{"summary":{"config_flags":{"value":%s}}}'
+                          % ("NaN" if damage == "nan" else "Infinity"))
+    elif damage == "too_large":
+        target.write_bytes(b" " * (gmo.MAX_METADATA_BYTES + 1))
+    else:
+        target.symlink_to(episode.parent / "run.json")
+    row, = service.remote_evals()
+    assert row["eval_json"] is None and row["eval_json_error"] == error
+
+
+def test_remote_mine_only_evals_and_conflicts_without_team_episode_walk(metadata_source, tmp_path):
+    episode, service, settings = metadata_source
+    (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
+    (episode.parent / "eval.json").write_text("{}")
+    team = tmp_path / "team"
+    for name in ("run_a", "team_only"):
+        run = team / name
+        run.mkdir(parents=True)
+        (run / "eval.json").write_text("{}")
+    settings = gmo.GmoSettings(host=settings.host, mine=settings.mine, team=(str(team),))
+    listing = gmo.list_remote_episodes(service.runner, settings, mine_only=True)
+    assert [row["run_id"] for row in listing["evals"]] == ["run_a"]
+    assert listing["evals"][0]["conflict"] is True
+    assert listing["episodes"][0]["conflict"] is True
+    all_rows = gmo.list_remote_episodes(service.runner, settings)
+    assert [(row["run_id"], row["mine"]) for row in all_rows["evals"]] == [
+        ("run_a", True), ("run_a", False), ("team_only", False),
+    ]
+
+
+def test_eval_metadata_is_in_discovery_and_manual_episode_manifests(metadata_source):
+    episode, service, settings = metadata_source
+    (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
+    (episode.parent / "eval.json").write_text("{}")
+    row, = gmo.list_remote_episodes(service.runner, settings, include_files=True)["episodes"]
+    discovery = gmo.episode_manifest(row, row)
+    manual = gmo._episode_files(service.runner, settings, row)
+    assert sorted(discovery.files) == sorted(manual.files)
+    assert {rel for rel, _, _ in manual.files} >= {"run.json", "eval.json", "ep_1/events.jsonl"}
+    with pytest.raises(gmo.FetchError, match="Unexpected file path"):
+        gmo.episode_manifest(row, {"files": [["other/eval.json", 2, 1]]})

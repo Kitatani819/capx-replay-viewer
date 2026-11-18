@@ -31,7 +31,7 @@ class GmoService:
         self.max_fetch_bytes = gmo.MAX_FETCH_BYTES
         self._lock = threading.Lock()
         self._refresh_lock = threading.Lock()
-        self._cache: list[dict[str, Any]] | None = None
+        self._cache: dict[str, list[dict[str, Any]]] | None = None
         self._cache_settings: gmo.GmoSettings | None = None
         self._cache_until = 0.0
         self._generation = 0
@@ -166,7 +166,8 @@ class GmoService:
             self._auto_skipped = []
         try:
             with self._refresh_lock:
-                rows = gmo.list_remote_episodes(self.runner, settings, include_files=True, mine_only=True)
+                rows = gmo.list_remote_episodes(self.runner, settings, include_files=True,
+                                               mine_only=True)["episodes"]
                 plans = []
                 for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
                                   reverse=True):
@@ -219,9 +220,16 @@ class GmoService:
         return self.auto_status()
 
     def remote_rows(self, *, refresh: bool = False) -> list[dict[str, Any]]:
+        return self.remote_listing(refresh=refresh)["episodes"]
+
+    def remote_evals(self, *, refresh: bool = False) -> list[dict[str, Any]]:
+        return self.remote_listing(refresh=refresh)["evals"]
+
+    def remote_listing(self, *, refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
         return self._remote_snapshot(refresh=refresh)[0]
 
-    def _remote_snapshot(self, *, refresh: bool = False) -> tuple[list[dict[str, Any]], gmo.GmoSettings, int]:
+    def _remote_snapshot(self, *, refresh: bool = False) -> tuple[dict[str, list[dict[str, Any]]],
+                                                               gmo.GmoSettings, int]:
         with self._refresh_lock:
             with self._lock:
                 settings = gmo.load_settings()
@@ -272,8 +280,8 @@ class GmoService:
                 raise gmo.FetchError("GMO service is shutting down")
             if key in self._pending:
                 raise HTTPException(409, "This episode is already queued or running")
-        rows, settings, generation = self._remote_snapshot()
-        matches = [row for row in rows if (row["run_id"], row["episode_id"]) == key]
+        listing, settings, generation = self._remote_snapshot()
+        matches = [row for row in listing["episodes"] if (row["run_id"], row["episode_id"]) == key]
         if not matches:
             raise HTTPException(404, "Episode not found on GMO")
         if any(row["conflict"] for row in matches):

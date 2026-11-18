@@ -3,6 +3,12 @@ import assert from 'node:assert/strict';
 import { episodeVerdict, headerVerdict } from '../outcome';
 import { runnerRecordFor, episodeKeyOf } from '../runner';
 import type { EpisodeSummary, RunnerRecord } from '../types';
+import sharedVerdicts from '../../../../tests/fixtures/eval_verdicts.json';
+for (const item of sharedVerdicts) {
+  test(`shared eval verdict: ${item.name}`, () => {
+    assert.equal(episodeVerdict(item.episode as EpisodeSummary, item.runner_records as RunnerRecord[]), item.expected);
+  });
+}
 const ep: EpisodeSummary = {episode_id:'e',task:'cube',condition:'S',seed:1,attempt_index:1,start_wall_time:1001,status:'ended'};
 const record: RunnerRecord = {task:'cube',condition:'S',seed:1,attempts:[
   {attempt_id:1,started_at:new Date(1000000).toISOString(),ended_at:new Date(1100000).toISOString(),task_success:false},

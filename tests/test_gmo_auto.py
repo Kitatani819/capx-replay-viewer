@@ -124,12 +124,15 @@ def test_auto_skips_run_collision_with_team_without_overwriting(auto_source, mon
 
 
 @pytest.mark.parametrize("metadata", [None, b'{"partial":'])
-def test_auto_repairs_run_metadata_without_episode_changes(auto_source, monkeypatch, metadata):
+@pytest.mark.parametrize("name", ["run.json", "eval.json"])
+def test_auto_repairs_run_metadata_without_episode_changes(auto_source, monkeypatch, metadata, name):
     service, mine, _, log, _, _ = auto_source
     first = _episode(mine, "ep_1")
     _episode(mine, "ep_2")
+    if name == "eval.json":
+        (first.parent / name).write_text('{"schema":"capx-eval/1"}')
     shutil.copytree(first.parent, service.dest / "run_a")
-    local_metadata = service.dest / "run_a" / "run.json"
+    local_metadata = service.dest / "run_a" / name
     if metadata is None:
         local_metadata.unlink()
     else:
@@ -145,8 +148,8 @@ def test_auto_repairs_run_metadata_without_episode_changes(auto_source, monkeypa
     monkeypatch.setattr(gmo, "_transfer_episode", transfer)
     assert service.run_auto_once()["queued_in_last_run"] == 1
     _done(service)
-    assert [rel for rel, _, _ in copied] == ["run.json"]
-    assert local_metadata.read_bytes() == (first.parent / "run.json").read_bytes()
+    assert [rel for rel, _, _ in copied] == [name]
+    assert local_metadata.read_bytes() == (first.parent / name).read_bytes()
     assert service.run_auto_once()["queued_in_last_run"] == 0
     assert log.read_text().splitlines() == ["list", "list"]
 
