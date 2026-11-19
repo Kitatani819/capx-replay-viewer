@@ -33,6 +33,11 @@
 .eval-result { display: inline-flex; min-width: 46px; min-height: 44px; align-items: center; justify-content: center; flex-direction: column; border: 2px solid #c3d1bd; background: #f5f8f1; border-radius: 5px; padding: 4px 8px; font-size: 20px; }
 .eval-page .eval-result:hover, .eval-page .eval-result:focus-visible { border-color: #467e5c; background: #e6efdf; text-decoration: none; }
 .eval-result small { font-size: 11px; line-height: 1.4; white-space: nowrap; }
+/* Words instead of symbols: tone by outcome, text by how a failure ended (readable without colour). */
+.eval-page .eval-result:not(.eval-result-compact) { font-size: 13px; font-weight: 700; min-width: 64px; white-space: nowrap; }
+.eval-page .eval-result-success { border-color: #b7d3bf; background: #e4f0e6; color: #2c6a3f; }
+.eval-page .eval-result-failure { border-color: #e2b4a8; background: #fbe6e1; color: #a33a22; }
+.eval-page .eval-result-unknown, .eval-page .eval-result-running { border-color: #d3d8d0; background: #eef0ec; color: #4f5a53; }
 .eval-page .eval-regression { border-color: #a75f4b; background: #fbefea; color: #8a4134; }
 .eval-page .eval-regression:hover, .eval-page .eval-regression:focus-visible { border-color: #8a4134; background: #f7dfd5; }
 .eval-page .eval-cell .eval-compare-link { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; border: 1px solid #aabb9f; border-radius: 5px; padding: 3px 9px; background: #f5f8f1; font-size: 13px; white-space: nowrap; }

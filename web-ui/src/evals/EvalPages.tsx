@@ -6,6 +6,7 @@ import { VERDICT_LABELS } from '../trace/outcome';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
+import { reasonLabel, trialReason } from './failureReasons';
 import './evals.css';
 
 const STATUS = { running: '実行中', interrupted: '中断', incomplete: '欠損あり' };
@@ -76,13 +77,27 @@ export function EvalListPage() {
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
-function Cell({ cell, evalId, regression, baselineCell, baselineId }: { cell: TrialCell | undefined; evalId: string; regression: boolean; baselineCell?: TrialCell; baselineId?: string }) {
+// Short words for a cell: failures say how they ended, so the table already tells failures apart.
+const CELL_WORDS: Record<string, string> = {
+  success: '成功', error: 'エラー', timeout: '時間切れ', finish_unmet: '未達成', regen_limit: '上限', unknown: '不明',
+};
+// Beyond this many seeds the words no longer fit, so the table falls back to symbols.
+const MAX_SEEDS_FOR_WORDS = 20;
+function cellWord(trial: TrialCell['trial']): { text: string; tone: string } {
+  if (trial.verdict === 'running') return { text: '実行中', tone: 'running' };
+  if (trial.verdict === 'success') return { text: CELL_WORDS.success, tone: 'success' };
+  if (trial.verdict === 'unknown') return { text: '未判定', tone: 'unknown' };
+  const reason = trialReason(trial);
+  return { text: reason !== 'success' ? CELL_WORDS[reason] : '失敗', tone: 'failure' };
+}
+function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: { cell: TrialCell | undefined; evalId: string; regression: boolean; baselineCell?: TrialCell; baselineId?: string; compact: boolean }) {
   if (!cell) return <td className="eval-cell" aria-label="記録なし" />;
   const { trial, retried } = cell;
-  const symbol = { success: '●', failure: '×', unknown: '–', running: '…' }[trial.verdict];
-  const label = `${VERDICT_LABELS[trial.verdict]}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
+  const word = cellWord(trial);
+  const symbol = compact ? { success: '○', failure: '×', unknown: '–', running: '…' }[trial.verdict] : word.text;
+  const label = `${VERDICT_LABELS[trial.verdict]}${trial.verdict === 'failure' ? `（${reasonLabel(trial)}）` : ''}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
   const query = new URLSearchParams({ run: evalId, episode: trial.episode_id });
-  return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result${regression ? ' eval-regression' : ''}`} title="試行を開く" aria-label={`${label}（試行を開く）`}>
+  return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title="試行を開く" aria-label={`${label}（試行を開く）`}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
   </a>{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
 }
@@ -105,7 +120,9 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
       <thead><tr><th scope="col">タスク{table.showConditions ? '・条件' : ''}</th><th scope="col">評価</th>{table.seeds.map(seed => <th key={String(seed)} scope="col">seed {seed ?? '—'}</th>)}</tr></thead>
       <tbody>{table.rows.map(row => <ComparisonRows key={row.key} row={row} seeds={table.seeds} record={record} baseline={baseline} showConditions={table.showConditions} />)}</tbody>
     </table></div> : <p className="eval-empty">試行の記録はまだありません。</p>}
-    <p className="eval-legend">● 成功　× 失敗　– 未判定　… 実行中　空欄 記録なし</p>
+    <p className="eval-legend">{table.seeds.length > MAX_SEEDS_FOR_WORDS
+      ? '○ 成功　× 失敗　– 未判定　… 実行中　空欄 記録なし（seed が多いため記号で表示しています。失敗の種類はマスにカーソルを合わせると出ます）'
+      : '失敗は終わり方で表示します：未達成＝「終わった」と答えたが未達成　時間切れ＝時間切れ・打ち切り　エラー＝エラーで停止　上限＝書き直しの上限　不明・未判定＝記録が足りない　空欄＝記録なし'}</p>
     {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
     <FailureBreakdown detail={detail} />
   </>;
@@ -113,8 +130,8 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
 function ComparisonRows({ row, seeds, record, baseline, showConditions }: {
   row: ReturnType<typeof comparisonTable>['rows'][number]; seeds: (number | null)[]; record: EvalRecord; baseline: EvalRecord | null; showConditions: boolean;
 }) {
-  return <>{baseline && <tr className="eval-task-start"><th scope="rowgroup" rowSpan={2}>{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th><th scope="row">基準</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.baseline.get(seed)} evalId={baseline.eval_id} regression={false} />)}</tr>}
-    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} />)}</tr></>;
+  return <>{baseline && <tr className="eval-task-start"><th scope="rowgroup" rowSpan={2}>{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th><th scope="row">基準</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.baseline.get(seed)} evalId={baseline.eval_id} regression={false} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr>}
+    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr></>;
 }
 export function EvalDetailPage({ evalId }: { evalId: string }) {
   const detail = useAsync(s => evalApi.detail(evalId, s), [evalId]);

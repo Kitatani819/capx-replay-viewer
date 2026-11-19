@@ -51,13 +51,13 @@ test('a later invocation can reset attempt numbers and still supplies the displa
 test('comparison renders regression text and border, retry, blanks, condition differences and trace links', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);
   assert.match(html, /悪化 1件/);
-  assert.match(html, /class="eval-result eval-regression"/);
+  assert.match(html, /class="eval-result eval-result-failure eval-regression"/);
   assert.match(html, /悪化（基準は成功）/);
   assert.match(html, /再試行あり/);
   assert.match(html, /aria-label="記録なし"/);
   assert.match(html, /seed（基準 401、402 \/ 今回 401、403）/);
   assert.match(html, /href="\/traces\?run=improved&amp;episode=c1-retry"/);
-  assert.match(html, /title="試行を開く" aria-label="失敗・悪化（基準は成功）・再試行あり（試行を開く）"/);
+  assert.match(html, /title="試行を開く" aria-label="失敗（未判定・記録不足）・悪化（基準は成功）・再試行あり（試行を開く）"/);
   assert.match(html, /集計と試行の表の数が異なります/);
 });
 test('condition differences show only changed config flags and preserve the API data', () => {
@@ -82,14 +82,26 @@ test('condition differences show only changed model names including an initially
   d.differences = [{ field: 'models', baseline: null, current: { code_generator: 'new-model' } }];
   assert.match(renderToStaticMarkup(<EvalComparison detail={d} />), /code_generator（基準 未記録 \/ 今回 new-model）/);
 });
-test('baseline evaluations show only current row and all four verdict symbols have labels', () => {
+test('baseline evaluations show only current row and every verdict reads as a word with a label', () => {
   const d = detail(); d.eval = record('baseline'); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
   d.trials = ['success', 'failure', 'unknown', 'running'].map((v, i) => trial(`e${i}`, i, v as EvalTrial['verdict']));
+  d.trials[1] = { ...d.trials[1], end_classification: { reason: 'finish_unmet', label: 'FINISHだが未達成', evidence: {} } } as EvalTrial;
   const html = renderToStaticMarkup(<EvalComparison detail={d} />);
   assert.doesNotMatch(html, /scope="row">基準/);
   assert.match(html, /評価（基準）/);
-  for (const label of ['成功', '失敗', '未判定', '実行中']) assert.match(html, new RegExp(`title="試行を開く" aria-label="${label}（試行を開く）"`));
+  for (const label of ['成功', '失敗（FINISHだが未達成）', '未判定', '実行中']) assert.match(html, new RegExp(`title="試行を開く" aria-label="${label}（試行を開く）"`));
+  // Failures show how they ended, not one shared symbol.
+  for (const word of ['成功', '未達成', '未判定', '実行中']) assert.match(html, new RegExp(`<span aria-hidden="true">${word}</span>`));
+  assert.match(html, /失敗は終わり方で表示します/);
   assert.doesNotMatch(html, /class="eval-compare-link"/);
+});
+test('more seeds than fit as words fall back to symbols with their legend', () => {
+  const d = detail(); d.eval = record('baseline'); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
+  d.trials = Array.from({ length: 21 }, (_, i) => trial(`e${i}`, i, i % 2 ? 'failure' : 'success'));
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /<span aria-hidden="true">○<\/span>/);
+  assert.match(html, /<span aria-hidden="true">×<\/span>/);
+  assert.match(html, /seed が多いため記号で表示しています/);
 });
 test('paired current cells offer a separate small compare button beside the trial button', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);
