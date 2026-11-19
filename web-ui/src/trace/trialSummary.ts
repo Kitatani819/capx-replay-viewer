@@ -1,5 +1,6 @@
 /** Small facts from the recorded trace. End classification remains server-owned. */
 import { baselineTrialFor } from '../evals/model';
+import { END_LABELS } from '../evals/failureReasons';
 import type { EvalDetail, EvalTrial } from '../evals/api';
 import { nodeTitle, textOf, type EpisodeModel } from './model';
 import { recordedTurns, turnOf } from './replay';
@@ -106,7 +107,7 @@ export function trialSummaryFacts(model: EpisodeModel, summary: EpisodeSummary) 
     for (const event of events) {
       const choice = recordedDecision(model, event);
       const label = choice === 'REGENERATE' ? '書き直し' : choice === 'FINISH' ?
-        summary.end_classification?.reason === 'finish_unmet' && decision?.event.event_id === event.event_id ? '終了（未達成）' : '終了' :
+        summary.end_classification?.reason === 'finish_unmet' && decision?.event.event_id === event.event_id ? END_LABELS.finish_unmet : '終了' :
         isRecordedError(event) ? 'エラー' : null;
       if (label && labels[labels.length - 1] !== label) { labels.push(label); anchor = event; }
     }

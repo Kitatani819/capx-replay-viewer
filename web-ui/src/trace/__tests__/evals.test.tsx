@@ -5,6 +5,8 @@ import { EvalComparison, EvalListTable } from '../../evals/EvalPages';
 import { comparisonTable, delta, summaryDiffers } from '../../evals/model';
 import type { EvalDetail, EvalRecord, EvalSummary, EvalTrial } from '../../evals/api';
 
+const wordLegend = '成功　エラー＝エラーで停止　時間切れ＝時間切れ・打ち切り　未達成＝「終わった」と答えたが未達成　上限＝書き直しの上限　不明＝失敗したが終わり方が分からない　未判定＝成否が記録から分からない　実行中　空欄＝記録なし';
+
 const summary: EvalSummary = { trials: 2, success: 1, failure: 1, unknown: 0, incomplete: 0, tasks: ['cube'], seeds: [401, 402], models: {}, config_flags: {}, mixed: [] };
 function record(id: string, baseline: string | null = null): EvalRecord {
   return { schema: 'capx-eval/1', eval_id: id, status: 'completed', by: 'alice', changed: baseline ? '把持位置の修正' : '', baseline_eval_id: baseline, eval_set: 'demo',
@@ -57,7 +59,7 @@ test('comparison renders regression text and border, retry, blanks, condition di
   assert.match(html, /aria-label="記録なし"/);
   assert.match(html, /seed（基準 401、402 \/ 今回 401、403）/);
   assert.match(html, /href="\/traces\?run=improved&amp;episode=c1-retry"/);
-  assert.match(html, /title="試行を開く" aria-label="失敗（未判定・記録不足）・悪化（基準は成功）・再試行あり（試行を開く）"/);
+  assert.match(html, /title="試行を開く" aria-label="失敗（終わり方が不明）・悪化（基準は成功）・再試行あり（試行を開く）"/);
   assert.match(html, /集計と試行の表の数が異なります/);
 });
 test('condition differences show only changed config flags and preserve the API data', () => {
@@ -89,10 +91,11 @@ test('baseline evaluations show only current row and every verdict reads as a wo
   const html = renderToStaticMarkup(<EvalComparison detail={d} />);
   assert.doesNotMatch(html, /scope="row">基準/);
   assert.match(html, /評価（基準）/);
-  for (const label of ['成功', '失敗（FINISHだが未達成）', '未判定', '実行中']) assert.match(html, new RegExp(`title="試行を開く" aria-label="${label}（試行を開く）"`));
+  for (const label of ['成功', '失敗（「終わった」と答えたが未達成）', '未判定（成否が記録から分からない）', '実行中']) assert.ok(html.includes(`title="試行を開く" aria-label="${label}（試行を開く）"`), label);
   // Failures show how they ended, not one shared symbol.
   for (const word of ['成功', '未達成', '未判定', '実行中']) assert.match(html, new RegExp(`<span aria-hidden="true">${word}</span>`));
-  assert.match(html, /失敗は終わり方で表示します/);
+  assert.ok(html.includes(`<p class="eval-legend">${wordLegend}</p>`));
+  assert.doesNotMatch(html, /FINISHだが未達成/);
   assert.doesNotMatch(html, /class="eval-compare-link"/);
 });
 test('more seeds than fit as words fall back to symbols with their legend', () => {
@@ -102,6 +105,26 @@ test('more seeds than fit as words fall back to symbols with their legend', () =
   assert.match(html, /<span aria-hidden="true">○<\/span>/);
   assert.match(html, /<span aria-hidden="true">×<\/span>/);
   assert.match(html, /seed が多いため記号で表示しています/);
+  for (const words of ['○ 成功', '× 失敗', '– 未判定', '… 実行中', 'エラー＝エラーで停止', '時間切れ＝時間切れ・打ち切り', '未達成＝「終わった」と答えたが未達成', '上限＝書き直しの上限', '不明＝失敗したが終わり方が分からない', '未判定＝成否が記録から分からない', '空欄＝記録なし']) assert.ok(html.includes(words), words);
+});
+test('every ending uses the canonical cell word and long accessible label', () => {
+  const d = detail(); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
+  const endings = [
+    ['error', 'エラー', 'エラーで停止'],
+    ['timeout', '時間切れ', '時間切れ・打ち切り'],
+    ['finish_unmet', '未達成', '「終わった」と答えたが未達成'],
+    ['regen_limit', '上限', '書き直しの上限'],
+    ['unknown', '不明', '終わり方が不明'],
+  ] as const;
+  d.trials = endings.map(([reason], seed) => trial(reason, seed, 'failure', {
+    end_classification: { reason, label: '古い表示名', evidence: {} },
+  }));
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  for (const [, word, label] of endings) {
+    assert.ok(html.includes(`<span aria-hidden="true">${word}</span>`), word);
+    assert.ok(html.includes(`aria-label="失敗（${label}）（試行を開く）"`), label);
+  }
+  assert.doesNotMatch(html, /古い表示名/);
 });
 test('paired current cells offer a separate small compare button beside the trial button', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);

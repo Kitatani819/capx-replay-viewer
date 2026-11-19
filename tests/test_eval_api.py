@@ -70,7 +70,7 @@ def test_local_listing_and_comparison(tmp_path):
     assert detail["trials"][0] == {"episode_id": "trial", "task": "cube", "condition": "M1", "seed": 401,
                                     "attempt": 1, "verdict": "failure", "status": "ended",
                                     "runner_invocation": None, "start_wall_time": None,
-                                    "end_classification": {"reason": "unknown", "label": "不明",
+                                    "end_classification": {"reason": "unknown", "label": "終わり方が不明",
                                                            "evidence": {"source": "missing_terminal_evidence", "event_id": None}},
                                     "trace_complete": True, "local_state": "local"}
     assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401, 403]}]

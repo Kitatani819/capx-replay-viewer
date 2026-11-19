@@ -2,11 +2,10 @@
 import { useEffect } from 'react';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
 import { useAsync, useInterval } from '../trace/hooks';
-import { VERDICT_LABELS } from '../trace/outcome';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
-import { reasonLabel, trialReason } from './failureReasons';
+import { CATEGORY_CELL_WORDS, END_CELL_WORDS, END_LABELS, FAILURE_REASONS, UNJUDGED_LABEL, reasonLabel, trialCategory } from './failureReasons';
 import './evals.css';
 
 const STATUS = { running: '実行中', interrupted: '中断', incomplete: '欠損あり' };
@@ -77,25 +76,20 @@ export function EvalListPage() {
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
-// Short words for a cell: failures say how they ended, so the table already tells failures apart.
-const CELL_WORDS: Record<string, string> = {
-  success: '成功', error: 'エラー', timeout: '時間切れ', finish_unmet: '未達成', regen_limit: '上限', unknown: '不明',
-};
+const FAILURE_LEGEND = FAILURE_REASONS.map(reason => `${END_CELL_WORDS[reason]}＝${reason === 'unknown' ? '失敗したが終わり方が分からない' : END_LABELS[reason]}`).join('　');
+const WORD_LEGEND = `${END_LABELS.success}　${FAILURE_LEGEND}　${CATEGORY_CELL_WORDS.unjudged}＝${UNJUDGED_LABEL}　${CATEGORY_CELL_WORDS.running}　空欄＝記録なし`;
 // Beyond this many seeds the words no longer fit, so the table falls back to symbols.
 const MAX_SEEDS_FOR_WORDS = 20;
 function cellWord(trial: TrialCell['trial']): { text: string; tone: string } {
-  if (trial.verdict === 'running') return { text: '実行中', tone: 'running' };
-  if (trial.verdict === 'success') return { text: CELL_WORDS.success, tone: 'success' };
-  if (trial.verdict === 'unknown') return { text: '未判定', tone: 'unknown' };
-  const reason = trialReason(trial);
-  return { text: reason !== 'success' ? CELL_WORDS[reason] : '失敗', tone: 'failure' };
+  const category = trialCategory(trial);
+  return { text: CATEGORY_CELL_WORDS[category], tone: category === 'unjudged' ? 'unknown' : category === 'success' || category === 'running' ? category : 'failure' };
 }
 function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: { cell: TrialCell | undefined; evalId: string; regression: boolean; baselineCell?: TrialCell; baselineId?: string; compact: boolean }) {
   if (!cell) return <td className="eval-cell" aria-label="記録なし" />;
   const { trial, retried } = cell;
   const word = cellWord(trial);
   const symbol = compact ? { success: '○', failure: '×', unknown: '–', running: '…' }[trial.verdict] : word.text;
-  const label = `${VERDICT_LABELS[trial.verdict]}${trial.verdict === 'failure' ? `（${reasonLabel(trial)}）` : ''}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
+  const label = `${trial.verdict === 'failure' ? `失敗（${reasonLabel(trial)}）` : reasonLabel(trial)}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
   const query = new URLSearchParams({ run: evalId, episode: trial.episode_id });
   return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title="試行を開く" aria-label={`${label}（試行を開く）`}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
@@ -121,8 +115,8 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
       <tbody>{table.rows.map(row => <ComparisonRows key={row.key} row={row} seeds={table.seeds} record={record} baseline={baseline} showConditions={table.showConditions} />)}</tbody>
     </table></div> : <p className="eval-empty">試行の記録はまだありません。</p>}
     <p className="eval-legend">{table.seeds.length > MAX_SEEDS_FOR_WORDS
-      ? '○ 成功　× 失敗　– 未判定　… 実行中　空欄 記録なし（seed が多いため記号で表示しています。失敗の種類はマスにカーソルを合わせると出ます）'
-      : '失敗は終わり方で表示します：未達成＝「終わった」と答えたが未達成　時間切れ＝時間切れ・打ち切り　エラー＝エラーで停止　上限＝書き直しの上限　不明・未判定＝記録が足りない　空欄＝記録なし'}</p>
+      ? `○ ${END_LABELS.success}　× 失敗（${FAILURE_LEGEND}）　– ${CATEGORY_CELL_WORDS.unjudged}＝${UNJUDGED_LABEL}　… ${CATEGORY_CELL_WORDS.running}　空欄＝記録なし（seed が多いため記号で表示しています）`
+      : WORD_LEGEND}</p>
     {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
     <FailureBreakdown detail={detail} />
   </>;

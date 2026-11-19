@@ -43,7 +43,10 @@ export function comparisonTable(current: EvalTrial[], baseline: EvalTrial[]) {
   }
   const sorted = [...rows.values()].sort((a, b) => (a.task ?? '').localeCompare(b.task ?? '') || (a.condition ?? '').localeCompare(b.condition ?? ''));
   const regressions = sorted.reduce((n, row) => n + seeds.filter(seed => isRegression(row, seed)).length, 0);
-  return { rows: sorted, seeds, showConditions, regressions };
+  const currentTrials = sorted.flatMap(row => [...row.current.values()].map(cell => cell.trial));
+  const baselineTrials = sorted.flatMap(row => [...row.baseline.values()].map(cell => cell.trial));
+  const omittedRetries = current.length + baseline.length - currentTrials.length - baselineTrials.length;
+  return { rows: sorted, seeds, showConditions, regressions, currentTrials, baselineTrials, omittedRetries };
 }
 export function isRegression(row: ComparisonRow, seed: number | null): boolean {
   return row.baseline.get(seed)?.trial.verdict === 'success' && row.current.get(seed)?.trial.verdict === 'failure';

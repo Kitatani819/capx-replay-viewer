@@ -2,15 +2,38 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from capx_trace_viewer import evals, reader
-from capx_trace_viewer.end_reason import classify_trial_end
+from capx_trace_viewer.end_reason import END_CELL_WORDS, END_LABELS, END_REASON_WORDS, classify_trial_end
 from capx_trace_viewer.eval_api import create_eval_router
 from capx_trace_viewer.trace_api import create_trace_router
 from trace_viewer_testlib import EPISODE_ENDED, RUN_ID
+
+
+def test_canonical_label_table():
+    assert END_REASON_WORDS == {
+        "success": ("成功", "成功"),
+        "error": ("エラーで停止", "エラー"),
+        "timeout": ("時間切れ・打ち切り", "時間切れ"),
+        "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
+        "regen_limit": ("書き直しの上限", "上限"),
+        "unknown": ("終わり方が不明", "不明"),
+    }
+
+
+@pytest.mark.parametrize("name,expected", [("END_LABELS", END_LABELS), ("END_CELL_WORDS", END_CELL_WORDS)])
+def test_typescript_label_table_matches_python(name, expected):
+    source = Path(__file__).resolve().parents[1] / "web-ui/src/evals/failureReasons.ts"
+    content = source.read_text(encoding="utf-8")
+    table = re.search(rf"export const {name}(?:\s*:[^=]+)?\s*=\s*\{{([^}}]*)\}}", content)
+    assert table is not None, f"Missing literal TypeScript table {name}"
+    labels = dict(re.findall(r"(\w+)\s*:\s*['\"]([^'\"]*)['\"]", table[1]))
+    assert labels == expected
 
 
 def event(kind, seq, *, status="ok", **data):
@@ -50,7 +73,8 @@ def summary(raw=None):
 def test_categories_and_event_evidence(raw, events, reason, evidence):
     result = classify_trial_end(summary(raw), events)
     assert result["reason"] == reason
-    assert result["label"] and result["evidence"]["source"]
+    assert result["label"] == END_LABELS[reason]
+    assert result["evidence"]["source"]
     assert result["evidence"]["event_id"] == evidence
 
 

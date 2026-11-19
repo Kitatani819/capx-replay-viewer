@@ -12,6 +12,19 @@ from typing import Any
 from capx_trace_viewer import evals
 
 
+# Canonical long labels and compact table words; failureReasons.ts mirrors these.
+END_REASON_WORDS = {
+    "success": ("成功", "成功"),
+    "error": ("エラーで停止", "エラー"),
+    "timeout": ("時間切れ・打ち切り", "時間切れ"),
+    "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
+    "regen_limit": ("書き直しの上限", "上限"),
+    "unknown": ("終わり方が不明", "不明"),
+}
+END_LABELS = {reason: words[0] for reason, words in END_REASON_WORDS.items()}
+END_CELL_WORDS = {reason: words[1] for reason, words in END_REASON_WORDS.items()}
+
+
 def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]] = (),
                        runner_records: Sequence[Any] = ()) -> dict[str, Any]:
     """Return ``{reason, label, evidence}``; this is the sole end-reason classifier.
@@ -20,9 +33,6 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     for the task verdict, exactly as in evaluations. Explicit terminal signals may
     explain an exception/cutoff even when no task verdict could be written.
     """
-    labels = {"success": "成功", "error": "エラーで停止", "timeout": "時間切れ・中断",
-              "finish_unmet": "終了と回答（未達成）", "regen_limit": "書き直し上限",
-              "unknown": "不明"}
     raw = episode.get("episode")
     raw = raw if isinstance(raw, dict) else {}
     end: dict[str, Any] | None = None
@@ -84,7 +94,7 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
             if type(turn) is int:
                 evidence["turn_index"] = turn
         evidence.update(facts)
-        return {"reason": reason, "label": labels[reason], "evidence": evidence}
+        return {"reason": reason, "label": END_LABELS[reason], "evidence": evidence}
 
     if verdict == "success":
         return result("success", verdict_source, evaluator or end, task_success=True)

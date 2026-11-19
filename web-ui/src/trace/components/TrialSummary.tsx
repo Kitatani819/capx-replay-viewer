@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { evalApi } from '../../evals/api';
 import type { EvalDetail, EvalTrial } from '../../evals/api';
+import { END_LABELS } from '../../evals/failureReasons';
 import { ApiError, episodeFileUrl, traceApi, type EpisodeRef } from '../api';
 import { fmtDuration } from '../format';
 import { useAsync, useEpisodeEvents, useFullText } from '../hooks';
@@ -61,7 +62,7 @@ export function TrialSummaryCard({ ep, model, summary, verdict, baseline, onJump
     </div>
     {(hasStats || hasFacts || facts.flow.length > 0) && <div className="trial-summary-card">
       {hasStats && <dl className="trial-summary-stats">
-        {summary.end_classification && <div><dt>終わり方</dt><dd>{summary.end_classification.label}{typeof endingEvent === 'string' && <> · {link(endingEvent)}</>}</dd></div>}
+        {summary.end_classification && <div><dt>終わり方</dt><dd>{END_LABELS[summary.end_classification.reason]}{typeof endingEvent === 'string' && <> · {link(endingEvent)}</>}</dd></div>}
         {facts.turnCount !== null && <div><dt>ターン</dt><dd>{facts.turnCount}（書き直し {facts.regenerationCount}回）</dd></div>}
         {facts.durationSeconds !== null && <div><dt>かかった時間</dt><dd>{fmtDuration(facts.durationSeconds)}</dd></div>}
       </dl>}

@@ -5,7 +5,7 @@ import { TrialSummaryCard } from '../components/TrialSummary';
 import { buildEpisodeModel, resolveSelection } from '../model';
 import { baselineForEpisode, lastRecordedFrame, trialSummaryFacts } from '../trialSummary';
 import type { EvalDetail, EvalTrial } from '../../evals/api';
-import type { EpisodeSummary } from '../types';
+import type { EndReason, EpisodeSummary } from '../types';
 import { Rec } from './fixtures';
 
 const ep = { runId: 'current', episodeId: 'trial', generation: 'g2' };
@@ -39,13 +39,28 @@ test('summary renders available facts, baseline regression and exact event/file 
   const baselineFrame = { event: { ...f.frame, event_id: 'base_frame' }, path: 'frames/base.png' };
   const html = renderToStaticMarkup(<TrialSummaryCard ep={ep} model={f.model} summary={f.summary} verdict="failure"
     baseline={{ ep: { runId: 'baseline', episodeId: 'base', generation: 'bg' }, trial: trial(), frame: baselineFrame }} />);
-  for (const text of ['cube_lift', 'seed 7', '失敗', '悪化（基準では成功）', '終了（未達成）', '2（書き直し 0回）', '1 分 5 秒',
-    'ターン0：エラー', 'ターン1：終了（未達成）', '最初のエラー', 'move_to_pose', 'IK did not converge', '最後の観察', 'キューブは机の上', '最後の判断', 'FINISH', '最後の画像', '基準と並べて見る']) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, /traceback line|second line/);
+  for (const text of ['cube_lift', 'seed 7', '失敗', '悪化（基準では成功）', '「終わった」と答えたが未達成', '2（書き直し 0回）', '1 分 5 秒',
+    'ターン0：エラー', 'ターン1：「終わった」と答えたが未達成', '最初のエラー', 'move_to_pose', 'IK did not converge', '最後の観察', 'キューブは机の上', '最後の判断', 'FINISH', '最後の画像', '基準と並べて見る']) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /traceback line|second line|終了（未達成）/);
   for (const event of [f.error, f.observation, f.decision, f.frame]) assert.ok(html.includes(`event=${event.event_id}`), event.event_id);
   assert.match(html, /href="\/traces\?run=baseline&amp;episode=base&amp;event=base_frame"/);
   assert.match(html, /src="\/api\/traces\/runs\/current\/episodes\/trial\/file\/frames\/last.png\?g=g2"/);
   assert.match(html, /baseline_run=baseline&amp;baseline_episode=base/);
+});
+
+test('summary uses canonical long ending labels even when the API label is stale', () => {
+  const labels: Record<EndReason, string> = {
+    success: '成功', error: 'エラーで停止', timeout: '時間切れ・打ち切り',
+    finish_unmet: '「終わった」と答えたが未達成', regen_limit: '書き直しの上限', unknown: '終わり方が不明',
+  };
+  for (const [reason, label] of Object.entries(labels)) {
+    const summary: EpisodeSummary = { episode_id: ep.episodeId,
+      end_classification: { reason: reason as EndReason, label: '古い表示語', evidence: {} } };
+    const html = renderToStaticMarkup(<TrialSummaryCard ep={ep} model={buildEpisodeModel([])} summary={summary}
+      verdict={reason === 'success' ? 'success' : 'failure'} />);
+    assert.ok(html.includes(`<dt>終わり方</dt><dd>${label}</dd>`), reason);
+    assert.doesNotMatch(html, /古い表示語/);
+  }
 });
 
 test('unavailable summary items leave no empty boxes or made-up facts', () => {
