@@ -1160,7 +1160,7 @@ class TraceStore:
             wep.summary["harness_summary"] = {
                 k: hs.get(k) for k in ("reward", "task_completed", "sandbox_rc", "success",
                                        "num_code_blocks", "num_regenerations", "num_finishes",
-                                       "terminated", "truncated")
+                                       "terminated", "truncated", "budget_exhausted", "stopping_reason")
             }
         wep.summary["exception"] = data.get("exception")
 

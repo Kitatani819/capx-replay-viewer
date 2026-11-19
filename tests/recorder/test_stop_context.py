@@ -69,6 +69,8 @@ class Summary:
     terminated: bool = False
     truncated: bool = True
     sandbox_rc: int = 0
+    budget_exhausted: bool = True
+    stopping_reason: str = "evaluation_budget"
 
 
 def test_trial_start_and_end_persist_limits_final_usage_and_truncation(tmp_path, monkeypatch):
@@ -100,6 +102,8 @@ def test_trial_start_and_end_persist_limits_final_usage_and_truncation(tmp_path,
         assert doc["stop_context"] == end
         assert doc["harness_summary"]["truncated"] is True
         assert doc["harness_summary"]["terminated"] is False
+        assert doc["harness_summary"]["budget_exhausted"] is True
+        assert doc["harness_summary"]["stopping_reason"] == "evaluation_budget"
     finally:
         rec.close()
 
