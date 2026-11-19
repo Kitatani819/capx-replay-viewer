@@ -1153,7 +1153,7 @@ class TraceStore:
         data = event.get("data", {})
         wep.summary["ended_wall_time"] = event.get("wall_time")
         for key in ("end_reason", "duration_s", "alarm_seen", "n_code_blocks", "n_model_calls",
-                    "n_http_attempts", "tracer_overhead_s", "stop_context", "end_note"):
+                    "n_http_attempts", "tracer_overhead_s", "stop_context", "end_note", "trial_outcome"):
             wep.summary[key] = data.get(key)
         hs = data.get("harness_summary")
         if isinstance(hs, dict):

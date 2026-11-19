@@ -1816,3 +1816,9 @@ synthesis input and fallback provenance are explicitly reported as unrecorded.
 harness evaluation values carry separate labels. A viewer import may add a
 `trial_record.json` `viewer_import.notice` to explain where the copied files came
 from. Import notes do not create trace events or synchronization anchors.
+
+### Explicit terminal outcomes
+
+New recorder closures include `trial_outcome` in `episode_end.data` and `episode.json`: `task_success` (boolean), `source` (`recorder_terminal`), `reason` (the recorded end reason), and `resumable` (whether an unsuccessful interrupted or budget-cut attempt can be continued by a resume-aware launcher). A returned harness verdict takes precedence; otherwise an explicitly recorded sticky success is preserved, and an ended attempt is scored as failure. This is a scoring outcome, independent of why recording ended.
+
+After all child workers have exited, the evaluation wrapper may add an `evaluation_finalizer` outcome to an observed episode without a final result. It never fabricates an `episode_end`, and keeps the incomplete-recording flag. If workers remain alive, no finalization occurs. A SIGKILL of the wrapper itself cannot be finalized until a later resume. Historical records lacking this marker remain unknown. Planned trials that never created an episode require the launcher to record their failed outcomes; the recorder cannot infer an unrecorded trial set.

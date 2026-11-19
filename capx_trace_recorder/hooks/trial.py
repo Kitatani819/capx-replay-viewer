@@ -774,6 +774,17 @@ def end_episode(ep: Any, *, end_reason: str, summary: Any = None, exc: BaseExcep
                                       model_turn_index=ep.turn_index,
                                       session=getattr(ep, "web_session", None)),
     }
+    # New recordings explicitly score terminal attempts. Historical gaps remain
+    # unknown; this marker is written only when this recorder closes an attempt.
+    completed = harness.get("task_completed") if isinstance(harness, dict) else None
+    sticky = data["stop_context"].get("sticky_success")
+    task_success = completed if type(completed) is bool else sticky is True
+    data["trial_outcome"] = {
+        "task_success": task_success,
+        "source": "recorder_terminal",
+        "reason": end_reason,
+        "resumable": not task_success and (not isinstance(harness, dict) or harness.get("budget_exhausted") is True),
+    }
     if extra:
         data.update(extra)
 
