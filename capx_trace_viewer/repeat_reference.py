@@ -46,7 +46,7 @@ def episode_settings(episodes: list[dict[str, Any]]) -> str | None:
         if episode.get("trace_complete") is not True:
             return None
         task, condition, seed = (episode.get(key) for key in ("task", "condition", "seed"))
-        if not task or not condition or type(seed) is not int:
+        if not isinstance(task, str) or not task or (condition is not None and not isinstance(condition, str)) or type(seed) is not int:
             return None
         key = json.dumps([task, condition, seed])
         # Retries can have different stopping/selection semantics. Do not guess.

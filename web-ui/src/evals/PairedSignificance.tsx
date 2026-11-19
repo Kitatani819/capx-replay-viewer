@@ -16,8 +16,8 @@ export function PairedSignificance({ detail }: { detail: EvalDetail }) {
         <p>結果が変わった {result.improved + result.worsened}組の向きについて、両側の正確な符号検定を使います（正確な McNemar 検定と同じ計算）。改善と悪化が同じ確率で出る場合に、これ以上片寄る確率を p値とし、1回の比較で5%以下を目安にしています。p値は「改善が偶然である確率」ではありません。</p>
         <p>各組が独立という前提があります。複数の比較を繰り返すと、偶然でも差が出やすくなります。条件の違いがあれば、どの変更が効いたかまではこの検定から決められません。</p>
       </details>
-    </> : <p>両方の評価に、タスク・条件・seed が一致し、成功か失敗が分かる組が必要です。</p>}
-    <p className="eval-significance-exclusions">除外：片側だけの組 {result.unmatched}、未判定・実行中の組 {result.unjudged}、タスク・条件・seed が未記録の試行 {result.unidentified}。再試行は最後の記録だけを使い、古い試行 {result.omittedRetries}件を除きました。</p>
+    </> : <p>両方の評価に、タスク・seed が記録され、条件も一致し、成功か失敗が分かる組が必要です。</p>}
+    <p className="eval-significance-exclusions">除外：片側だけの組 {result.unmatched}、未判定・実行中の組 {result.unjudged}、タスク・seed が未記録の試行 {result.unidentified}。再試行は最後の記録だけを使い、古い試行 {result.omittedRetries}件を除きました。</p>
     {(detail.repeat_references ?? []).map(reference => {
       const original = reference.side === 'current' ? detail.trials : detail.baseline_trials;
       const repeat = pairedResult(original, reference.trials);

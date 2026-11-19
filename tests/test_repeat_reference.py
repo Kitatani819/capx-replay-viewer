@@ -57,7 +57,7 @@ def test_missing_or_ambiguous_trial_settings_refuse_repeat_identity(damage):
     elif damage == "env":
         raw.pop("env")
     elif damage in ("condition", "seed"):
-        raw[damage] = None
+        raw[damage] = [] if damage == "condition" else None
     elif damage == "incomplete":
         raw["trace_complete"] = False
     elif damage == "models":
@@ -117,3 +117,9 @@ def test_selected_same_code_baseline_itself_is_a_repeat_reference(tmp_path):
         (directory / "episode.json").write_text(json.dumps(metadata()), encoding="utf-8")
     references = EvalService(tmp_path).detail("ev-current")["repeat_references"]
     assert [(item["side"], item["eval"]["eval_id"]) for item in references] == [("current", "ev-base")]
+
+
+def test_default_null_condition_can_identify_a_repeat():
+    raw = metadata()
+    raw["condition"] = None
+    assert repeat_reference.episode_settings([summary(raw)]) is not None

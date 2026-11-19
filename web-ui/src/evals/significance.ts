@@ -31,7 +31,7 @@ export function exactDiscordanceP(improved: number, worsened: number): number {
   return Math.min(1, Math.exp(logMass + Math.log(relativeTail) + Math.LN2));
 }
 function identified(trial: EvalTrial): boolean {
-  return !!trial.task && !!trial.condition && typeof trial.seed === 'number' && Number.isSafeInteger(trial.seed);
+  return !!trial.task && typeof trial.seed === 'number' && Number.isSafeInteger(trial.seed);
 }
 export function pairedResult(current: EvalTrial[], baseline: EvalTrial[]): PairedResult {
   const knownCurrent = current.filter(identified), knownBaseline = baseline.filter(identified);

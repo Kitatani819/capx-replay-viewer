@@ -32,7 +32,7 @@ test('only exact task-condition-seed pairs with known outcomes enter the test', 
   ], [trial(1, 'failure'), trial(2, 'success'), trial(3, 'success'), trial(4, 'failure'),
     trial(5, 'success'), trial(7, 'failure'), trial(11, 'failure')]);
   assert.deepEqual(result, { paired: 4, improved: 1, worsened: 1, bothSuccess: 1, bothFailure: 1,
-    unmatched: 3, unjudged: 2, unidentified: 3, omittedRetries: 0, p: 1 });
+    unmatched: 4, unjudged: 2, unidentified: 2, omittedRetries: 0, p: 1 });
 });
 test('retries use the same last attempt as the displayed comparison table', () => {
   const now = [trial(1, 'success', { attempt: 1 }), trial(1, 'failure', { attempt: 2 })];
@@ -61,4 +61,12 @@ test('repeat observations are linked and never added to significance counts', ()
   assert.match(html, /href="\/evals\/ev-repeat"/);
   assert.match(html, /6組中 6組（100.0%）/);
   assert.match(html, /判定には加えていません/);
+});
+
+test('the default null condition pairs only with the same default condition', () => {
+  const result = pairedResult([trial(1, 'success', { condition: null }), trial(2, 'success', { condition: null })],
+    [trial(1, 'failure', { condition: null }), trial(2, 'failure', { condition: 'C' })]);
+  assert.equal(result.paired, 1);
+  assert.equal(result.improved, 1);
+  assert.equal(result.unmatched, 2);
 });
