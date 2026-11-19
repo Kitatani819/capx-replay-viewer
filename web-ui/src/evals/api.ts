@@ -1,6 +1,7 @@
 /** Evaluation records are validated by /api/evals before being displayed. */
 import { getJson } from '../trace/api';
 import type { TaskVerdict } from '../trace/outcome';
+import type { EndClassification } from '../trace/types';
 
 export interface EvalCounts { trials: number; success: number }
 export interface EvalSummary extends EvalCounts {
@@ -45,6 +46,7 @@ export interface EvalTrial {
   runner_invocation?: number | null;
   start_wall_time?: number | null;
   verdict: TaskVerdict;
+  end_classification?: EndClassification | null;
   status: string;
   trace_complete: boolean | null;
   local_state: 'remote' | 'local' | 'stale' | 'fetching';

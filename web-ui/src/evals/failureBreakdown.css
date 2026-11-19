@@ -1,0 +1,36 @@
+.failure-breakdown { margin-top: 32px; }
+.failure-breakdown h2 { margin-bottom: 12px; font-size: 18px; font-weight: 600; }
+.failure-counts, .failure-trials { padding: 16px; border: 1px solid #dce3da; border-radius: 8px; background: white; }
+.failure-count-heading, .failure-count-row { display: grid; grid-template-columns: minmax(170px, 1.5fr) minmax(90px, 1fr) minmax(90px, 1fr) 52px; align-items: center; gap: 14px; width: 100%; }
+.failure-count-heading { padding: 0 10px 6px; font-size: 12px; color: #55675a; }
+.failure-count-row { min-height: 44px; padding: 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.failure-count-row:hover { background: #f4f7f1; }
+.failure-count-row[aria-pressed=true] { background: #eaf2ec; border-color: #9bbfa7; }
+.failure-count-row:focus-visible { outline: 2px solid #467e5c; outline-offset: 2px; }
+.failure-current-only { grid-template-columns: minmax(170px, 1.5fr) minmax(90px, 1fr); }
+.failure-bar-count { display: flex; align-items: center; gap: 8px; padding-right: 35px; position: relative; min-height: 22px; }
+.failure-bar { display: block; height: 12px; border-radius: 3px; flex-shrink: 1; }
+.failure-bar-baseline { background: #b8c4d4; }
+.failure-bar-current { background: #2d5b8a; }
+.failure-number { font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.failure-delta, .failure-tag { padding: 2px 6px; border-radius: 4px; font-size: 12px; text-align: center; white-space: nowrap; background: #ecefea; color: #3e4943; }
+.failure-decrease { background: #e4f0e6; color: #28603a; }
+.failure-increase { background: #f8d3c8; color: #7d271c; }
+.failure-total { margin: 12px 10px 0; font-size: 13px; color: #55675a; }
+.failure-trials { margin-top: 14px; font-size: 13px; }
+.failure-trials h3 { margin-bottom: 8px; font-size: 14px; font-weight: 600; }
+.failure-trials ul { list-style: none; padding: 0; }
+.failure-trials li { display: flex; align-items: center; gap: 16px; padding: 10px 2px; border-bottom: 1px solid #e8ece5; flex-wrap: wrap; }
+.failure-trials li > span { overflow-wrap: anywhere; }
+.failure-trial-name { flex: 1; min-width: 160px; }
+.failure-trial-name small { display: block; color: #68766b; }
+.failure-trial-baseline { color: #55675a; }
+.failure-trials a { display: inline-flex; align-items: center; min-height: 32px; }
+.eval-cell .eval-compare-link { display: block; font-size: 11px; padding: 3px; }
+@media (max-width: 700px) {
+  .failure-counts, .failure-trials { padding: 10px; }
+  .failure-count-heading, .failure-count-row { grid-template-columns: minmax(100px, 1.5fr) minmax(50px, 1fr) minmax(50px, 1fr) 36px; gap: 6px; font-size: 12px; }
+  .failure-current-only { grid-template-columns: minmax(100px, 1.5fr) minmax(50px, 1fr); }
+  .failure-bar-count { padding-right: 0; gap: 4px; }
+  .failure-trials li { gap: 8px; }
+}

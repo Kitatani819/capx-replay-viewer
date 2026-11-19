@@ -1108,7 +1108,12 @@ export interface Selection {
 
 export function resolveSelection(model: EpisodeModel, eventId: string | null): Selection | null {
   if (!eventId) return null;
-  const node = model.nodeOfEvent.get(eventId);
+  let node = model.nodeOfEvent.get(eventId);
+  if (!node) {
+    // Image events stay out of the log rows, but summary links can inspect them.
+    const event = model.byId.get(eventId);
+    if (event && (event.event_type === 'frame' || event.event_type === 'observation_snapshot')) node = mkNode('other', event);
+  }
   if (!node) return null;
   let attempt: Attempt | null = null;
   if (node.call) {

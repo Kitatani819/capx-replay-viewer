@@ -4,6 +4,7 @@ import { useAsync, useInterval } from '../trace/hooks';
 import { VERDICT_LABELS } from '../trace/outcome';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
+import { FailureBreakdown } from './FailureBreakdown';
 import './evals.css';
 
 const STATUS = { running: '実行中', interrupted: '中断', incomplete: '欠損あり' };
@@ -74,7 +75,7 @@ export function EvalListPage() {
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
-function Cell({ cell, evalId, regression }: { cell: TrialCell | undefined; evalId: string; regression: boolean }) {
+function Cell({ cell, evalId, regression, baselineCell, baselineId }: { cell: TrialCell | undefined; evalId: string; regression: boolean; baselineCell?: TrialCell; baselineId?: string }) {
   if (!cell) return <td className="eval-cell" aria-label="記録なし" />;
   const { trial, retried } = cell;
   const symbol = { success: '●', failure: '×', unknown: '–', running: '…' }[trial.verdict];
@@ -82,7 +83,7 @@ function Cell({ cell, evalId, regression }: { cell: TrialCell | undefined; evalI
   const query = new URLSearchParams({ run: evalId, episode: trial.episode_id });
   return <td className="eval-cell"><a href={`/traces?${query.toString()}`} className={`eval-result${regression ? ' eval-regression' : ''}`} title={label} aria-label={label}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
-  </a></td>;
+  </a>{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</td>;
 }
 export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
@@ -105,13 +106,14 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     </table></div> : <p className="eval-empty">試行の記録はまだありません。</p>}
     <p className="eval-legend">● 成功　× 失敗　– 未判定　… 実行中　空欄 記録なし</p>
     {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
+    <FailureBreakdown detail={detail} />
   </>;
 }
 function ComparisonRows({ row, seeds, record, baseline, showConditions }: {
   row: ReturnType<typeof comparisonTable>['rows'][number]; seeds: (number | null)[]; record: EvalRecord; baseline: EvalRecord | null; showConditions: boolean;
 }) {
   return <>{baseline && <tr className="eval-task-start"><th scope="rowgroup" rowSpan={2}>{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th><th scope="row">基準</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.baseline.get(seed)} evalId={baseline.eval_id} regression={false} />)}</tr>}
-    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} />)}</tr></>;
+    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} />)}</tr></>;
 }
 export function EvalDetailPage({ evalId }: { evalId: string }) {
   const detail = useAsync(s => evalApi.detail(evalId, s), [evalId]);

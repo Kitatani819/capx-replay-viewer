@@ -929,6 +929,9 @@ def create_trace_router(
                 summary = reader.unscoped_summary_at(run_id, target.run, episode_id)
             else:
                 summary = reader.episode_summary_at(run_id, episode_id, target.episode)
+                summary["end_classification"] = reader.trial_end_classification_at(
+                    target.episode, summary, reader.runner_records_at(target.run)["records"],
+                )
         return json_response(summary)
 
     @router.get("/runs/{run_id}/episodes/{episode_id}/events")

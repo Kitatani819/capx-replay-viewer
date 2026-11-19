@@ -1,0 +1,35 @@
+.trial-summary { margin: 22px 42px 0; padding: 16px; border-radius: 10px; flex-shrink: 0; background: #f4f6f2; color: #24332b; font-size: 14px; }
+.trial-summary-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.trial-summary-heading h2 { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; }
+.trial-summary-card { padding: 18px 20px; border: 1px solid #dce3d8; background: #fff; border-radius: 10px; }
+.trial-summary-stats { display: flex; gap: 22px 40px; flex-wrap: wrap; }
+.trial-summary-stats dt, .trial-summary-facts dt { color: #586c5e; font-size: 12px; }
+.trial-summary-stats dd { margin-top: 3px; font-weight: 600; }
+.trial-summary a { color: #356b4e; text-decoration: underline; text-underline-offset: 3px; }
+.trial-summary a:focus-visible { outline: 2px solid #467e5c; outline-offset: 3px; }
+.trial-summary-stats dd a { font-weight: 400; font-size: 12px; white-space: nowrap; }
+.trial-summary-flow { margin: 14px 0 0; font-size: 12px; overflow-wrap: anywhere; line-height: 2; }
+.trial-summary-flow a { display: inline-block; padding: 2px 7px; background: #edf1ea; border-radius: 4px; }
+.trial-summary-facts > div { display: flex; gap: 14px; align-items: flex-start; padding: 13px 0; border-top: 1px solid #e6ece2; }
+.trial-summary-facts { margin-top: 14px; }
+.trial-summary-facts > div:last-child { padding-bottom: 0; }
+.trial-summary-facts dt { width: 92px; flex-shrink: 0; }
+.trial-summary-facts dd { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.trial-summary-facts dd > p { max-height: 10em; overflow: auto; white-space: pre-wrap; }
+.trial-summary-facts small { color: #647568; font-size: 11px; }
+.trial-summary-facts > div > span { font-size: 12px; white-space: nowrap; }
+.trial-summary-error { color: #a33a22; font-family: ui-monospace, monospace; }
+.trial-summary-frames { display: flex; flex-wrap: wrap; gap: 14px; }
+.trial-summary-frames figure { margin: 0; max-width: 220px; }
+.trial-summary-frames img { width: 180px; height: 120px; object-fit: contain; background: #e0e5de; border: 1px solid #d5ddd4; border-radius: 5px; }
+.trial-summary-frames figcaption { margin-top: 4px; color: #647568; font-size: 11px; }
+.trial-summary-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.trial-summary-actions a.trial-summary-compare { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px; color: white; background: #2f5d46; border-radius: 7px; font-weight: 600; text-decoration: none; }
+.trial-summary-actions p { font-size: 12px; }
+@media (max-width: 900px) { .trial-summary { margin-inline: 18px; } }
+@media (max-width: 540px) {
+  .trial-summary-card { padding: 14px; }
+  .trial-summary-facts > div { flex-wrap: wrap; gap: 5px 10px; }
+  .trial-summary-facts dt { width: 100%; }
+  .trial-summary-frames img { width: 140px; height: 100px; }
+}

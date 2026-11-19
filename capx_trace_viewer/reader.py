@@ -1197,6 +1197,88 @@ def episode_summary_from_metadata(
     return summary
 
 
+_end_classifications: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+_end_classifications_lock = threading.Lock()
+
+
+def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
+                                runner_records: Sequence[Any] = ()) -> dict[str, Any]:
+    """Classify an episode, caching the small result by the reader's file identity.
+
+    Reads complete event pages via an already-open, no-symlink descriptor. An append,
+    replacement, metadata update or new matched runner result invalidates the cache.
+    Remote metadata can use the same classifier with ``directory=None``.
+    """
+    from capx_trace_viewer import evals
+    from capx_trace_viewer.end_reason import classify_trial_end
+
+    if directory is None:
+        return classify_trial_end(summary, runner_records=runner_records)
+    record, attempt, final = evals._runner_attempt(summary, runner_records)
+    runner_key = hashlib.sha256(json.dumps(
+        [attempt, record.get("outcome") if record and final else None], sort_keys=True,
+    ).encode()).digest()
+    # The caller read the summary before this stat. If episode.json changed in
+    # between, the old summary must not poison the cache for the newer file state.
+    summary_key = hashlib.sha256(json.dumps(
+        [summary.get("status"), summary.get("end_reason"), summary.get("episode")], sort_keys=True,
+    ).encode()).digest()
+    metadata_st = directory.file_stat(EPISODE_FILE)
+    try:
+        fd, events_st = directory.open_file(EVENTS_FILE)
+    except OSError:
+        # I/O failures are never cached; a transient error may pass on the next read.
+        return classify_trial_end(summary, runner_records=runner_records)
+    try:
+        key = (_stat_key(events_st), _stat_key(metadata_st) if metadata_st else None,
+               summary_key, runner_key)
+        with _end_classifications_lock:
+            cached = _end_classifications.get(key)
+            if cached is not None:
+                _end_classifications.move_to_end(key)
+                return cached
+
+        def events() -> Iterator[dict[str, Any]]:
+            offset = 0
+            while True:
+                page = read_events_page(fd, offset, DEFAULT_MAX_BYTES, MAX_PAGE_EVENTS)
+                yield from page.events()
+                if page.eof or page.next_offset == offset:
+                    break
+                offset = page.next_offset
+
+        try:
+            classification = classify_trial_end(summary, events(), runner_records)
+        except OSError:
+            return classify_trial_end(summary, runner_records=runner_records)
+        if _stat_key(os.fstat(fd)) == _stat_key(events_st):
+            with _end_classifications_lock:
+                _end_classifications[key] = classification
+                _end_classifications.move_to_end(key)
+                while len(_end_classifications) > 256:
+                    _end_classifications.popitem(last=False)
+        return classification
+    finally:
+        close_quietly(fd)
+
+
+def runner_records_at(run: Dir) -> dict[str, Any]:
+    """Runner records through a safe descriptor, preserving unreadable-file details."""
+    empty = {"records": [], "corrupt_lines": 0, "torn_tail": False, "truncated": False}
+    try:
+        fd, _st = run.open_file(RUNNER_RECORDS_FILE)
+    except OSError as exc:
+        if exc.errno != errno.ENOENT:
+            empty["error"] = open_failure_reason(exc)
+        return empty
+    try:
+        return read_jsonl(fd)
+    except OSError as exc:
+        return {**empty, "error": open_failure_reason(exc)}
+    finally:
+        close_quietly(fd)
+
+
 def _iter_episodes(run: Dir) -> Iterator[tuple[str, Dir]]:
     """(name, open directory) of each episode dir of a run; each Dir is closed after use."""
     for name in run.names():

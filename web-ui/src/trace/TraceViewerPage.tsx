@@ -62,6 +62,8 @@ import { Picker, type PickerMode } from './components/Picker';
 import { SimplePicker, SimpleViewer } from './components/SimpleViewer';
 import { Splitter } from './components/Splitter';
 import { Timeline } from './components/Timeline';
+import { TrialSummary } from './components/TrialSummary';
+import { summaryAssetTargets } from './trialSummary';
 import { TopBar, UnusedHookNotice, type PollStatus } from './components/TopBar';
 import { Badge, ErrorText, SmallButton, Spinner } from './components/common';
 
@@ -197,7 +199,7 @@ export default function TraceViewerPage() {
   const merged = useMemo(() => applyDataAssets(events.events, assets.states), [events.events, assets.states]);
   const model = useMemo(() => buildEpisodeModel(merged), [merged]);
   const selection = useMemo(() => resolveSelection(model, eventParam), [model, eventParam]);
-  const assetTargets = useMemo(() => dataAssetTargets(model, selection), [model, selection]);
+  const assetTargets = useMemo(() => [...new Set([...dataAssetTargets(model, selection), ...summaryAssetTargets(model)])], [model, selection]);
   const ensureAssets = assets.ensure;
   useEffect(() => ensureAssets(assetTargets), [assetTargets, ensureAssets]);
   // What the panes are told: the targets requested by the effect above count as loading from
@@ -520,6 +522,12 @@ export default function TraceViewerPage() {
           </div>
         </div>
       )}
+      {ep && summary.data && status !== 'unscoped' && !missing && <ErrorBoundary label="試行の要約" resetKey={epKey}>
+        <TrialSummary ep={ep} model={model} summary={summary.data} runnerRecords={runnerRecords ?? []} onJump={eventId => {
+          setPlaybackSelection(null); setReplaySeek(null); setLive(false); setFocus(null); setTab(0);
+          setParams({ event: eventId, view: 'details' }); setScrollToken(token => token + 1);
+        }} />
+      </ErrorBoundary>}
       {showLegacy ? (
         <LegacyTrialView key={JSON.stringify([legacyRun, legacyTrial.root, legacyTrial.task, legacyTrial.condition, legacyTrial.trialDir])} runId={legacyRun} trial={legacyTrial} />
       ) : !ep ? (

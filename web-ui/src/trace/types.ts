@@ -731,6 +731,14 @@ export interface RunListResponse {
   runs: RunListItem[];
 }
 
+export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'unknown';
+/** Inferred on the server from the recorded verdict and stopping evidence. */
+export interface EndClassification {
+  reason: EndReason;
+  label: string;
+  evidence: { event_id?: string | null; [key: string]: unknown };
+}
+
 /** Summary of one episode (episode.json plus the derived status, 9.2). */
 export interface EpisodeSummary {
   run_id?: string | null;
@@ -749,6 +757,7 @@ export interface EpisodeSummary {
   last_modified?: number | string | null;
   heartbeat_age_s?: number | null;
   end_reason?: string | null;
+  end_classification?: EndClassification | null;
   trace_complete?: boolean | null;
   gaps?: Gap[] | null;
   startup_hook_failures?: StartupHookFailures | null;
