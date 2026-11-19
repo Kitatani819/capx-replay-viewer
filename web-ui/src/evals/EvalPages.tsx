@@ -7,6 +7,7 @@ import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialC
 import { FailureBreakdown } from './FailureBreakdown';
 import { TrialConditions } from './TrialConditions';
 import { SuccessTrend } from './SuccessTrend';
+import { PairedSignificance } from './PairedSignificance';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
@@ -131,6 +132,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     {differences.length > 0 && <div className="eval-note"><p>条件の違い：</p><ul>{differences.map(diff => <li key={diff.key}>{diff.label}（基準 {valueText(diff.baseline)} / 今回 {valueText(diff.current)}）</li>)}</ul></div>}
     {officialNotes.length > 0 && <div role="note" className="eval-note eval-rule-note"><p>公式の評価と条件が違います：</p>{renderOfficialNotes(officialNotes.slice(0, 3))}
       {officialNotes.length > 3 && <details><summary>ほかの違い</summary>{renderOfficialNotes(officialNotes.slice(3))}</details>}</div>}
+    <PairedSignificance detail={detail} />
     <div className="eval-table-heading"><p>タスク・seed ごとの結果</p>{baseline && <p>悪化 {table.regressions}件</p>}</div>
     {table.rows.length > 0 ? <div className="eval-table-scroll"><table className="eval-comparison" aria-label="評価の比較">
       <thead><tr><th scope="col">タスク{table.showConditions ? '・条件' : ''}</th><th scope="col">評価</th>{table.seeds.map(seed => <th key={String(seed)} scope="col">seed {seed ?? '—'}</th>)}</tr></thead>

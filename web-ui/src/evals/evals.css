@@ -67,3 +67,10 @@
 
 .trial-conditions { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: normal; line-height: 1.5; color: #526158; }
 .eval-cell .trial-conditions { max-width: 190px; padding: 4px; font-size: 11px; }
+.eval-significance { margin: 24px 0; padding: 20px 24px; border: 1px solid #cddbc9; border-radius: 8px; background: #fff; font-size: 14px; }
+.eval-significance h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
+.eval-significance p + p, .eval-significance details, .eval-significance details p { margin-top: 10px; }
+.eval-significance-result { color: #304f3b; font-size: 18px; font-weight: 600; }
+.eval-significance-exclusions { color: #5d6b60; font-size: 13px; }
+.eval-repeat-reference { padding-top: 12px; border-top: 1px solid #e1e8de; }
+.eval-significance summary { cursor: pointer; color: #356b4e; }

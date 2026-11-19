@@ -60,6 +60,7 @@ export interface EvalDetail extends EvalListEntry {
   baseline_trials: EvalTrial[];
   differences: EvalDifference[];
   remote_error?: string | null;
+  repeat_references?: { side: 'current' | 'baseline'; eval: EvalRecord; trials: EvalTrial[] }[];
 }
 export interface EvalList { evals: EvalListEntry[]; error?: string | null }
 export const evalApi = {
