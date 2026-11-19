@@ -1,6 +1,6 @@
 .comparison-page { min-height: 100%; box-sizing: border-box; background: #f4f6f2; color: #24332b; padding: 26px 42px; overflow: auto; }
 .comparison-page a { color: #356b4e; text-decoration: underline; text-underline-offset: 3px; }
-.comparison-page nav { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 20px; font-size: 14px; }
+.comparison-page > .breadcrumb { margin-bottom: 20px; }
 .comparison-toolbar { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
 .comparison-toolbar h1 { font-size: 19px; font-weight: 600; overflow-wrap: anywhere; }
 .comparison-toolbar code { font-size: 16px; }

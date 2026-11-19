@@ -6,6 +6,8 @@ import { buildEpisodeModel } from '../model';
 import type { TextValue } from '../types';
 import SideBySidePage, { SideBySideComparison, type TrialComparisonData } from '../SideBySidePage';
 import { alignComparisonCalls, comparisonCalls } from '../sideBySide';
+import { Breadcrumb } from '../../navigation/Breadcrumb';
+import { breakdownDetail } from './failureBreakdownFixtures';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
 
 function text(node: unknown): string {
@@ -43,7 +45,7 @@ test('the difference switch hides equal rows while retaining the first-differenc
   assert.equal(findAll(page.output, 'section').length, 2);
   page.unmount();
 });
-test('the comparison route reads both requested episodes and offers a return link', async () => {
+test('the comparison route reads both requested episodes and falls back to run breadcrumbs without an evaluation', async () => {
   resetBrowser();
   const run = makeRun('eval');
   addEpisode(run, 'baseline', { task: 'cube', seed: 7, status: 'ended' }, events('baseline', false));
@@ -56,7 +58,38 @@ test('the comparison route reads both requested episodes and offers a return lin
   assert.equal(props.baseline.ref.episodeId, 'baseline');
   assert.equal(props.current.ref.episodeId, 'current');
   assert.equal(props.current.model.events.length, 4);
-  assert.ok(findAll(page.output, 'a').some(link => link.props.href === '/traces?run=eval&episode=current'));
+  const crumbs = propsOf<Parameters<typeof Breadcrumb>[0]>(page.output, Breadcrumb);
+  assert.deepEqual(crumbs.items.map(item => item.label), ['試行を選ぶ', 'eval', 'cube · seed 7', '基準と並べて比べる']);
+  const breadcrumb = mount(Breadcrumb, crumbs);
+  assert.equal(findAll(breadcrumb.output, 'nav')[0].props['aria-label'], '現在の場所');
+  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/traces', '/traces?run=eval', '/traces?run=eval&episode=current']);
+  const currentPage = findAll(breadcrumb.output, 'span').find(item => item.props['aria-current'] === 'page');
+  assert.equal(text(currentPage), '基準と並べて比べる');
+  assert.doesNotMatch(text(page.output), /← 試行の要約へ戻る|評価の一覧/);
+  assert.equal(findAll(page.output, 'nav').length, 0, 'no separate back-link navigation remains');
+  breadcrumb.unmount();
+  page.unmount();
+});
+test('comparison breadcrumbs link through the current evaluation and current trial', async () => {
+  resetBrowser();
+  const run = makeRun('eval');
+  addEpisode(run, 'baseline', { task: 'cube', seed: 7, status: 'ended' }, events('baseline', false));
+  addEpisode(run, 'current', { task: 'cube', seed: 7, status: 'ended' }, events('current', true));
+  serve(run);
+  const traceHandler = net.handler;
+  const detail = breakdownDetail();
+  detail.eval = { ...detail.eval!, eval_id: 'eval', changed: '把持位置の修正' };
+  net.handler = request => request.path === '/api/evals/eval' ? { json: detail } : traceHandler(request);
+  setLocation('/traces/compare?run=eval&episode=current&baseline_run=eval&baseline_episode=baseline');
+  const page = mount(SideBySidePage, {});
+  await advance(100);
+  const crumbs = propsOf<Parameters<typeof Breadcrumb>[0]>(page.output, Breadcrumb);
+  assert.deepEqual(crumbs.items.map(item => item.label), ['評価一覧', '把持位置の修正', 'cube · seed 7', '基準と並べて比べる']);
+  const breadcrumb = mount(Breadcrumb, crumbs);
+  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/evals', '/evals/eval', '/traces?run=eval&episode=current']);
+  assert.deepEqual(findAll(breadcrumb.output, 'span').filter(item => item.props['aria-current'] === 'page').map(text), ['基準と並べて比べる']);
+  assert.doesNotMatch(text(page.output), /← 試行の要約へ戻る|評価の一覧/);
+  breadcrumb.unmount();
   page.unmount();
 });
 test('missing baseline uses the existing GMO importer and resumes the comparison', async () => {

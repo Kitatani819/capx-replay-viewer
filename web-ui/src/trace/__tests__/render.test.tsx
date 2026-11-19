@@ -72,7 +72,7 @@ function timeline(m: EpisodeModel): string {
   return text(<Timeline model={m} ep={EP} running={false} selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
 }
 
-test('the replay header links to evaluations before the trial controls with details collapsed', () => {
+test('the replay header keeps the trial picker at the right with details collapsed', () => {
   for (const episodeId of [null, EP.episodeId]) {
     const html = renderToStaticMarkup(<TopBar
       runLabel={episodeId ? EP.runId : null} episodeLabel={episodeId} episodeId={episodeId}
@@ -81,8 +81,8 @@ test('the replay header links to evaluations before the trial controls with deta
       reader={{ corruptLines: 0, tornTail: false, eof: true, count: 0, replaced: false }}
     />);
     const header = html.split('<div hidden="">')[0];
-    assert.equal([...header.matchAll(/href="\/evals"/g)].length, 1);
-    assert.match(header, /<a href="\/evals"[^>]*>評価一覧<\/a>.*試行を選ぶ.*aria-expanded="false"[^>]*>試行の詳細/);
+    assert.equal([...header.matchAll(/href="\/evals"/g)].length, 0);
+    assert.match(header, /aria-expanded="false"[^>]*>試行の詳細.*class="replay-trial-button"[^>]*>別の試行を選ぶ/);
   }
 });
 

@@ -2,7 +2,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { evalApi } from '../../evals/api';
-import type { EvalTrial } from '../../evals/api';
+import type { EvalDetail, EvalTrial } from '../../evals/api';
 import { ApiError, episodeFileUrl, traceApi, type EpisodeRef } from '../api';
 import { fmtDuration } from '../format';
 import { useAsync, useEpisodeEvents, useFullText } from '../hooks';
@@ -86,12 +86,14 @@ export function TrialSummaryCard({ ep, model, summary, verdict, baseline, onJump
 }
 
 /** Fetch just the paired baseline, importing it with the existing per-episode flow. */
-export function TrialSummary({ ep, model, summary, runnerRecords, onJump }: {
+export function TrialSummary({ ep, model, summary, evaluation: suppliedEvaluation, runnerRecords, onJump }: {
   ep: EpisodeRef; model: EpisodeModel; summary: EpisodeSummary; runnerRecords: RunnerRecord[]; onJump: (eventId: string) => void;
+  evaluation?: EvalDetail | null;
 }) {
-  const evaluation = useAsync(signal => evalApi.detail(ep.runId, signal), [ep.runId]);
-  const baselineTrial = baselineForEpisode(evaluation.data, summary);
-  const baselineRun = evaluation.data?.baseline?.eval_id ?? null;
+  const evaluation = useAsync(suppliedEvaluation === undefined ? signal => evalApi.detail(ep.runId, signal) : null, [ep.runId, suppliedEvaluation !== undefined]);
+  const detail = suppliedEvaluation === undefined ? evaluation.data : suppliedEvaluation;
+  const baselineTrial = baselineForEpisode(detail, summary);
+  const baselineRun = detail?.baseline?.eval_id ?? null;
   const baselineId = baselineTrial?.episode_id ?? null;
   const key = JSON.stringify([baselineRun, baselineId]);
   const [missingKey, setMissingKey] = useState<string | null>(null);

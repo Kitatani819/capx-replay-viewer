@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { evalApi } from '../evals/api';
+import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
 import { ApiError, episodeFileUrl, fetchJsonFile, traceApi, type EpisodeRef } from './api';
 import { TaskOutcomeBadge } from './components/TaskOutcomeBadge';
 import { ValueView } from './components/ValueView';
@@ -178,7 +180,7 @@ function useComparisonTrial(runId: string | null, episodeId: string | null) {
   const error = importing?.message ?? summary.error ?? events.error;
   const data: TrialComparisonData | null = ref && summary.data && events.eof && !events.loading && !assetsLoading && !events.error && !requestPayloads.loading
     ? { ref, summary: summary.data, model, records: run.data?.runner_records ?? [], requestArguments: requestPayloads.data?.summaries } : null;
-  return { data, message: error ?? '記録を読み込み中…', retry: onReady, importing,
+  return { data, summary: summary.data, message: error ?? '記録を読み込み中…', retry: onReady, importing,
     partial: pending.some(item => item?.kind === 'failed' || item?.kind === 'unwritten') || requestPayloads.data?.partial || events.corruptLines > 0 || events.tornTail,
   };
 }
@@ -189,10 +191,13 @@ export default function SideBySidePage() {
   const baselineRunId = params.get('baseline_run'), baselineEpisodeId = params.get('baseline_episode');
   const current = useComparisonTrial(runId, episodeId);
   const baseline = useComparisonTrial(baselineRunId, baselineEpisodeId);
+  const evaluation = useAsync(runId ? signal => evalApi.detail(runId, signal) : null, [runId]);
+  const currentTrial = evaluation.data?.trials.find(trial => trial.episode_id === episodeId);
   const complete = !!runId && !!episodeId && !!baselineRunId && !!baselineEpisodeId;
   useEffect(() => { document.title = '同じseedで比べる · CaP-X'; }, []);
   return <main className="replay-workspace comparison-page">
-    <nav><a href={runId && episodeId ? trialEventUrl(runId, episodeId) : '/traces'}>← 試行の要約へ戻る</a><a href="/evals">評価の一覧</a></nav>
+    <Breadcrumb items={trialBreadcrumbs({ runId, episodeId, evaluation: evaluation.data?.eval,
+      task: current.summary?.task ?? currentTrial?.task, seed: current.summary?.seed ?? currentTrial?.seed, compare: true })} />
     {!complete ? <p role="alert">比較する2つの試行を指定してください。</p> : <>
       {!baseline.data && <div className="comparison-loading" role="status">基準：{baseline.message}
         {!baseline.importing?.busy && <button type="button" onClick={baseline.retry}>再読み込み</button>}</div>}

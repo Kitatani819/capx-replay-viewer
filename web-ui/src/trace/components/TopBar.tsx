@@ -44,6 +44,7 @@ export interface PollStatus {
 
 interface TopBarProps {
   onSimpleView?: () => void;
+  compareHref?: string;
   /** Labels of the run/episode picker button. */
   runLabel: string | null;
   episodeLabel: string | null;
@@ -267,6 +268,7 @@ export function UnusedHookNotice({ count }: { count: number }) {
 
 export function TopBar({
   onSimpleView,
+  compareHref,
   runLabel,
   episodeLabel,
   episodeId,
@@ -365,14 +367,14 @@ export function TopBar({
       <div className="replay-header-main">
         <h1 title={task ?? undefined}>{task ?? (episodeLabel?.split('/')[0] || '試行のリプレイ')}</h1>
         <div className="replay-header-actions">
-          <a href="/evals" className="replay-text-button whitespace-nowrap">評価一覧</a>
           {episodeId && status === 'running' && <span className="text-sm text-accent">記録中</span>}
           {episodeId && gapParts.length > 0 && <span className="replay-warning" title={[...gapParts, ...gapDetails].join('\n')}>記録に欠落があります</span>}
           {episodeId && reader.error && reader.count > 0 && <span role="status" className="replay-warning" title={reader.error}>記録の更新に失敗しています</span>}
-          <button className="replay-trial-button" onClick={onOpenPicker} title={episodeLabel ?? undefined}>
-            {seed !== null ? `試行 ${seed} を変更` : '試行を選ぶ'} <span aria-hidden>⌄</span>
-          </button>
           <button className="replay-text-button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>試行の詳細</button>
+          {compareHref && <a className="replay-compare-button" href={compareHref}>基準と並べて比べる</a>}
+          <button type="button" className="replay-trial-button" onClick={onOpenPicker} title={episodeLabel ?? undefined}>
+            別の試行を選ぶ <span aria-hidden>⌄</span>
+          </button>
         </div>
       </div>
       <div hidden={!expanded}>

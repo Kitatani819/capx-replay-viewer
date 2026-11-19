@@ -6,7 +6,8 @@ import { TopBar } from '../components/TopBar';
 import { Picker } from '../components/Picker';
 import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
 import { SmallButton } from '../components/common';
-import { advance, findAll, net, resetBrowser, setLocation } from './harness/browser';
+import { Breadcrumb } from '../../navigation/Breadcrumb';
+import { advance, findAll, net, propsOf, resetBrowser, setLocation } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
 function setup() {
@@ -22,8 +23,12 @@ test('simple view hides diagnostics; details switch preserves episode and is rev
   assert.equal(findAll(page.output,SimpleViewer).length,1);
   assert.equal(findAll(page.output,TopBar).length,0);
   const evalLinks=findAll(page.output,'a').filter(e=>e.props.href==='/evals');
-  assert.equal(evalLinks.length,1);
-  assert.equal(evalLinks[0].props.children,'評価一覧');
+  assert.equal(evalLinks.length,0);
+  assert.deepEqual(propsOf<Parameters<typeof Breadcrumb>[0]>(page.output,Breadcrumb).items,[
+    {label:'試行を選ぶ',href:'/traces'},
+    {label:'r1',href:'/traces?run=r1'},
+    {label:'cube_lift · seed 1'},
+  ]);
   const click=(label:string)=>(findAll(page.output,SmallButton).find(e=>e.props.children===label)!.props.onClick as ()=>void)();
   click('リプレイを見る');await advance(0);
   assert.equal(findAll(page.output,SimpleViewer).length,0);

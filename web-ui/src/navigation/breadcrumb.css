@@ -1,0 +1,9 @@
+.breadcrumb { min-width: 0; max-width: 100%; font-size: 14px; line-height: 1.7; }
+.breadcrumb ol { display: flex; flex-wrap: wrap; gap: 4px 0; list-style: none; margin: 0; padding: 0; }
+.breadcrumb li { display: flex; align-items: baseline; min-width: 0; max-width: 100%; }
+.breadcrumb :is(a, [aria-current]) { min-width: 0; overflow-wrap: anywhere; }
+.breadcrumb a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.breadcrumb a:hover { text-decoration-thickness: 2px; }
+.breadcrumb a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; border-radius: 2px; }
+.breadcrumb [aria-current] { font-weight: 500; }
+.breadcrumb-separator { flex-shrink: 0; margin-inline: 10px; opacity: .6; }
