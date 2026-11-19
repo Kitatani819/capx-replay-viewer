@@ -321,17 +321,31 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
                 finalize_trial_outcomes(trace_root, eval_id)
             details = reader.run_detail(trace_root, eval_id) or {}
             completed = eval_resume.completed_trials(details.get("episodes", []))
+            prior_segments = previous.get("segments") or []
+            prior_count = prior_segments[-1].get("completed_after") if prior_segments else None
+            if type(prior_count) is int and len(completed) < prior_count:
+                raise ValueError("completed trial records are missing; restore the recording before resuming")
+            saved_done, saved_error, _st = reader.read_json_at(directory, eval_resume.COMPLETED_FILE, 4 * 1024 * 1024)
+            if saved_error and prior_segments:
+                raise ValueError("completed trial inventory is missing or unreadable")
+            if saved_error is None:
+                if not isinstance(saved_done, list) or any(not isinstance(item, dict) or eval_resume.trial_key(item) is None for item in saved_done):
+                    raise ValueError("invalid completed trial inventory")
+                if not {eval_resume.trial_key(item) for item in saved_done} <= {eval_resume.trial_key(item) for item in completed}:
+                    raise ValueError("a previously completed tuple is missing from the recording")
             history = copy.deepcopy(previous.get("segments") or [{
                 "index": 1, "status": previous["status"], "started_at": previous["started_at"],
                 "ended_at": previous["ended_at"], "end": previous["end"], "completed_before": 0,
                 "completed_after": len(completed), **({"job": previous["job"]} if "job" in previous else {}),
             }])
+            cumulative_used = 0.0
             for prior_segment in history:
                 if "budget" not in prior_segment:
                     stamp = evals._time(prior_segment["ended_at"])
-                    usage = eval_resume.budget_usage(directory, prior_segment["index"], stamp)
+                    usage = eval_resume.budget_usage(directory, prior_segment["index"], stamp, used_before_s=cumulative_used)
                     if usage is not None:
                         prior_segment["budget"] = usage
+                cumulative_used += prior_segment.get("budget", {}).get("used_s", 0)
             if previous["status"] == "running":
                 history[-1].update(status="interrupted", end=None, ended_at=None, stop_verified=True,
                                    completed_after=len(completed))
@@ -444,13 +458,16 @@ def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, reco
             segment["job"] = job
         segment.update(status=record["status"], end=end, ended_at=record["ended_at"])
         try:
-            usage = eval_resume.budget_usage(directory, segment["index"], evals._time(record["ended_at"]))
+            usage = eval_resume.budget_usage(directory, segment["index"], evals._time(record["ended_at"]), time.monotonic(),
+                                             used_before_s=sum(item["used_s"] for item in budget_history))
             if usage is not None:
                 segment["budget"] = usage
         except (OSError, ValueError):
             print("eval: could not record segment budget usage; resume will require valid budget metadata", file=sys.stderr)
         details = reader.run_detail(trace_root, eval_id) or {}
-        segment["completed_after"] = len(eval_resume.completed_trials(details.get("episodes", [])))
+        completed_after = eval_resume.completed_trials(details.get("episodes", []))
+        segment["completed_after"] = len(completed_after)
+        eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed_after)
         try:
             _write_record(path, record, directory=directory)
         except (OSError, ValueError) as exc:
@@ -470,7 +487,7 @@ def main(words: Sequence[str] | None = None) -> int:
     parser.add_argument("--baseline")
     parser.add_argument("--resume")
     parser.add_argument("--eval-set")
-    parser.add_argument("--by", default=os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""))
+    parser.add_argument("--by")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--trust-repo", action="store_true")
     if words in (["-h"], ["--help"]):
@@ -503,7 +520,8 @@ def main(words: Sequence[str] | None = None) -> int:
         trace_root = Path(os.path.abspath(os.path.expanduser(trace_dir)))
         print(f"eval: records will be saved to {trace_root}", flush=True)
         result = run_eval(command, trace_root=trace_root, shared_root=shared_root, changed=args.changed,
-                          baseline=args.baseline, eval_set=args.eval_set, by=args.by, repo=args.repo,
+                          baseline=args.baseline, eval_set=args.eval_set,
+                          by=args.by if args.by is not None else "" if args.resume else os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""), repo=args.repo,
                           trust_repo=args.trust_repo, resume=args.resume)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot start evaluation: {exc}")

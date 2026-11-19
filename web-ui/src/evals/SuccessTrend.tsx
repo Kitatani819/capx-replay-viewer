@@ -30,7 +30,7 @@ export function SuccessTrend({ entries }: { entries: EvalListEntry[] }) {
         <option value="">全課題</option>{tasks.map(name => <option value={name} key={name}>{name}</option>)}
       </select></label>
     </div>
-    <p className="eval-trend-note">成功数 / 記録された試行数。未判定・実行中の試行や再試行も分母に含みます。未実行・記録のない試行数は補完しません。</p>
+    <p className="eval-trend-note">成功数 / 評価に記録された試行数。新しい分割評価はタスク・条件・seed の各組の最後を1回だけ数え、計画済みの未走行も失敗として含めます。旧記録は再試行を含む集計を保ち、記録されていない予定数は推定しません。未判定・実行中の試行も分母に含みます。</p>
     <p className="eval-trend-note">左から評価開始日時順です（横の間隔は経過時間を表しません）。評価ごとに課題・seed・モデル・設定が異なる場合があります。</p>
     {task !== null && <p className="eval-trend-note">{task} の課題別集計がある評価を表示しています。未判定・記録欠損の件数は評価全体の値です。</p>}
     {excluded > 0 && <p className="eval-trend-note">評価または開始日時を読み取れない {excluded}件はグラフに含めていません。</p>}

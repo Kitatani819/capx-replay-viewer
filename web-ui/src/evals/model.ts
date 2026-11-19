@@ -10,6 +10,7 @@ export interface ComparisonRow {
   current: Map<number | null, TrialCell>;
 }
 function later(trial: EvalTrial, previous: EvalTrial): boolean {
+  if (typeof trial.eval_segment === 'number' && typeof previous.eval_segment === 'number' && trial.eval_segment !== previous.eval_segment) return trial.eval_segment > previous.eval_segment;
   if (typeof trial.start_wall_time === 'number' && typeof previous.start_wall_time === 'number' && trial.start_wall_time !== previous.start_wall_time) return trial.start_wall_time > previous.start_wall_time;
   if (typeof trial.runner_invocation === 'number' && typeof previous.runner_invocation === 'number' && trial.runner_invocation !== previous.runner_invocation) return trial.runner_invocation > previous.runner_invocation;
   return (trial.attempt ?? 0) >= (previous.attempt ?? 0);

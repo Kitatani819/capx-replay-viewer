@@ -76,6 +76,7 @@ export interface EvalTrial {
   seed: number | null;
   attempt: number | null;
   runner_invocation?: number | null;
+  eval_segment?: number | null;
   start_wall_time?: number | null;
   verdict: TaskVerdict;
   end_classification?: EndClassification | null;

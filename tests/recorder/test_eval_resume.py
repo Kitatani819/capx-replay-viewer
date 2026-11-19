@@ -207,3 +207,36 @@ def test_startup_failure_before_budget_clock_costs_no_simulator_budget(tmp_path)
     with reader.Dir.open_root(tmp_path) as directory:
         eval_resume.write_json(directory, "evaluation-budget.json", {"schema": "capx-eval-budget/1", "limit_s": 600})
         assert eval_resume.budget_usage(directory, 1, 1000)["used_s"] == 0
+
+
+def test_wall_clock_rollback_does_not_refund_budget_and_monotonic_is_preferred(tmp_path, monkeypatch):
+    with reader.Dir.open_root(tmp_path) as directory:
+        monkeypatch.setattr(eval_resume, "machine_id", lambda: "same-boot")
+        eval_resume.write_json(directory, "evaluation-budget.json", {"schema": "capx-eval-budget/1", "limit_s": 600})
+        eval_resume.write_json(directory, "evaluation-clock-1.json", {"budget_s": 600, "started_at": 1000, "used_before_s": 200,
+                               "started_monotonic": 100, "machine_id": "same-boot"})
+        assert eval_resume.budget_usage(directory, 1, 900)["used_s"] == 400
+        assert eval_resume.budget_usage(directory, 1, 900, 150)["used_s"] == 50
+
+
+def test_lost_writer_with_missing_clock_consumes_known_remaining_budget(tmp_path):
+    with reader.Dir.open_root(tmp_path) as directory:
+        eval_resume.write_json(directory, "evaluation-budget.json", {"schema": "capx-eval-budget/1", "limit_s": 600})
+        assert eval_resume.budget_usage(directory, 2, None, used_before_s=200) == {
+            "limit_s": 600, "used_before_s": 200, "used_s": 400}
+
+
+def test_segment_order_wins_over_rolled_back_wall_time():
+    old = {"task": "cube", "condition": None, "seed": 401, "eval_segment": 1, "start_wall_time": 1000}
+    new = {"task": "cube", "condition": None, "seed": 401, "eval_segment": 2, "start_wall_time": 900}
+    assert evals.latest_logical_episodes([new, old]) == [new]
+
+
+def test_missing_completed_episode_cannot_be_rerun_as_if_unfinished(tmp_path, clean_repo):
+    import shutil
+    root = tmp_path / "traces"
+    wrapper.run_eval([sys.executable, "-c", writer_code([1, 2], plan=[1, 2])], trace_root=root, repo=clean_repo)
+    value = load(root)
+    shutil.rmtree(root / value["eval_id"] / "trial-1-1")
+    with pytest.raises(ValueError, match="completed trial records are missing"):
+        wrapper.run_eval([sys.executable, "-c", "pass"], trace_root=root, repo=clean_repo, resume=value["eval_id"])

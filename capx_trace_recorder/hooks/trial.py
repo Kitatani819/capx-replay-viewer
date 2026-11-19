@@ -434,6 +434,7 @@ def _episode_start(sig: inspect.Signature, args: tuple, kwargs: dict, slot: Any)
             "seed": _plain(trial),
             "attempt_index": attempt,
             "runner_invocation": invocation,
+            "eval_segment": int(os.environ["CAPX_EVAL_SEGMENT"]) if os.environ.get("CAPX_EVAL_SEGMENT", "").isdecimal() else None,
             "condition_label": condition,
             "runner_condition": runner_condition,
             "config_flags": flags,

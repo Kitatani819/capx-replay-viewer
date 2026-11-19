@@ -127,6 +127,7 @@ SUMMARY_FIELDS = (
     "seed",
     "attempt_index",
     "runner_invocation",
+    "eval_segment",
     "start_wall_time",
     "end_wall_time",
     "end_reason",
@@ -1492,7 +1493,8 @@ def run_detail_at(run_id: str, run: Dir, *, now: float | None = None) -> dict[st
     run_st, records_st = run.file_stat(RUN_FILE), run.file_stat(RUNNER_RECORDS_FILE)
     if not episodes and run_st is None and records_st is None and not unscoped:
         return None
-    episodes.sort(key=lambda e: (_sort_time(e), e["episode_id"]))
+    episodes.sort(key=lambda e: (e.get("eval_segment") if type(e.get("eval_segment")) is int and 0 <= e["eval_segment"] <= 1000 else 0,
+                                 _sort_time(e), e["episode_id"]))
     return {
         "run_id": run_id,
         "run": run_json,

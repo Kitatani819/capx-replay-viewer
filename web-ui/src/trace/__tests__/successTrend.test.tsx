@@ -58,7 +58,7 @@ test('accessible chart links points to evaluations and exposes denominators, gap
   assert.match(html, /href="\/evals\/eval-01"/);
   assert.match(html, /2\/4/);
   assert.match(html, /0\/0/);
-  assert.match(html, /未判定・実行中の試行や再試行も分母/);
+  assert.match(html, /未判定・実行中の試行も分母/);
   assert.match(html, /課題・seed・モデル・設定が異なる/);
   assert.doesNotMatch(html, /<polyline/); // The missing denominator breaks the line.
   assert.equal([...html.matchAll(/<circle /g)].length, 2);

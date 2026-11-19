@@ -18,6 +18,7 @@ from urllib.request import urlopen
 from check_replay_layout import check
 from check_multi_camera import check as check_multi_camera
 from check_paired_significance import check as check_paired_significance
+from check_evaluation_resume import check as check_evaluation_resume
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
     flow = parser.add_mutually_exclusive_group()
     flow.add_argument('--multi-camera', action='store_true', help='Run the three-camera acceptance flow')
     flow.add_argument('--paired-significance', action='store_true', help='Check paired results with synthetic evaluations')
+    flow.add_argument('--evaluation-resume', action='store_true', help='Check sequential evaluation resumes')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     fixture = args.fixture.resolve()
@@ -59,7 +61,8 @@ def main() -> None:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'Viewer did not become ready; see {output / "server.log"}')
                 time.sleep(.2)
-            acceptance = check_paired_significance if args.paired_significance else check_multi_camera if args.multi_camera else check
+            acceptance = (check_evaluation_resume if args.evaluation_resume else check_paired_significance
+                          if args.paired_significance else check_multi_camera if args.multi_camera else check)
             acceptance(base_url, fixture, output)
         finally:
             server.terminate()

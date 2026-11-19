@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 from capx_trace_viewer import reader
+from capx_trace_recorder.timeout import is_trial_alarm
 
 LOCK_FILE = ".evaluation.lock"
 CONTROL_FILE = "evaluation-control.json"
@@ -20,9 +21,11 @@ CONTROL_SCHEMA = "capx-eval-control/1"
 
 def trial_key(episode: dict[str, Any]) -> tuple[str, str | None, int] | None:
     task, condition, seed = (episode.get(name) for name in ("task", "condition", "seed"))
-    if not isinstance(task, str) or not task or len(task) > 200 or type(seed) is not int:
+    if (not isinstance(task, str) or not task or len(task) > 200 or any(ord(char) < 32 for char in task)
+            or type(seed) is not int or abs(seed) > 2 ** 53 - 1):
         return None
-    if condition is not None and (not isinstance(condition, str) or len(condition) > 200):
+    if condition is not None and (not isinstance(condition, str) or len(condition) > 200
+                                  or any(ord(char) < 32 for char in condition)):
         return None
     return task, condition, seed
 
@@ -63,7 +66,9 @@ def lock(directory: reader.Dir) -> Iterator[None]:
                     os.write(fd, b"0")
                 os.lseek(fd, 0, os.SEEK_SET)
                 msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-        except OSError:
+        except OSError as exc:
+            if is_trial_alarm(exc):
+                raise
             raise ValueError("this evaluation is already being written; run jobs sequentially") from None
         yield
     finally:
@@ -95,13 +100,17 @@ def write_json(directory: reader.Dir, name: str, value: Any, *, mode: int = 0o66
 def machine_id() -> str:
     try:
         boot = Path("/proc/sys/kernel/random/boot_id").read_bytes()
-    except OSError:
+    except OSError as exc:
+        if is_trial_alarm(exc):
+            raise
         # The boot time is stable on macOS and changes after restart. If unavailable,
         # refuse positive verification rather than trust a PID on another boot.
         import subprocess
         try:
             boot = subprocess.check_output(["sysctl", "-n", "kern.boottime"], timeout=2, stderr=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as exc:
+            if is_trial_alarm(exc):
+                raise
             return ""
     return hashlib.sha256(socket.gethostname().encode() + b"\0" + boot).hexdigest()
 
@@ -126,7 +135,9 @@ def stopped_process_group(directory: reader.Dir) -> bool:
             (os.killpg if group_check else os.kill)(pid, 0)
         except ProcessLookupError:
             continue
-        except (OSError, PermissionError):
+        except (OSError, PermissionError) as exc:
+            if is_trial_alarm(exc):
+                raise
             return False
         return False
     return True
@@ -166,7 +177,7 @@ def finalize_unobserved(trace_root: Path, run_id: str) -> int:
             with run.subdir(episode_id) as episode:
                 raw = {"episode_id": episode_id, "run_id": run_id, "task": key[0], "condition": key[1], "seed": key[2],
                        "source": "evaluation_plan", "status": "ended", "trace_complete": False,
-                       "episode_end_written": False, "start_wall_time": 0, "attempt_index": 0,
+                       "episode_end_written": False, "started_wall_time": 0, "attempt_index": 0, "eval_segment": 0,
                        "trial_outcome": {"task_success": False, "source": "evaluation_finalizer",
                                          "reason": "planned_unrun", "resumable": True}}
                 write_json(episode, "episode.json", raw)
@@ -175,7 +186,8 @@ def finalize_unobserved(trace_root: Path, run_id: str) -> int:
     return count
 
 
-def budget_usage(directory: reader.Dir, segment: int, ended_epoch: float | None) -> dict[str, float] | None:
+def budget_usage(directory: reader.Dir, segment: int, ended_epoch: float | None,
+                 ended_monotonic: float | None = None, *, used_before_s: float | None = None) -> dict[str, float] | None:
     """Charge active job time after the first simulator start, excluding queued gaps.
 
     On a lost supervisor, the exact active end is unknown. Conservatively consume
@@ -192,7 +204,10 @@ def budget_usage(directory: reader.Dir, segment: int, ended_epoch: float | None)
         raise ValueError("invalid evaluation budget limit")
     clock, error, _st = reader.read_json_at(directory, f"evaluation-clock-{segment}.json", 4096)
     if error == "missing":
-        return {"limit_s": limit, "used_before_s": 0, "used_s": 0}
+        before = 0 if used_before_s is None else used_before_s
+        if not 0 <= before <= limit:
+            raise ValueError("invalid cumulative segment time")
+        return {"limit_s": limit, "used_before_s": before, "used_s": limit - before if ended_epoch is None else 0}
     if error or not isinstance(clock, dict):
         raise ValueError("invalid segment budget clock")
     started, before, budget = clock.get("started_at"), clock.get("used_before_s", 0), clock.get("budget_s")
@@ -200,6 +215,14 @@ def budget_usage(directory: reader.Dir, segment: int, ended_epoch: float | None)
         raise ValueError("invalid segment budget clock values")
     if started <= 0 or before < 0 or before > limit or budget != limit:
         raise ValueError("segment budget differs from the original budget")
+    if used_before_s is not None and abs(before - used_before_s) > 1e-6:
+        raise ValueError("segment clock does not match cumulative history")
     remaining = max(0, limit - before)
-    used = remaining if ended_epoch is None else min(remaining, max(0, ended_epoch - started))
+    elapsed = None if ended_epoch is None else ended_epoch - started
+    mono = clock.get("started_monotonic")
+    if (ended_monotonic is not None and type(mono) in (int, float) and math.isfinite(mono)
+            and clock.get("machine_id") == machine_id() and machine_id()):
+        elapsed = ended_monotonic - mono
+    # A rolled-back wall clock cannot refund time to another segment.
+    used = remaining if elapsed is None or elapsed < 0 else min(remaining, elapsed)
     return {"limit_s": limit, "used_before_s": before, "used_s": used}

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { comparisonTable } from '../../evals/model';
 import { EvalSegments } from '../../evals/EvalSegments';
 import { EvalComparison, EvalListTable } from '../../evals/EvalPages';
 import type { EvalDetail, EvalRecord } from '../../evals/api';
@@ -27,4 +28,11 @@ test('evaluation list identifies split records and resumed summaries match lates
   const html = renderToStaticMarkup(<EvalComparison detail={detail} />);
   assert.match(html, /分割した評価の履歴/);
   assert.doesNotMatch(html, /集計と試行の表の数が異なります/);
+});
+
+test('a newer segment wins even when the wall clock moved backwards', () => {
+  const common = { task: 'cube', condition: null, seed: 1, verdict: 'failure', status: 'ended', trace_complete: true, local_state: 'local', attempt: 1 } as const;
+  const old = { ...common, episode_id: 'old', eval_segment: 1, start_wall_time: 1000 };
+  const now = { ...common, episode_id: 'new', eval_segment: 2, start_wall_time: 900, verdict: 'success' as const };
+  assert.equal(comparisonTable([now, old], []).currentTrials[0].episode_id, 'new');
 });

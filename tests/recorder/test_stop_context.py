@@ -186,3 +186,15 @@ def test_new_terminal_closures_have_an_explicit_failed_outcome(tmp_path, monkeyp
                            'reason': 'timeout_alarm', 'resumable': True}
     finally:
         rec.close()
+
+
+def test_resumed_elapsed_includes_previous_segments_and_uses_monotonic(monkeypatch):
+    import types
+    import sys
+    from capx_trace_recorder import stop_context
+    monkeypatch.setitem(sys.modules, "capx.envs.runner", types.SimpleNamespace(EVAL_BUDGET_SECONDS=600, EVAL_BUDGET_STARTED_AT=1000))
+    low = types.SimpleNamespace(_capx_evaluation_used_before_s=200, _capx_evaluation_started_monotonic=100)
+    monkeypatch.setattr(stop_context.time, "time", lambda: 900)
+    monkeypatch.setattr(stop_context.time, "monotonic", lambda: 150)
+    context = stop_context.trial_context(types.SimpleNamespace(low_level_env=low))
+    assert context["evaluation_elapsed_s"] == 250

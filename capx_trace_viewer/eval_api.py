@@ -157,6 +157,7 @@ class EvalService:
                 "status": episode["status"],
                 "trace_complete": episode.get("trace_complete") if type(episode.get("trace_complete")) is bool else None,
                 "local_state": episode["local_state"],
+                **({"eval_segment": episode["eval_segment"]} if type(episode.get("eval_segment")) is int else {}),
             })
         return trials
 

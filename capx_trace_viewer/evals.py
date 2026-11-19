@@ -211,6 +211,8 @@ def decode_code_changes(data: bytes, metadata: dict[str, Any]) -> dict[str, Any]
 def validate_segments(segments: Any) -> None:
     _require(isinstance(segments, list) and 0 < len(segments) <= 1000, "segments")
     fields = {"index", "status", "started_at", "ended_at", "end", "completed_before", "completed_after"}
+    original_limit = None
+    cumulative_used = 0.0
     for index, segment in enumerate(segments, 1):
         _require(isinstance(segment, dict) and fields.issubset(segment)
                  and set(segment).issubset(fields | {"job", "stop_verified", "budget"}), "segment fields")
@@ -229,6 +231,10 @@ def validate_segments(segments: Any) -> None:
                 _require(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 10 ** 9, "segment.budget value")
             _require(budget["limit_s"] > 0 and budget["used_before_s"] + budget["used_s"] <= budget["limit_s"] + 1e-6,
                      "segment.budget limit")
+            _require(original_limit is None or original_limit == budget["limit_s"], "segment.budget original limit")
+            _require(abs(budget["used_before_s"] - cumulative_used) <= 1e-6, "segment.budget cumulative time")
+            original_limit = budget["limit_s"]
+            cumulative_used += budget["used_s"]
         if "stop_verified" in segment:
             _require(segment["stop_verified"] is True and segment["status"] == "interrupted", "segment.stop_verified")
         if segment["status"] == "running":
@@ -518,7 +524,7 @@ def latest_logical_episodes(episodes: Sequence[dict[str, Any]]) -> list[dict[str
         previous = selected.get(key)
         later = True
         if previous is not None:
-            for field in ("start_wall_time", "runner_invocation", "attempt_index"):
+            for field in ("eval_segment", "start_wall_time", "runner_invocation", "attempt_index"):
                 left, right = episode.get(field), previous.get(field)
                 if _number(left) and _number(right) and left != right:
                     later = left > right

@@ -38,6 +38,7 @@ END_CAUSE_LABELS = {
     "parser_finish": "終了と解釈されたが未達成",
     "env_horizon": "環境のステップ期限に到達",
     "evaluation_budget": "評価全体の時間制限に到達",
+    "planned_unrun": "計画された試行が実行されなかった",
 }
 # One vocabulary for cell words and their explanations, mirrored in TypeScript.
 END_CAUSE_WORDS = {
@@ -58,6 +59,7 @@ END_CAUSE_WORDS = {
     "parser_finish": ("終了扱い", "続行の指示がなく終了と扱われたが課題は未達成"),
     "env_horizon": ("環境期限", "シミュレーター自身のステップ数の期限に到達"),
     "evaluation_budget": ("評価時間", "評価全体の時間制限に到達"),
+    "planned_unrun": ("未走行", "計画されたが実行されず、失敗として集計した試行"),
 }
 END_CAUSE_CELL_WORDS = {code: words[0] for code, words in END_CAUSE_WORDS.items()}
 # Include compatibility words used when an older server has no detailed cause.
@@ -319,6 +321,12 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     if verdict == "success":
         return result("success", verdict_source, evaluator or end, task_success=True,
                       fields={f"{verdict_source}.task_success": True})
+    marker = _dict(raw.get("trial_outcome"))
+    if (marker.get("source") == "evaluation_finalizer" and marker.get("reason") == "planned_unrun"
+            and marker.get("task_success") is False and verdict == "failure"):
+        return result("unknown", "evaluation_plan", code="planned_unrun",
+                      explanation="評価の計画に含まれていましたが実行されませんでした。公式と同じく失敗として数え、再開時は実行の対象にします。",
+                      fields={"trial_outcome.resumable": True}, missing=["試行の実行記録"])
     if harness.get("budget_exhausted") is True or outcome.get("budget_exhausted") is True:
         return result("timeout", "trace", end, code="evaluation_budget",
                       explanation="評価全体の時間制限に達したため終了しました。残りの試行も失敗として数えます。",
