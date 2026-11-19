@@ -21,6 +21,7 @@ export const END_CAUSE_LABELS: Record<EndCauseCode, string> = {
   slurm_time_limit: '評価ジョブが時間制限で打ち切られた', manual_stop: '手動で停止', replaced: '別の試行に置き換え',
   recording_incomplete: '記録が途中で終わった', unknown: '終了原因を特定できない',
   evaluation_budget: '評価全体の時間制限に到達',
+  planned_unrun: '計画された試行が実行されなかった',
 };
 // Canonical cell vocabulary mirrored from end_reason.py; parity is tested.
 export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = {
@@ -41,6 +42,7 @@ export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = 
   parser_finish: ["終了扱い", "続行の指示がなく終了と扱われたが課題は未達成"],
   env_horizon: ["環境期限", "シミュレーター自身のステップ数の期限に到達"],
   evaluation_budget: ["評価時間", "評価全体の時間制限に到達"],
+  planned_unrun: ["未走行", "計画されたが実行されず、失敗として集計した試行"],
 };
 export const END_CAUSE_CELL_WORDS = Object.fromEntries(
   Object.entries(END_CAUSE_WORDS).map(([code, [word]]) => [code, word]),

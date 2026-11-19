@@ -116,7 +116,19 @@ def trial_context(env: Any, *, turns_used: int | None = None, include_usage: boo
     add("evaluation_budget_s", runner.get("EVAL_BUDGET_SECONDS"), "capx.envs.runner.EVAL_BUDGET_SECONDS")
     started = _number(runner.get("EVAL_BUDGET_STARTED_AT"))
     if include_usage and started is not None and started > 0:
-        add("evaluation_elapsed_s", max(0, time.time() - started), "capx.envs.runner.EVAL_BUDGET_STARTED_AT")
+        before = _number(fields.get("_capx_evaluation_used_before_s"))
+        if before is None:
+            try:
+                before = float(os.environ.get("CAPX_EVAL_USED_BUDGET_S", "0"))
+            except ValueError:
+                before = 0
+            if _number(before) is None:
+                before = 0
+        mono = _number(fields.get("_capx_evaluation_started_monotonic"))
+        elapsed = time.monotonic() - mono if mono is not None and mono > 0 else time.time() - started
+        if elapsed >= 0:
+            add("evaluation_elapsed_s", before + elapsed, "capx.envs.runner.EVAL_BUDGET_STARTED_AT")
+
     if session is not None:
         # Web trials have a different loop bound and a per-code-block timeout.
         context.pop("trial_time_limit_s", None)

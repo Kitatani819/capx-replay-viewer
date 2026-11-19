@@ -287,6 +287,7 @@ export interface EpisodeStartData {
   seed?: number | null;
   attempt_index?: number | null;
   runner_invocation?: number | null;
+  eval_segment?: number | null;
   condition_label?: string | null;
   runner_condition?: Record<string, unknown> | null;
   config_flags?: Record<string, unknown> | null;
@@ -742,7 +743,7 @@ export interface RunListResponse {
 export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'unknown';
 export type EndCauseCode = 'success' | 'step_limit' | 'env_horizon' | 'trial_time_limit' | 'code_time_limit' | 'turn_limit' |
   'regeneration_limit' | 'finish_unmet' | 'parser_finish' | 'execution_error' | 'simulator_crash' | 'slurm_time_limit' |
-  'manual_stop' | 'replaced' | 'recording_incomplete' | 'evaluation_budget' | 'unknown';
+  'manual_stop' | 'replaced' | 'recording_incomplete' | 'evaluation_budget' | 'planned_unrun' | 'unknown';
 export interface EndCause {
   code: EndCauseCode;
   label: string;
@@ -795,6 +796,7 @@ export interface EpisodeSummary {
   seed?: number | null;
   attempt_index?: number | null;
   runner_invocation?: number | null;
+  eval_segment?: number | null;
   start_wall_time?: number | null;
   end_wall_time?: number | null;
   last_modified?: number | string | null;

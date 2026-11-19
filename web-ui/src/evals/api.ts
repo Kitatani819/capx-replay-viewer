@@ -33,6 +33,17 @@ export interface EvalSummary extends EvalCounts {
   config_flags: Record<string, unknown>;
   mixed: string[];
 }
+export interface EvalSegment {
+  index: number;
+  status: 'running' | 'completed' | 'interrupted';
+  started_at: string;
+  ended_at: string | null;
+  end: { exit_code: number; signal: number | null; workers_left_running?: boolean } | null;
+  completed_before: number;
+  completed_after: number | null;
+  stop_verified?: true;
+  budget?: { limit_s: number; used_before_s: number; used_s: number };
+}
 export interface EvalRecord {
   schema: 'capx-eval/1';
   eval_id: string;
@@ -47,6 +58,7 @@ export interface EvalRecord {
   heartbeat_at: string;
   ended_at: string | null;
   summary: EvalSummary | null;
+  segments?: EvalSegment[];
 }
 export interface EvalListEntry {
   eval_id: string;
@@ -64,6 +76,7 @@ export interface EvalTrial {
   seed: number | null;
   attempt: number | null;
   runner_invocation?: number | null;
+  eval_segment?: number | null;
   start_wall_time?: number | null;
   verdict: TaskVerdict;
   end_classification?: EndClassification | null;

@@ -83,3 +83,9 @@
 .eval-significance-exclusions { color: #5d6b60; font-size: 13px; }
 .eval-repeat-reference { padding-top: 12px; border-top: 1px solid #e1e8de; }
 .eval-significance summary { cursor: pointer; color: #356b4e; }
+
+.eval-segments { margin: 22px 0; padding: 16px 20px; border-left: 3px solid #69866e; background: #edf3e9; font-size: 14px; }
+.eval-segments p + p, .eval-segments details { margin-top: 10px; }
+.eval-segments ol { margin: 12px 0; padding-left: 24px; list-style: decimal; }
+.eval-segments summary { cursor: pointer; color: #356b4e; }
+.eval-segment-count { display: block; color: #68766b; margin-top: 5px; font-size: 12px; }

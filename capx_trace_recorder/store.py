@@ -1142,7 +1142,7 @@ class TraceStore:
     # -- episode.json ---------------------------------------------------------
     def _summary_from_start(self, event: dict[str, Any]) -> dict[str, Any]:
         data = event.get("data", {})
-        keys = ("source", "task", "condition", "seed", "attempt_index", "runner_invocation",
+        keys = ("source", "task", "condition", "seed", "attempt_index", "runner_invocation", "eval_segment",
                 "condition_label", "models", "config_flags", "env", "stop_context")
         summary = {k: data.get(k) for k in keys}
         summary["started_wall_time"] = event.get("wall_time")

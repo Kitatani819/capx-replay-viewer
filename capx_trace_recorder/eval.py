@@ -22,6 +22,7 @@ from typing import Any, Sequence
 
 from capx_trace_viewer import evals, reader
 from capx_trace_recorder.stop_context import job_context
+from capx_trace_recorder import eval_resume
 
 HEARTBEAT_INTERVAL_S = 60.0
 WORKER_WAIT_TIMEOUT_S = 60.0
@@ -105,27 +106,25 @@ def git_revision(repo: Path, *, trust_repo: bool = False) -> dict[str, Any] | No
         return {"commit": commit, "dirty": None, "diff_sha256": None} if commit else None
 
 
-def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False) -> None:
+def _write_record(path: Path, record: dict[str, Any], *, initial: bool = False,
+                  directory: reader.Dir | None = None) -> None:
     evals.validate_eval_record(record, eval_id=path.parent.name)
     data = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     if len(data) > evals.MAX_EVAL_BYTES:
         raise ValueError("eval.json exceeds 256 KiB")
+    if directory is None:
+        with reader.Dir.open_below(path.parent.parent, [path.parent.name]) as opened:
+            return _write_record(path, record, initial=initial, directory=opened)
     if initial:
-        with path.open("xb") as stream:
+        fd = os.open("eval.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o666, dir_fd=directory.fd)
+        with os.fdopen(fd, "wb") as stream:
             stream.write(data)
         return
-    mode = stat.S_IMODE(path.stat().st_mode)
-    fd, temporary = tempfile.mkstemp(prefix=".eval-", suffix=".json.tmp", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as stream:
-            os.chmod(temporary, mode)
-            stream.write(data)
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+    st = directory.file_stat("eval.json")
+    if st is None:
+        raise ValueError("eval.json is missing or is not a regular file")
+    eval_resume.write_json(directory, "eval.json", record, mode=stat.S_IMODE(st.st_mode), preserve_mode=True)
 
 
 def _warn_group_access(path: Path) -> None:
@@ -271,40 +270,105 @@ def job_end_main(words: Sequence[str] | None = None) -> int:
 def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              baseline: str | None = None, eval_set: str | None = None, by: str = "",
              repo: Path | None = None, trust_repo: bool = False,
-             shared_root: Path | None = None,
+             shared_root: Path | None = None, resume: str | None = None,
              heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
              worker_wait_timeout: float = WORKER_WAIT_TIMEOUT_S,
              sinks: Sequence[Any] | None = None) -> int:
-    """Return the child's returncode; heartbeat and worker waits are injectable."""
+    """Run one sequential segment; a resumed evaluation retains its original identity."""
     if heartbeat_interval <= 0:
         raise ValueError("heartbeat interval must be positive")
     if worker_wait_timeout < 0:
         raise ValueError("worker wait timeout must be nonnegative")
+    if resume is not None and not reader.is_valid_id(resume):
+        raise ValueError("--resume must be a valid evaluation ID")
     trace_root = Path(os.path.abspath(os.path.expanduser(trace_root)))
     sinks = SINKS if sinks is None else sinks
     moment = dt.datetime.now(dt.timezone.utc)
-    eval_id = f"ev-{moment.strftime('%Y%m%dT%H%M%SZ')}-{os.urandom(2).hex()}"
+    eval_id = resume or f"ev-{moment.strftime('%Y%m%dT%H%M%SZ')}-{os.urandom(2).hex()}"
     started = _now()
-    record = {
-        "schema": evals.SCHEMA, "eval_id": eval_id, "status": "running", "end": None,
-        "by": by, "changed": changed, "baseline_eval_id": baseline, "eval_set": eval_set,
-        "git": git_revision(Path.cwd() if repo is None else repo, trust_repo=trust_repo), "started_at": started,
-        "heartbeat_at": started, "ended_at": None, "summary": None,
-    }
-    if job := job_context():
-        record["job"] = job
-    # Validate options before creating a directory or starting a command.
+    revision = git_revision(Path.cwd() if repo is None else repo, trust_repo=trust_repo)
+    record = {"schema": evals.SCHEMA, "eval_id": eval_id, "status": "running", "end": None,
+              "by": by, "changed": changed, "baseline_eval_id": baseline, "eval_set": eval_set,
+              "git": revision, "started_at": started, "heartbeat_at": started, "ended_at": None, "summary": None}
     evals.validate_eval_record(record, eval_id=eval_id)
-    if shared_root is not None:
-        _create_shared_root(Path(os.path.abspath(os.path.expanduser(shared_root))))
-    trace_root.mkdir(parents=True, exist_ok=True)
-    run = trace_root / eval_id
-    run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
-    from capx_trace_recorder.code_changes import capture_code_changes
-    record["code_changes"] = capture_code_changes(Path.cwd() if repo is None else repo, trace_root, baseline,
-                                                   record["git"], run, trust_repo=trust_repo)
-    path = run / "eval.json"
-    _write_record(path, record, initial=True)
+    if not resume:
+        if shared_root is not None:
+            _create_shared_root(Path(os.path.abspath(os.path.expanduser(shared_root))))
+        trace_root.mkdir(parents=True, exist_ok=True)
+        (trace_root / eval_id).mkdir()
+    path = trace_root / eval_id / "eval.json"
+    with reader.Dir.open_below(trace_root, [eval_id]) as directory, eval_resume.lock(directory):
+        if not resume:
+            from capx_trace_recorder.code_changes import capture_code_changes
+            record["code_changes"] = capture_code_changes(Path.cwd() if repo is None else repo, trace_root, baseline,
+                                                           record["git"], path.parent, trust_repo=trust_repo)
+        completed = []
+        history = []
+        if resume:
+            previous, error, _st = evals._read_eval_at(directory)
+            if error:
+                raise ValueError("cannot read the evaluation to resume")
+            evals.validate_eval_record(previous, eval_id=eval_id)
+            if not eval_resume.same_revision(previous.get("git"), revision):
+                raise ValueError("resume requires the same known, clean Git commit; commit changes before starting an evaluation")
+            for field, requested in (("by", by), ("changed", changed), ("baseline_eval_id", baseline), ("eval_set", eval_set)):
+                if requested not in (None, "") and requested != previous[field]:
+                    raise ValueError(f"cannot change {field} when resuming an evaluation")
+            must_verify = previous["status"] == "running" or (previous.get("end") or {}).get("workers_left_running")
+            if must_verify and not eval_resume.stopped_process_group(directory):
+                raise ValueError("cannot verify that the previous supervisor and workers have stopped; a stale heartbeat is insufficient")
+            if must_verify:
+                finalize_trial_outcomes(trace_root, eval_id)
+            details = reader.run_detail(trace_root, eval_id) or {}
+            completed = eval_resume.completed_trials(details.get("episodes", []))
+            prior_segments = previous.get("segments") or []
+            prior_count = prior_segments[-1].get("completed_after") if prior_segments else None
+            if type(prior_count) is int and len(completed) < prior_count:
+                raise ValueError("completed trial records are missing; restore the recording before resuming")
+            saved_done, saved_error, _st = reader.read_json_at(directory, eval_resume.COMPLETED_FILE, 4 * 1024 * 1024)
+            if saved_error and prior_segments:
+                raise ValueError("completed trial inventory is missing or unreadable")
+            if saved_error is None:
+                if not isinstance(saved_done, list) or any(not isinstance(item, dict) or eval_resume.trial_key(item) is None for item in saved_done):
+                    raise ValueError("invalid completed trial inventory")
+                if not {eval_resume.trial_key(item) for item in saved_done} <= {eval_resume.trial_key(item) for item in completed}:
+                    raise ValueError("a previously completed tuple is missing from the recording")
+            history = copy.deepcopy(previous.get("segments") or [{
+                "index": 1, "status": previous["status"], "started_at": previous["started_at"],
+                "ended_at": previous["ended_at"], "end": previous["end"], "completed_before": 0,
+                "completed_after": len(completed), **({"job": previous["job"]} if "job" in previous else {}),
+            }])
+            cumulative_used = 0.0
+            for prior_segment in history:
+                if "budget" not in prior_segment:
+                    stamp = evals._time(prior_segment["ended_at"])
+                    usage = eval_resume.budget_usage(directory, prior_segment["index"], stamp, used_before_s=cumulative_used)
+                    if usage is not None:
+                        prior_segment["budget"] = usage
+                cumulative_used += prior_segment.get("budget", {}).get("used_s", 0)
+            if previous["status"] == "running":
+                history[-1].update(status="interrupted", end=None, ended_at=None, stop_verified=True,
+                                   completed_after=len(completed))
+            record = {**previous, "status": "running", "end": None, "heartbeat_at": started,
+                      "ended_at": None, "summary": None}
+            record.pop("job", None)
+        segment = {"index": len(history) + 1, "status": "running", "started_at": started,
+                   "ended_at": None, "end": None, "completed_before": len(completed), "completed_after": None}
+        if job := job_context():
+            record["job"] = job
+            segment["job"] = job
+        record["segments"] = [*history, segment]
+        evals.validate_eval_record(record, eval_id=eval_id)
+        eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed)
+        _write_record(path, record, initial=not bool(resume), directory=directory)
+        return _run_segment(command, trace_root=trace_root, eval_id=eval_id, record=record, path=path,
+                            directory=directory, baseline=record["baseline_eval_id"],
+                            heartbeat_interval=heartbeat_interval, worker_wait_timeout=worker_wait_timeout, sinks=sinks)
+
+
+def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, record: dict[str, Any],
+                 path: Path, directory: reader.Dir, baseline: str | None,
+                 heartbeat_interval: float, worker_wait_timeout: float, sinks: Sequence[Any]) -> int:
     if record["git"] is None:
         print("eval: Git metadata unavailable; check --repo and Git access to the checkout", file=sys.stderr)
     elif record["git"]["dirty"] is None:
@@ -320,6 +384,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         if not found:
             print(f"eval: baseline {baseline} was not found; continuing", file=sys.stderr)
 
+    segment = record["segments"][-1]
     child: subprocess.Popen[Any] | None = None
     pending: list[int] = []
 
@@ -341,9 +406,25 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         env = os.environ.copy()
         env["CAPX_TRACE_DIR"] = str(trace_root)
         env["CAPX_TRACE_RUN_ID"] = eval_id
+        env["CAPX_EVAL_SEGMENT"] = str(segment["index"])
+        env["CAPX_EVAL_COMPLETED_TRIALS_FILE"] = str(path.parent / eval_resume.COMPLETED_FILE)
+        env["CAPX_EVAL_SETTINGS_FILE"] = str(path.parent / "resume-settings.json")
+        budget_history = [item["budget"] for item in record["segments"][:-1] if "budget" in item]
+        env["CAPX_EVAL_USED_BUDGET_S"] = str(sum(item["used_s"] for item in budget_history))
+        if budget_history:
+            env["CAPX_EVAL_BUDGET_LIMIT_S"] = str(budget_history[0]["limit_s"])
+        else:
+            env.pop("CAPX_EVAL_BUDGET_LIMIT_S", None)
+        if segment["index"] > 1:
+            env["CAPX_EVAL_RESUME"] = "1"
+        else:
+            env.pop("CAPX_EVAL_RESUME", None)
+        eval_resume.write_json(directory, eval_resume.CONTROL_FILE, eval_resume.control(segment["index"]))
         try:
             options = {"start_new_session": True} if os.name == "posix" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
             child = subprocess.Popen(list(command), env=env, **options)
+            eval_resume.write_json(directory, eval_resume.CONTROL_FILE,
+                                   eval_resume.control(segment["index"], child.pid))
         except OSError as exc:
             print(f"eval: command could not start ({type(exc).__name__})", file=sys.stderr)
         if child is not None:
@@ -356,7 +437,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
                 except subprocess.TimeoutExpired:
                     record["heartbeat_at"] = _now()
                     try:
-                        _write_record(path, record)
+                        _write_record(path, record, directory=directory)
                     except (OSError, ValueError) as exc:
                         print(f"eval: heartbeat write failed ({type(exc).__name__})", file=sys.stderr)
         end = {"exit_code": returncode, "signal": -returncode if returncode < 0 else None}
@@ -365,16 +446,30 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         if not end.get("workers_left_running"):
             try:
                 finalize_trial_outcomes(trace_root, eval_id)
+                eval_resume.finalize_unobserved(trace_root, eval_id)
             except (OSError, ValueError):
                 print("eval: could not finalize interrupted trial outcomes", file=sys.stderr)
         record.update({"status": "completed" if returncode == 0 else "interrupted",
                        "end": end,
                        "ended_at": _now(), "heartbeat_at": _now(),
-                       "summary": evals.summarize_run(trace_root, eval_id)})
+                       "summary": evals.summarize_run(trace_root, eval_id, logical=True)})
         if job := job_context():
             record["job"] = job
+            segment["job"] = job
+        segment.update(status=record["status"], end=end, ended_at=record["ended_at"])
         try:
-            _write_record(path, record)
+            usage = eval_resume.budget_usage(directory, segment["index"], evals._time(record["ended_at"]), time.monotonic(),
+                                             used_before_s=sum(item["used_s"] for item in budget_history))
+            if usage is not None:
+                segment["budget"] = usage
+        except (OSError, ValueError):
+            print("eval: could not record segment budget usage; resume will require valid budget metadata", file=sys.stderr)
+        details = reader.run_detail(trace_root, eval_id) or {}
+        completed_after = eval_resume.completed_trials(details.get("episodes", []))
+        segment["completed_after"] = len(completed_after)
+        eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed_after)
+        try:
+            _write_record(path, record, directory=directory)
         except (OSError, ValueError) as exc:
             print(f"eval: final record write failed ({type(exc).__name__})", file=sys.stderr)
         _publish(record, sinks)
@@ -390,8 +485,9 @@ def main(words: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="capx-trace-recorder eval")
     parser.add_argument("--changed", default="")
     parser.add_argument("--baseline")
+    parser.add_argument("--resume")
     parser.add_argument("--eval-set")
-    parser.add_argument("--by", default=os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""))
+    parser.add_argument("--by")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--trust-repo", action="store_true")
     if words in (["-h"], ["--help"]):
@@ -418,14 +514,15 @@ def main(words: Sequence[str] | None = None) -> int:
         trace_dir = str(shared_root / (os.environ.get("USER") or getpass.getuser()))
     if args.baseline is not None and not reader.is_valid_id(args.baseline):
         parser.error("--baseline must be a valid trace ID")
-    if args.baseline is not None and not args.changed.strip():
+    if args.baseline is not None and not args.changed.strip() and not args.resume:
         parser.error("--changed is required with --baseline")
     try:
         trace_root = Path(os.path.abspath(os.path.expanduser(trace_dir)))
         print(f"eval: records will be saved to {trace_root}", flush=True)
         result = run_eval(command, trace_root=trace_root, shared_root=shared_root, changed=args.changed,
-                          baseline=args.baseline, eval_set=args.eval_set, by=args.by, repo=args.repo,
-                          trust_repo=args.trust_repo)
+                          baseline=args.baseline, eval_set=args.eval_set,
+                          by=args.by if args.by is not None else "" if args.resume else os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""), repo=args.repo,
+                          trust_repo=args.trust_repo, resume=args.resume)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot start evaluation: {exc}")
     return 128 - result if result < 0 else result
