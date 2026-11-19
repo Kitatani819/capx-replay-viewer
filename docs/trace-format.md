@@ -1267,10 +1267,13 @@ uses the current settings. `interval_s` accepts integers from 0 to 86400 (one da
 Zero disables automatic imports; an invalid config file reports an error without
 stopping the scheduler, which recovers when the file is corrected. Shutdown stops both
 the scheduler and its subprocesses. The GMO tab polls status every five seconds while
-open. Running recordings become `stale` as they grow and are updated with `--inplace`,
-so an open viewer's Live display follows subsequent imports. If the preserved heartbeat
-becomes stale between imports, `incomplete` summaries (and events in Live mode) continue
-to be read every 20 seconds; the recorded heartbeat and status rules stay unchanged.
+open. Running recordings become `stale` as they grow and are updated with `--inplace`.
+An open remote trial in Live mode uses the episode follower described in 9.3, independently
+of the automatic import interval. Without a follower, if the preserved heartbeat becomes
+stale between imports, `incomplete` summaries (and events in Live mode) continue to be read
+every 20 seconds, slowing to once a minute after ten minutes; the recorded heartbeat and
+status rules stay unchanged. 「一覧を更新」 forces remote discovery immediately, bypassing
+the listing cache without waiting for the automatic import interval.
 
 Runs. A directory under the trace root is a run when it holds a regular `run.json` or
 `runner_records.jsonl` (readable or not), an episode directory, an unscoped log or an
@@ -1644,6 +1647,33 @@ automatic import or resumed copy is detected. A transition from `incomplete` to 
 status starts the tail grace period. While the open episode has no matching runner record and the run
 had a running episode in the last 60 s, the viewer re-reads the runner records every 30 s.
 `web-ui/src/trace/live.ts` states the exact rules.
+
+Imported Live episodes. With the existing GMO integration enabled (including an RTX VM
+selected through `CAPX_GMO_CONFIG`), the page checks that the selected trial exists and is
+running remotely, then calls `POST /api/gmo/live` with `{run_id, episode_id}`. It renews
+the lease every 10 s while Live is active, and reads `GET /api/gmo/live` about every 2 s.
+Both routes use the same loopback, Origin, JSON and request-header guards as `/fetch`.
+Status contains `following`, `run_id`, `episode_id`, `last_ok_at`, `last_error`, `interval_s`,
+`copied_bytes` and `stopped_reason`. Timestamps are UTC ISO 8601 or null; copied bytes are
+cumulative for the current follower. A new target replaces the previous single follower.
+
+The backend reuses `/fetch` discovery validation, the safe manifest and changed-file rsync
+path, with the same transfer size limit. No remote installation or writes are needed.
+Cycles start about every 2 s, never overlap, and a slow cycle is followed immediately by
+the next one. Failures back off, with the error visible in the page. Closing the page,
+selecting another trial or switching to Browse stops renewals; the backend stops after
+30 s without a renewal. Settings changes and server shutdown also stop the follower.
+After copying `episode_end`, it waits for a final cycle with no changed files, including
+completion of `video_copy_pending`, before stopping. Local events and summaries retain
+their one-second Live reads while a follower is active, even if a copied heartbeat has
+temporarily expired. Without a follower the incomplete-snapshot intervals above apply.
+
+While a trial is running in Live, each recorded camera has a tile with its newest saved
+frame, camera name and age (for example 「3秒前」); clicking uses the usual image enlargement.
+This view does not depend on selecting an event or on an MP4 already existing. Frames are
+recorded at about 4 per second per camera by default (`CAPX_TRACE_FRAME_FPS` raises this
+at recorder startup); transport and local polling determine the display delay. Once the
+trial ends and videos have been copied, the existing video view returns.
 
 File generations. When the `generation` of `events.jsonl` changes, the viewer drops what it
 has read, reads the file again from offset 0, and says so in the top bar

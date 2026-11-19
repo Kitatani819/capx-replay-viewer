@@ -124,7 +124,9 @@ def test_environment_fallback_and_ssh_argv(tmp_path, monkeypatch):
     monkeypatch.delenv("CAPX_GMO_SSH_COMMAND", raising=False)
     settings = gmo.GmoSettings.from_dict({"host": "user@host", "port": 8822,
                                            "identity_file": "~/.ssh/KEY", "mine": ["/a/traces"]})
-    assert gmo.api_ssh_argv(settings) == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15",
+    multiplex = [] if sys.platform == "win32" else [
+        "-o", "ControlMaster=auto", "-o", "ControlPersist=30", "-o", f"ControlPath=/tmp/capx-gmo-ssh-{os.getuid()}/%C"]
+    assert gmo.api_ssh_argv(settings) == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", *multiplex,
                                            "-p", "8822", "-i", str(Path.home() / ".ssh/KEY"),
                                            "-o", "IdentitiesOnly=yes"]
 

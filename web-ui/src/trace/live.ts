@@ -19,6 +19,8 @@
  *   heartbeat expired between imports. Their summary is re-read every 20 s,
  *   and Live also re-reads events at that interval, until an end is recorded.
  *   Once the heartbeat is ten minutes old, both reads slow to once a minute.
+ *   An active remote follower keeps the one-second Live reads while recovering
+ *   a snapshot, so a newly copied heartbeat and events appear immediately.
  * - Runner records: the runner appends a trial's record only when its last
  *   attempt ends, which can be long after this episode ended (a timed-out
  *   attempt is retried). While this episode has no record and the run was
@@ -114,7 +116,8 @@ export function incompletePollMs(heartbeatAgeS?: number | null): number {
     ? STALE_INCOMPLETE_POLL_MS : INCOMPLETE_POLL_MS;
 }
 
-export function pollPlan(o: { live: boolean; running: boolean; grace: boolean; incomplete?: boolean; heartbeatAgeS?: number | null; videoPending?: boolean; videoCopyInterrupted?: boolean }): PollPlan {
+export function pollPlan(o: { live: boolean; running: boolean; grace: boolean; incomplete?: boolean; heartbeatAgeS?: number | null; videoPending?: boolean; videoCopyInterrupted?: boolean; remoteFollowing?: boolean }): PollPlan {
+  if (o.live && o.remoteFollowing) return { events: true, summaryMs: LIVE_POLL_MS };
   if (!o.running && o.incomplete && incompletePollMs(o.heartbeatAgeS) === STALE_INCOMPLETE_POLL_MS) {
     return { events: false, summaryMs: STALE_INCOMPLETE_POLL_MS };
   }

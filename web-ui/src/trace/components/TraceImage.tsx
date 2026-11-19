@@ -44,12 +44,23 @@ interface TraceImageProps {
   compact?: boolean;
   /** Render nothing (instead of 「未取得」) when the image cannot be loaded. */
   hideOnError?: boolean;
+  /** Retry a temporarily missing live frame after this many milliseconds. */
+  retryMs?: number;
 }
 
-export function TraceImage({ src, alt, provenance, meta, className = '', video = false, compact = false, hideOnError = false }: TraceImageProps) {
+export function TraceImage({ src, alt, provenance, meta, className = '', video = false, compact = false, hideOnError = false, retryMs }: TraceImageProps) {
   const [open, setOpen] = useState(false);
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
+  const [retry, setRetry] = useState(0);
+  useEffect(() => { setFailed(false); setRetry(0); }, [src]);
+  useEffect(() => {
+    if (!failed || !src || !retryMs || retryMs <= 0) return;
+    const timer = window.setTimeout(() => { setRetry(value => value + 1); setFailed(false); }, retryMs);
+    return () => window.clearTimeout(timer);
+  }, [failed, src, retryMs]);
+  // A copied events.jsonl can briefly name a JPEG the same transfer has not
+  // copied yet. Bypass the cached error only when retrying such a live image.
+  const shownSrc = src && retry ? `${src}${src.includes('?') ? '&' : '?'}image_retry=${retry}` : src;
 
   if (hideOnError && (!src || failed)) return null;
   if (!src || failed) {
@@ -67,10 +78,10 @@ export function TraceImage({ src, alt, provenance, meta, className = '', video =
     <>
       <div className={`relative group ${className}`}>
         {video ? (
-          <video src={src} controls className="w-full h-full object-contain rounded border border-surface-border bg-black" onError={() => setFailed(true)} />
+          <video src={shownSrc!} controls className="w-full h-full object-contain rounded border border-surface-border bg-black" onError={() => setFailed(true)} />
         ) : (
           <img
-            src={src}
+            src={shownSrc!}
             alt={alt}
             loading="lazy"
             onError={() => setFailed(true)}
@@ -87,7 +98,7 @@ export function TraceImage({ src, alt, provenance, meta, className = '', video =
           </div>
         )}
       </div>
-      {open && <ImageModal src={src} alt={alt} provenance={provenance} meta={meta} onClose={() => setOpen(false)} />}
+      {open && <ImageModal src={shownSrc!} alt={alt} provenance={provenance} meta={meta} onClose={() => setOpen(false)} />}
     </>
   );
 }

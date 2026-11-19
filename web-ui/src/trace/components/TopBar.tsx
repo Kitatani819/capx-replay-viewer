@@ -367,7 +367,11 @@ export function TopBar({
       <div className="replay-header-main">
         <h1 title={task ?? undefined}>{task ?? (episodeLabel?.split('/')[0] || '試行のリプレイ')}</h1>
         <div className="replay-header-actions">
-          {episodeId && status === 'running' && <span className="text-sm text-accent">記録中</span>}
+          {episodeId && status === 'running' && <span className="replay-live-status" role="status">
+            <span className="text-sm text-accent">記録中</span>
+            <span className="text-xs text-text-secondary" title={lastFetch ? `最終取得 ${fmtClock(lastFetch)}` : undefined}>{poll.text}</span>
+            <label className="text-xs"><input type="checkbox" checked={live} onChange={e => onLive(e.target.checked)} /> 新しい記録に追従</label>
+          </span>}
           {episodeId && gapParts.length > 0 && <span className="replay-warning" title={[...gapParts, ...gapDetails].join('\n')}>記録に欠落があります</span>}
           {episodeId && reader.error && reader.count > 0 && <span role="status" className="replay-warning" title={reader.error}>記録の更新に失敗しています</span>}
           <button className="replay-text-button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>試行の詳細</button>
@@ -382,7 +386,7 @@ export function TopBar({
         <div className="flex flex-wrap gap-3 items-center">
           <span className="break-all">run: {runLabel ?? '—'} / episode: {episodeLabel ?? '—'}</span>{legacy}
           {episodeId && <><Badge tone={statusToneValue}>{statusText}</Badge><span title={lastFetch ? `最終取得 ${fmtClock(lastFetch)}` : undefined}>{poll.text}</span>
-            <label><input type="checkbox" checked={live} onChange={e => onLive(e.target.checked)} /> 新しい記録に追従</label>
+            {status !== 'running' && <label><input type="checkbox" checked={live} onChange={e => onLive(e.target.checked)} /> 新しい記録に追従</label>}
             <SmallButton onClick={onRefresh}>更新</SmallButton></>}
           {onSimpleView && <SmallButton onClick={onSimpleView}>実行回ごとの表示</SmallButton>}
         </div>

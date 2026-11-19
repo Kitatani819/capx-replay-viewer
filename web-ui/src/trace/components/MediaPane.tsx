@@ -38,6 +38,7 @@ import { dataOf, type ImageInfo } from '../types';
 import { Badge, DebugFrameChip, SentToModelChip, SmallButton } from './common';
 import type { EventDataAccess } from './DataAssetState';
 import { TraceImage } from './TraceImage';
+import { LiveCameras } from './LiveCameras';
 import { VideoPlayback, type ReplaySeek } from './VideoPlayback';
 import type { TrialVideo } from '../playback';
 import type { TNode } from '../model';
@@ -62,7 +63,7 @@ interface MediaPaneProps extends EventDataAccess {
   ep: EpisodeRef;
   selection: Selection | null;
   live3d: Live3dState;
-  /** Live mode on a running episode: the flipbook of an open event shows the newest frame. */
+  /** Live mode on a running episode: show the latest frame of every camera. */
   follow: boolean;
 }
 
@@ -85,6 +86,11 @@ export function MediaPane({ model, ep, camera: sharedCamera, onCameraChange, sel
   useEffect(() => {
     if (!live3d.available && tab === 'live') setTab('recorded');
   }, [live3d.available, tab]);
+
+  // A running trial has no MP4 yet (CaP-X writes it at the end), so Live shows the
+  // newest frame of every camera. Once videos exist, the normal player is kept.
+  if (follow && videos.length === 0) return <div className="replay-media flex flex-col min-w-0"><LiveCameras model={model} ep={ep} />
+    {logPanel && <div className="border-t border-surface-border">{logPanel}</div>}</div>;
 
   return (
     <div className="replay-media flex flex-col min-w-0">

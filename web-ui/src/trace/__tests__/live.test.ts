@@ -38,6 +38,12 @@ test('old incomplete snapshots check for imports at most once a minute without c
   }
 });
 
+test('an active remote follower checks an incomplete local copy at the Live rate until its heartbeat arrives', () => {
+  const snapshot = { live: true, running: false, incomplete: true, heartbeatAgeS: 7200, grace: false, remoteFollowing: true };
+  assert.deepEqual(pollPlan(snapshot), { events: true, summaryMs: 1000 });
+  assert.deepEqual(pollPlan({ ...snapshot, live: false }), { events: false, summaryMs: STALE_INCOMPLETE_POLL_MS });
+});
+
 test('copy pending keeps polling when an ended episode is opened and reports interrupted copies',()=>{
  const s:EpisodeSummary={episode_id:'e',status:'ended',episode:{video_copy_pending:true,updated_wall_time:1000}};
  assert.equal(videoCopyMessage(s,1001_000),'動画を保存中');

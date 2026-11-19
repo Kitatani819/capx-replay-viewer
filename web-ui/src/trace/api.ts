@@ -261,6 +261,17 @@ export interface GmoAutoStatus {
   skipped_large: { run_id: string; episode_id: string; size_bytes: number }[];
 }
 
+export interface GmoLiveStatus {
+  following: boolean;
+  run_id: string | null;
+  episode_id: string | null;
+  last_ok_at: string | null;
+  last_error: string | null;
+  interval_s: number;
+  copied_bytes: number;
+  stopped_reason: string | null;
+}
+
 /** A server started without --gmo has no GMO routes. */
 export class GmoDisabledError extends ApiError {
   constructor(url: string) {
@@ -319,6 +330,14 @@ export const gmoApi = {
 
   jobs(signal?: AbortSignal): Promise<GmoJob[]> {
     return gmoJson('/jobs', signal);
+  },
+
+  live(signal?: AbortSignal): Promise<GmoLiveStatus> {
+    return gmoJson('/live', signal);
+  },
+
+  follow(runId: string, episodeId: string, signal?: AbortSignal): Promise<GmoLiveStatus> {
+    return gmoJson('/live', signal, 'POST', { run_id: runId, episode_id: episodeId });
   },
 
   auto(signal?: AbortSignal): Promise<GmoAutoStatus> {
