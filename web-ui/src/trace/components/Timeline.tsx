@@ -163,6 +163,11 @@ function flatten(
 // Timeline
 // ---------------------------------------------------------------------------
 
+export interface TimelineSelectionOptions {
+  /** A disclosure click keeps the row under the pointer instead of revealing it. */
+  from: 'list';
+}
+
 interface TimelineProps {
   model: EpisodeModel;
   summary?: EpisodeSummary | null;
@@ -170,7 +175,7 @@ interface TimelineProps {
   running: boolean;
   selectedKey: string | null;
   selectedEventId: string | null;
-  onSelect: (node: TNode, eventId?: string) => void;
+  onSelect: (node: TNode, eventId?: string, options?: TimelineSelectionOptions) => void;
   onClearSelection?: () => void;
   scrollToken: number;
   /** False for a run's unscoped log, which is no episode and has no task text. */
@@ -277,7 +282,7 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
               return next;
             });
             if (r.expanded && r.node.key === selectedKey) onClearSelection?.();
-            else onSelect(r.node);
+            else onSelect(r.node, undefined, { from: 'list' });
           }}
         />
       </ErrorBoundary>

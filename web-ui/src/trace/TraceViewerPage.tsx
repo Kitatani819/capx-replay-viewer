@@ -61,7 +61,7 @@ import { MediaPane } from './components/MediaPane';
 import { Picker, type PickerMode } from './components/Picker';
 import { SimplePicker, SimpleViewer } from './components/SimpleViewer';
 import { Splitter } from './components/Splitter';
-import { Timeline } from './components/Timeline';
+import { Timeline, type TimelineSelectionOptions } from './components/Timeline';
 import { TopBar, UnusedHookNotice, type PollStatus } from './components/TopBar';
 import { Badge, ErrorText, SmallButton, Spinner } from './components/common';
 
@@ -270,18 +270,26 @@ export default function TraceViewerPage() {
   // Let the timeline reveal the selected row once the event loads.
   const scrolledFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!selection || scrolledFor.current === selection.eventId) return;
+    if (!selection) {
+      scrolledFor.current = null;
+      return;
+    }
+    if (scrolledFor.current === selection.eventId) return;
     scrolledFor.current = selection.eventId;
     setScrollToken((x) => x + 1);
   }, [selection]);
 
   const onSelect = useCallback(
-    (node: TNode, eventId?: string) => {
+    (node: TNode, eventId?: string, options?: TimelineSelectionOptions) => {
+      const id = eventId ?? selectionEventId(node);
+      // Disclosure clicks already have the row under the pointer. Mark this
+      // event handled so the selection effect does not request a scroll either.
+      if (options?.from === 'list') scrolledFor.current = id;
       setPlaybackSelection(null);
       setReplaySeek({key: node.key, token: nextFocusToken()});
       setLive(false);
-      setParams({ event: eventId ?? selectionEventId(node) });
-      setScrollToken((x) => x + 1);
+      setParams({ event: id });
+      if (options?.from !== 'list') setScrollToken((x) => x + 1);
     },
     [setParams],
   );

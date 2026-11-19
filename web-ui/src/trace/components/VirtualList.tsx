@@ -18,8 +18,9 @@ interface VirtualListProps<T> {
   /** Changes when disclosure/content invalidates a row's cached height. */
   measurementKey?: (item: T) => string;
   renderItem: (item: T) => ReactNode;
-  /** Key of the row to bring into view; changing `scrollToken` repeats the request. */
+  /** Row for the next scroll request. A key change alone cancels any pending request. */
   scrollToKey: string | null;
+  /** Change to request a scroll, including when selecting a different row. */
   scrollToken: number;
   overscanPx?: number;
   className?: string;
@@ -146,8 +147,16 @@ export function VirtualList<T>({
   // update limit before ResizeObserver gets a chance to measure the new rows.
   // Declared before the effect below so both run in the same commit.
   const pending = useRef<{ key: string; until: number } | null>(null);
+  const requestedToken = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
-    pending.current = scrollToKey ? { key: scrollToKey, until: performance.now() + SCROLL_SETTLE_MS } : null;
+    // A list click updates selection without requesting a scroll. In particular,
+    // its newly expanded height must not prolong or restart an earlier request.
+    if (requestedToken.current !== scrollToken) {
+      pending.current = scrollToKey ? { key: scrollToKey, until: performance.now() + SCROLL_SETTLE_MS } : null;
+    } else if (pending.current?.key !== scrollToKey) {
+      pending.current = null;
+    }
+    requestedToken.current = scrollToken;
   }, [scrollToKey, scrollToken]);
   useLayoutEffect(() => {
     if (!pending.current) return;
@@ -206,7 +215,9 @@ export function VirtualList<T>({
       style={{ overflowAnchor: 'auto', overscrollBehaviorY: view.scrollable ? 'contain' : 'auto' }}
     >
       {n === 0 && empty}
-      {windowed && <div style={{ height: offsets[start] }} />}
+      {/* Spacers can span the viewport, but their fixed top is not a useful
+          scroll anchor. Anchor on a real row as measured offsets change. */}
+      {windowed && <div style={{ height: offsets[start], overflowAnchor: 'none' }} />}
       {items.slice(start, end).map((item, i) => {
         const key = keys[start + i];
         return (
@@ -215,7 +226,7 @@ export function VirtualList<T>({
           </MeasuredRow>
         );
       })}
-      {windowed && <div style={{ height: Math.max(0, total - offsets[end]) }} />}
+      {windowed && <div style={{ height: Math.max(0, total - offsets[end]), overflowAnchor: 'none' }} />}
     </div>
   );
 }

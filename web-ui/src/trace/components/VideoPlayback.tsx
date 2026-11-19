@@ -91,12 +91,21 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
     setFollow(false);setTime(cue.time);
     if(video.current){video.current.pause();programmaticSeek.current=cue.time;video.current.currentTime=Math.min(cue.time,duration);}
   };
+  const holdPosition=()=>{
+    initialized.current=true;
+    following.current=false;
+    setFollow(false);
+    // An unmapped selection has no new seek target. Guard the position where
+    // we stopped, so queued seeking events cannot resume follow on another row.
+    programmaticSeek.current=video.current?.currentTime ?? null;
+    video.current?.pause();
+  };
   // Only manual selections send this token. Playback-driven selections never
   // seek themselves: otherwise timeupdate would repeatedly pause the player.
   useEffect(()=>{
     if(!seekRequest || appliedSeek.current===seekRequest.token)return;
     const cue=map.all.find(c=>c.node.key===seekRequest.key);
-    if(!cue){video.current?.pause();following.current=false;setFollow(false);return;}
+    if(!cue){holdPosition();return;}
     appliedSeek.current=seekRequest.token;
     setTurn(turnOf(cue.node));seek(cue);
   },[seekRequest,map]);
@@ -110,8 +119,7 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
     // events may run before this acknowledgement arrives.
     if (selectionFromPlayback && initialized.current) return;
     if(changed && incoming!==selected.current){
-      video.current?.pause();following.current=false;setFollow(false);
-      initialized.current=true;
+      holdPosition();
       const cue=map.all.find(c=>c.node.key===incoming);
       if(cue)seek(cue);
       else selected.current=null; // Keep retrying if metadata or the cue arrives later.
@@ -161,8 +169,7 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const selectRecordedNode=(node:TNode, openDetail=true)=>{
     const cue=map.all.find(c=>c.node.key===node.key);
     if(cue){jump(cue,turn!==null,openDetail);return;}
-    video.current?.pause();following.current=false;setFollow(false);
-    initialized.current=true;
+    holdPosition();
     selected.current=node.key;onSelect(node,openDetail);
   };
   const resumeFollow = () => {
