@@ -7,6 +7,7 @@ The attempt/time matching below mirrors web-ui/src/trace/runner.ts and outcome.t
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import math
 import re
@@ -18,6 +19,11 @@ from capx_trace_viewer import reader
 
 SCHEMA = "capx-eval/1"
 MAX_EVAL_BYTES = 256 * 1024
+MAX_CODE_CHANGES_BYTES = 128 * 1024
+MAX_CODE_DIFF_BYTES = 64 * 1024
+CODE_CHANGES_FILE = "code_changes.json"
+CODE_CHANGE_STATUSES = {"recorded", "no_baseline", "baseline_missing", "baseline_ambiguous", "baseline_git_missing",
+                        "baseline_dirty", "current_git_missing", "git_unavailable", "write_failed"}
 HEARTBEAT_STALE_S = 300
 _MAX_ITEMS = 10_000
 _COUNT_LIMIT = 1_000_000_000
@@ -89,9 +95,11 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
     fields = {"schema", "eval_id", "status", "end", "by", "changed", "baseline_eval_id",
               "eval_set", "git", "started_at", "heartbeat_at", "ended_at", "summary"}
     _require(isinstance(value, dict) and fields.issubset(value)
-             and set(value).issubset(fields | {"job"}), "record fields")
+             and set(value).issubset(fields | {"job", "code_changes"}), "record fields")
     if "job" in value:
         validate_job_context(value["job"])
+    if "code_changes" in value:
+        validate_code_change_metadata(value["code_changes"])
     _require(value["schema"] == SCHEMA, "schema")
     _require(reader.is_valid_id(value["eval_id"]), "eval_id")
     _require(eval_id is None or value["eval_id"] == eval_id, "eval_id (run mismatch)")
@@ -127,10 +135,74 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
         diff = git.get("diff_sha256")
         _require((git["dirty"] and isinstance(diff, str) and re.fullmatch(r"[0-9a-f]{64}", diff) is not None)
                  or (not git["dirty"] and diff is None), "git.diff_sha256")
+    changes = value.get("code_changes")
+    if changes and changes["status"] == "recorded":
+        _require(baseline is not None and git is not None and changes["current_commit"] == git["commit"],
+                 "code_changes evaluation relation")
     summary = value["summary"]
     if summary is not None:
         _validate_summary(summary)
     return value
+
+
+def validate_code_change_metadata(value: Any) -> dict[str, Any]:
+    fields = {"status", "baseline_commit", "current_commit", "artifact", "sha256", "size_bytes",
+              "files", "excluded_files", "untracked_files", "redacted"}
+    _require(isinstance(value, dict) and set(value) == fields, "code_changes fields")
+    _require(isinstance(value["status"], str) and value["status"] in CODE_CHANGE_STATUSES, "code_changes.status")
+    for field in ("baseline_commit", "current_commit"):
+        _require(value[field] is None or (isinstance(value[field], str)
+                 and re.fullmatch(r"[0-9a-f]{40,64}", value[field]) is not None), f"code_changes.{field}")
+    for field in ("files", "excluded_files", "untracked_files"):
+        _count(value[field], f"code_changes.{field}")
+    _require(value["files"] <= 100 and type(value["redacted"]) is bool, "code_changes bounds")
+    if value["status"] == "recorded":
+        _require(value["baseline_commit"] is not None and value["current_commit"] is not None
+                 and value["artifact"] == CODE_CHANGES_FILE
+                 and isinstance(value["sha256"], str) and re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None
+                 and type(value["size_bytes"]) is int and 0 < value["size_bytes"] <= MAX_CODE_CHANGES_BYTES,
+                 "code_changes artifact")
+    else:
+        _require(value["artifact"] is None and value["sha256"] is None and value["size_bytes"] is None
+                 and value["files"] == 0, "code_changes unavailable")
+    return value
+
+
+def valid_code_path(path: Any) -> bool:
+    """A bounded relative display path; never interpreted as a server filesystem path."""
+    return (isinstance(path, str) and 0 < len(path) <= 240 and not path.startswith(("/", "-"))
+            and "\\" not in path and not any(ord(c) < 32 or ord(c) == 127 for c in path)
+            and all(part not in ("", ".", "..") for part in path.split("/")))
+
+
+def validate_code_change_artifact(value: Any, metadata: dict[str, Any]) -> dict[str, Any]:
+    _require(isinstance(value, dict) and set(value) == {"schema", "baseline_commit", "current_commit", "files"},
+             "code changes artifact fields")
+    _require(value["schema"] == "capx-code-changes/1"
+             and value["baseline_commit"] == metadata["baseline_commit"]
+             and value["current_commit"] == metadata["current_commit"], "code changes commits")
+    _require(isinstance(value["files"], list) and len(value["files"]) == metadata["files"] <= 100,
+             "code changes files")
+    paths, size = set(), 0
+    for item in value["files"]:
+        _require(isinstance(item, dict) and set(item) == {"path", "diff"} and valid_code_path(item["path"])
+                 and isinstance(item["diff"], str), "code changes file")
+        _require(item["path"] not in paths, "code changes duplicate path")
+        paths.add(item["path"])
+        size += len(item["diff"].encode("utf-8"))
+    _require(size <= MAX_CODE_DIFF_BYTES, "code changes diff size")
+    return value
+
+
+def decode_code_changes(data: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+    validate_code_change_metadata(metadata)
+    _require(len(data) == metadata["size_bytes"] and len(data) <= MAX_CODE_CHANGES_BYTES
+             and hashlib.sha256(data).hexdigest() == metadata["sha256"], "code changes integrity")
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError, RecursionError):
+        raise EvalValidationError("invalid code changes JSON") from None
+    return validate_code_change_artifact(value, metadata)
 
 
 def validate_job_context(job: Any) -> None:

@@ -538,7 +538,8 @@ def test_cli_trust_repo_scopes_global_config_and_removes_it_before_child(tmp_pat
         f"assert value == {str(repo.resolve()) + chr(10)!r}",
         f"Path({str(observed)!r}).write_text(str(config))",
         f"if sys.argv[-2:] == ['rev-parse', 'HEAD']: print({commit!r})",
-        "elif sys.argv[-2:] != ['status', '--porcelain']: raise AssertionError(sys.argv)",
+        "elif sys.argv[-4:] == ['config', '--null', '--name-only', '--list']: pass",
+        "elif sys.argv[-3:] != ['status', '--porcelain', '--ignore-submodules=all']: raise AssertionError(sys.argv)",
     ]) + "\n")
     stub.chmod(0o755)
     trace_root = tmp_path / "trace"

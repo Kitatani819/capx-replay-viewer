@@ -226,9 +226,20 @@ def build_evals(root: Path, manifest: dict, now: float) -> dict:
             "end": {"exit_code": 0, "signal": None}, "by": "合成デモ",
             "changed": "並列候補の変更（合成デモ）" if improved else "",
             "baseline_eval_id": baseline_id if improved else None, "eval_set": "synthetic-2x3",
-            "git": None, "started_at": started, "heartbeat_at": ended, "ended_at": ended,
+            "git": {"commit": ("b" if improved else "a") * 40, "dirty": False},
+            "started_at": started, "heartbeat_at": ended, "ended_at": ended,
             "summary": evals.summarize_run(root / "traces", run_id),
         }
+        if improved:
+            import hashlib
+            patch = {"schema": "capx-code-changes/1", "baseline_commit": "a" * 40, "current_commit": "b" * 40,
+                     "files": [{"path": "synthetic_method.py", "diff": "--- a/synthetic_method.py\n+++ b/synthetic_method.py\n@@ -1 +1 @@\n-use_parallel_ensemble = False\n+use_parallel_ensemble = True\n"}]}
+            encoded = (json.dumps(patch) + "\n").encode()
+            (run / evals.CODE_CHANGES_FILE).write_bytes(encoded)
+            record["code_changes"] = {"status": "recorded", "baseline_commit": "a" * 40, "current_commit": "b" * 40,
+                                      "artifact": evals.CODE_CHANGES_FILE, "sha256": hashlib.sha256(encoded).hexdigest(),
+                                      "size_bytes": len(encoded), "files": 1, "excluded_files": 0,
+                                      "untracked_files": 0, "redacted": False}
         evals.validate_eval_record(record, eval_id=run_id)
         (run / "eval.json").write_text(json.dumps(record, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     return {"baseline": baseline_id, "improved": improved_id, "regression_episode": regression}

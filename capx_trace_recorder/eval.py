@@ -78,7 +78,7 @@ def git_revision(repo: Path, *, trust_repo: bool = False) -> dict[str, Any] | No
     git_env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
 
     def git(*args: str) -> bytes:
-        result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=10, env=git_env)
+        result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(repo), *args], capture_output=True, timeout=10, env=git_env)
         if result.returncode:
             raise OSError("git failed")
         return result.stdout
@@ -93,12 +93,14 @@ def git_revision(repo: Path, *, trust_repo: bool = False) -> dict[str, Any] | No
                 config.write_text(f'[safe]\n\tdirectory = "{value}"\n', encoding="utf-8")
                 git_env["GIT_CONFIG_GLOBAL"] = str(config)
             commit = git("rev-parse", "HEAD").decode("ascii").strip()
-            dirty = bool(git("status", "--porcelain"))
+            from capx_trace_recorder.code_changes import without_git_filters
+            git_env.update(without_git_filters(git_env, git("config", "--null", "--name-only", "--list")))
+            dirty = bool(git("status", "--porcelain", "--ignore-submodules=all"))
             revision: dict[str, Any] = {"commit": commit, "dirty": dirty}
             if dirty:
-                revision["diff_sha256"] = hashlib.sha256(git("diff", "HEAD")).hexdigest()
+                revision["diff_sha256"] = hashlib.sha256(git("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "HEAD")).hexdigest()
             return revision
-    except (OSError, UnicodeError, subprocess.TimeoutExpired):
+    except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
         commit = _git_commit(repo)
         return {"commit": commit, "dirty": None, "diff_sha256": None} if commit else None
 
@@ -298,6 +300,9 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     trace_root.mkdir(parents=True, exist_ok=True)
     run = trace_root / eval_id
     run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
+    from capx_trace_recorder.code_changes import capture_code_changes
+    record["code_changes"] = capture_code_changes(Path.cwd() if repo is None else repo, trace_root, baseline,
+                                                   record["git"], run, trust_repo=trust_repo)
     path = run / "eval.json"
     _write_record(path, record, initial=True)
     if record["git"] is None:

@@ -592,9 +592,9 @@ for scope, patterns in (('mine', mine), ('team', team)):
                                      files_digest=digest))
                     if include_files:
                         manifest = [[episode_id + '/' + rel, size, mtime] for rel, size, mtime in files]
-                        for metadata in ('run.json', 'eval.json', 'runner_records.jsonl'):
+                        for metadata in ('run.json', 'eval.json', 'runner_records.jsonl', 'code_changes.json'):
                             st = regular(os.path.join(run, metadata))
-                            if st:
+                            if st and (metadata != 'code_changes.json' or st.st_size <= 131072):
                                 manifest.append([metadata, st.st_size, int(st.st_mtime)])
                         rows[-1]['files'] = manifest
                 out.extend(rows)
@@ -623,9 +623,9 @@ if regular(os.path.join(episode, 'events.jsonl')) is None and regular(os.path.jo
     print(json.dumps({'error': 'Episode is no longer available'}))
     sys.exit(0)
 files = []
-for metadata in ('run.json', 'eval.json', 'runner_records.jsonl'):
+for metadata in ('run.json', 'eval.json', 'runner_records.jsonl', 'code_changes.json'):
     st = regular(os.path.join(run, metadata))
-    if st:
+    if st and (metadata != 'code_changes.json' or st.st_size <= 131072):
         files.append([metadata, st.st_size, int(st.st_mtime)])
 for base, dirs, names in os.walk(episode):
     dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(base, d)))
@@ -636,6 +636,54 @@ for base, dirs, names in os.walk(episode):
             files.append([os.path.relpath(path, run), st.st_size, int(st.st_mtime)])
 print(json.dumps({'files': files}, ensure_ascii=True))
 """
+
+
+REMOTE_CODE_CHANGES = r"""
+import base64, json, os, stat, sys
+path = sys.argv[1]
+fd = None
+try:
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    for part in path.split('/')[1:]:
+        if not part or part in ('.', '..'):
+            raise ValueError('path')
+        child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        os.close(fd)
+        fd = child
+    source = os.open('code_changes.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    try:
+        info = os.fstat(source)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 131072:
+            raise ValueError('file')
+        with os.fdopen(source, 'rb', closefd=False) as stream:
+            data = stream.read(131073)
+        if len(data) > 131072:
+            raise ValueError('size')
+    finally:
+        os.close(source)
+    print(json.dumps({'data': base64.b64encode(data).decode('ascii')}))
+except (OSError, ValueError):
+    print(json.dumps({'error': 'Code changes are not available'}))
+finally:
+    if fd is not None:
+        os.close(fd)
+"""
+
+
+def read_remote_code_changes(runner: ProcessRunner, settings: GmoSettings, row: dict[str, Any]) -> bytes:
+    """Read only the fixed, bounded artifact from a validated, unambiguous evaluation."""
+    import base64
+    _validate_run_path(row["run_id"], row["path"])
+    if row.get("conflict"):
+        raise FetchError("Conflicting evaluation locations")
+    value = _remote_python(runner, settings, REMOTE_CODE_CHANGES, [row["path"]], timeout=20)
+    if (not isinstance(value, dict) or set(value) != {"data"} or not isinstance(value["data"], str)
+            or len(value["data"]) > 174764):
+        raise FetchError("Code changes are not available")
+    try:
+        return base64.b64decode(value["data"], validate=True)
+    except ValueError:
+        raise FetchError("Invalid code changes reply") from None
 
 
 def _validate_run_path(run_id: str, path: str) -> None:
@@ -817,10 +865,12 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
         check_runs([run])
         if len({rel for rel, _, _ in run.files}) != len(run.files):
             raise FetchError("Duplicate episode file from GMO")
-        if any(rel not in ("run.json", "eval.json", "runner_records.jsonl")
+        if any(rel not in ("run.json", "eval.json", "runner_records.jsonl", "code_changes.json")
                and not rel.startswith(episode_id + "/")
                for rel, _, _ in run.files):
             raise FetchError("Unexpected file path from GMO")
+        if any(rel == "code_changes.json" and size > 128 * 1024 for rel, size, _mtime in run.files):
+            raise FetchError("Code changes artifact exceeds its size limit")
     except (KeyError, TypeError, ValueError) as exc:
         raise FetchError("Unexpected episode files from GMO") from exc
     return run
@@ -831,7 +881,7 @@ def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[
     if local_run.is_symlink():
         raise FetchError("Local destination contains a symlink")
     _check_local_links(local_run / episode_id)
-    for metadata in ("run.json", "eval.json", "runner_records.jsonl"):
+    for metadata in ("run.json", "eval.json", "runner_records.jsonl", "code_changes.json"):
         _check_local_links(local_run / metadata)
     return changed_files(run, local_run)
 

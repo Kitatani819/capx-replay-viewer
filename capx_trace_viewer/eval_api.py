@@ -1,6 +1,7 @@
 """Read-only evaluation listing and comparisons, behind the trace API's gate."""
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -219,6 +220,39 @@ class EvalService:
             "repeat_references": self._repeat_references(entries, remote, entry, baseline),
         }
 
+    def code_changes(self, eval_id: str) -> dict[str, Any] | None:
+        entries, _remote, _error = self._snapshot()
+        entry = entries.get(eval_id)
+        if entry is None:
+            return None
+        metadata = (entry["eval"] or {}).get("code_changes")
+        result = {"metadata": metadata, "artifact": None, "error": None, "location": None}
+        if metadata is None or metadata["status"] != "recorded":
+            return result
+        try:
+            with reader.Dir.open_below(self.trace_root, [eval_id]) as directory:
+                fd, info = directory.open_file(evals.CODE_CHANGES_FILE)
+                try:
+                    if info.st_size > evals.MAX_CODE_CHANGES_BYTES:
+                        raise ValueError("size")
+                    data = os.pread(fd, evals.MAX_CODE_CHANGES_BYTES + 1, 0)
+                finally:
+                    os.close(fd)
+            result.update(artifact=evals.decode_code_changes(data, metadata), location="local")
+            return result
+        except (OSError, ValueError):
+            pass
+        if entry["location"] in ("gmo", "both") and not entry["_conflict"] and self.gmo_service is not None:
+            from capx_trace_viewer import gmo
+            try:
+                data = self.gmo_service.read_code_changes(eval_id)
+                result.update(artifact=evals.decode_code_changes(data, metadata), location="gmo")
+                return result
+            except (gmo.FetchError, OSError, ValueError):
+                pass
+        result["error"] = "差分ファイルを安全に読み取れません。未取得・欠損・更新による不一致の可能性があります。"
+        return result
+
 
 def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: Any = None,
                        unix_socket: bool = False) -> APIRouter:
@@ -250,5 +284,14 @@ def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: A
         if record is None:
             raise HTTPException(status_code=404, detail="eval not found")
         return json_response(record)
+
+    @router.get("/{eval_id}/code-changes")
+    def code_changes(eval_id: str):
+        if not reader.is_valid_id(eval_id):
+            raise HTTPException(status_code=400, detail="invalid eval ID")
+        value = service.code_changes(eval_id)
+        if value is None:
+            raise HTTPException(status_code=404, detail="eval not found")
+        return json_response(value)
 
     return router
