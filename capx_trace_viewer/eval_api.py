@@ -110,7 +110,7 @@ class EvalService:
         if record["summary"] is not None:
             return record["summary"]
         episodes, records = self._episodes(entry["eval_id"], remote, conflict=entry["_conflict"])
-        return evals.aggregate_episodes(episodes, records)
+        return evals.aggregate_episodes(evals.latest_logical_episodes(episodes) if record.get("segments") else episodes, records)
 
     @staticmethod
     def _public(entry: dict[str, Any]) -> dict[str, Any]:

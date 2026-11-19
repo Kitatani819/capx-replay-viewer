@@ -5,6 +5,7 @@ import { useAsync, useInterval } from '../trace/hooks';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
+import { EvalSegments } from './EvalSegments';
 import { TrialConditions } from './TrialConditions';
 import { SuccessTrend } from './SuccessTrend';
 import { PairedSignificance } from './PairedSignificance';
@@ -59,7 +60,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
       const href = `/evals/${encodeURIComponent(record.eval_id)}`;
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
-        <td><a href={href}>{evaluationTitle(record)}</a></td><td className="eval-numbers"><Rate entry={entry} /></td>
+        <td><a href={href}>{evaluationTitle(record)}</a>{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
         <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status ? STATUS[entry.display_status] : ''}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
@@ -103,7 +104,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
   if (!record) return <p role="alert" className="eval-error">評価の記録を読み取れません：{detail.error || '記録が不正です'}</p>;
   const table = comparisonTable(detail.trials, detail.baseline_trials);
-  const mismatch = summaryDiffers(detail.summary, detail.trials) || (baseline && summaryDiffers(detail.baseline_summary, detail.baseline_trials));
+  const mismatch = summaryDiffers(detail.summary, record.segments ? table.currentTrials : detail.trials) || (baseline && summaryDiffers(detail.baseline_summary, baseline.segments ? table.baselineTrials : detail.baseline_trials));
   const differences = detail.differences.flatMap(differenceItems);
   const ruleDifferences = new Map<string, { text: string; source: string; sides: string[] }>();
   for (const [side, trials] of [['今回', detail.trials], ['基準', detail.baseline_trials]] as const) {
@@ -130,6 +131,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     {detail.error && <p role="status" className="eval-note">{detail.error}</p>}
     {detail.remote_error && <p role="status" className="eval-note">{detail.remote_error}</p>}
     {detail.baseline_error && <p className="eval-note">{detail.baseline_error}</p>}
+    <EvalSegments record={record} />
     {differences.length > 0 && <div className="eval-note"><p>条件の違い：</p><ul>{differences.map(diff => <li key={diff.key}>{diff.label}（基準 {valueText(diff.baseline)} / 今回 {valueText(diff.current)}）</li>)}</ul></div>}
     {officialNotes.length > 0 && <div role="note" className="eval-note eval-rule-note"><p>公式の評価と条件が違います：</p>{renderOfficialNotes(officialNotes.slice(0, 3))}
       {officialNotes.length > 3 && <details><summary>ほかの違い</summary>{renderOfficialNotes(officialNotes.slice(3))}</details>}</div>}

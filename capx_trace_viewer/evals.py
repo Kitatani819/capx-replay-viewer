@@ -95,11 +95,14 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
     fields = {"schema", "eval_id", "status", "end", "by", "changed", "baseline_eval_id",
               "eval_set", "git", "started_at", "heartbeat_at", "ended_at", "summary"}
     _require(isinstance(value, dict) and fields.issubset(value)
-             and set(value).issubset(fields | {"job", "code_changes"}), "record fields")
+             and set(value).issubset(fields | {"job", "code_changes", "segments"}), "record fields")
     if "job" in value:
         validate_job_context(value["job"])
     if "code_changes" in value:
         validate_code_change_metadata(value["code_changes"])
+    if "segments" in value:
+        validate_segments(value["segments"])
+        _require(value["segments"][-1]["status"] == value.get("status"), "segment status mismatch")
     _require(value["schema"] == SCHEMA, "schema")
     _require(reader.is_valid_id(value["eval_id"]), "eval_id")
     _require(eval_id is None or value["eval_id"] == eval_id, "eval_id (run mismatch)")
@@ -203,6 +206,46 @@ def decode_code_changes(data: bytes, metadata: dict[str, Any]) -> dict[str, Any]
     except (ValueError, UnicodeError, RecursionError):
         raise EvalValidationError("invalid code changes JSON") from None
     return validate_code_change_artifact(value, metadata)
+
+
+def validate_segments(segments: Any) -> None:
+    _require(isinstance(segments, list) and 0 < len(segments) <= 1000, "segments")
+    fields = {"index", "status", "started_at", "ended_at", "end", "completed_before", "completed_after"}
+    for index, segment in enumerate(segments, 1):
+        _require(isinstance(segment, dict) and fields.issubset(segment)
+                 and set(segment).issubset(fields | {"job", "stop_verified", "budget"}), "segment fields")
+        _require(type(segment["index"]) is int and segment["index"] == index, "segment.index")
+        _require(segment["status"] in ("running", "completed", "interrupted"), "segment.status")
+        _require(_time(segment["started_at"]) is not None, "segment.started_at")
+        _count(segment["completed_before"], "segment.completed_before")
+        if segment["completed_after"] is not None:
+            _count(segment["completed_after"], "segment.completed_after")
+        if "job" in segment:
+            validate_job_context(segment["job"])
+        if "budget" in segment:
+            budget = segment["budget"]
+            _require(isinstance(budget, dict) and set(budget) == {"limit_s", "used_before_s", "used_s"}, "segment.budget")
+            for value in budget.values():
+                _require(type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 10 ** 9, "segment.budget value")
+            _require(budget["limit_s"] > 0 and budget["used_before_s"] + budget["used_s"] <= budget["limit_s"] + 1e-6,
+                     "segment.budget limit")
+        if "stop_verified" in segment:
+            _require(segment["stop_verified"] is True and segment["status"] == "interrupted", "segment.stop_verified")
+        if segment["status"] == "running":
+            _require(index == len(segments) and segment["end"] is None and segment["ended_at"] is None
+                     and segment["completed_after"] is None, "running segment")
+        elif segment.get("stop_verified") is True:
+            _require(segment["end"] is None and segment["ended_at"] is None, "verified stopped segment")
+        else:
+            _require(_time(segment["ended_at"]) is not None and isinstance(segment["end"], dict), "finished segment")
+            end = segment["end"]
+            _require({"exit_code", "signal"}.issubset(end)
+                     and set(end).issubset({"exit_code", "signal", "workers_left_running"}), "segment.end")
+            _require(type(end["exit_code"]) is int and -255 <= end["exit_code"] <= 255, "segment.end.exit_code")
+            _require(end["signal"] is None or type(end["signal"]) is int and 1 <= end["signal"] <= 255,
+                     "segment.end.signal")
+            if "workers_left_running" in end:
+                _require(type(end["workers_left_running"]) is bool, "segment.end.workers_left_running")
 
 
 def validate_job_context(job: Any) -> None:
@@ -462,9 +505,33 @@ def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Seque
     return summary
 
 
-def summarize_run(trace_root: Path, run_id: str, *, now: float | None = None) -> dict[str, Any]:
+def latest_logical_episodes(episodes: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse only known task/condition/seed tuples, retaining unidentified attempts."""
+    selected: dict[tuple[str, str | None, int], dict[str, Any]] = {}
+    unidentified = []
+    for episode in episodes:
+        task, condition, seed = (episode.get(key) for key in ("task", "condition", "seed"))
+        if not isinstance(task, str) or not task or type(seed) is not int or (condition is not None and not isinstance(condition, str)):
+            unidentified.append(episode)
+            continue
+        key = (task, condition, seed)
+        previous = selected.get(key)
+        later = True
+        if previous is not None:
+            for field in ("start_wall_time", "runner_invocation", "attempt_index"):
+                left, right = episode.get(field), previous.get(field)
+                if _number(left) and _number(right) and left != right:
+                    later = left > right
+                    break
+        if previous is None or later:
+            selected[key] = episode
+    return [*selected.values(), *unidentified]
+
+
+def summarize_run(trace_root: Path, run_id: str, *, now: float | None = None, logical: bool = False) -> dict[str, Any]:
     details = reader.run_detail(trace_root, run_id, now=now) or {}
-    return aggregate_episodes(details.get("episodes", []), details.get("runner_records", []))
+    episodes = details.get("episodes", [])
+    return aggregate_episodes(latest_logical_episodes(episodes) if logical else episodes, details.get("runner_records", []))
 
 
 def display_status(record: dict[str, Any], *, now: float | None = None) -> str | None:
