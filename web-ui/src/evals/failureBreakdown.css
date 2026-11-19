@@ -26,6 +26,18 @@
 .failure-trial-name small { display: block; color: #68766b; }
 .failure-trial-baseline { color: #55675a; }
 .failure-trials a { display: inline-flex; align-items: center; min-height: 32px; }
+.failure-cause-table { width: 100%; margin: 12px 0; border-collapse: collapse; font-size: 12px; }
+.failure-cause-table th, .failure-cause-table td { padding: 8px; border-bottom: 1px solid #e8ece5; text-align: right; font-variant-numeric: tabular-nums; }
+.failure-cause-table th:first-child { text-align: left; font-weight: 400; }
+.failure-cause-table small { display: block; margin-top: 3px; color: #68766b; font-weight: 400; }
+.failure-cause-table thead { color: #55675a; }
+.failure-cause-table td { vertical-align: top; }
+.failure-cause-trials > summary { cursor: pointer; min-height: 32px; padding: 2px 0; }
+.failure-cause-trials > summary small { display: inline; margin-left: 10px; }
+.failure-cause-trials ul { margin: 8px 0 0; }
+.failure-cause-trials li:last-child { border-bottom: 0; }
+.eval-rule-note details { margin-top: 6px; }
+.eval-rule-note summary { cursor: pointer; }
 .eval-cell .eval-compare-link { display: block; font-size: 11px; padding: 3px; }
 @media (max-width: 700px) {
   .failure-counts, .failure-trials { padding: 10px; }

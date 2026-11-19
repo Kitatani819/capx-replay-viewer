@@ -36,7 +36,11 @@ def check_recorded_frame_scroll(page, url: str, event_id: str):
     log.evaluate("el => el.scrollTop = el.scrollHeight")
     end = position()
     page.mouse.wheel(0, 150)
-    assert position() == end
+    # The wheel at the end must not move the page; the log may re-clamp by a
+    # sub-pixel rounding step (scrollHeight - clientHeight is fractional).
+    now = position()
+    assert now["page"] == end["page"] and now["height"] == end["height"], (end, now)
+    assert abs(now["log"] - end["log"]) <= 1, (end, now)
     page.mouse.move(box["x"] / 2, y)
     page.mouse.wheel(0, 150)
     assert position()["page"] > end["page"]

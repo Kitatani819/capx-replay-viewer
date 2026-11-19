@@ -8,6 +8,9 @@
 .trial-summary a { color: #356b4e; text-decoration: underline; text-underline-offset: 3px; }
 .trial-summary a:focus-visible { outline: 2px solid #467e5c; outline-offset: 3px; }
 .trial-summary-stats dd a { font-weight: 400; font-size: 12px; white-space: nowrap; }
+.trial-summary-cause { max-width: 760px; margin-top: 6px; font-size: 12px; line-height: 1.6; font-weight: 400; overflow-wrap: anywhere; }
+.trial-summary-cause p { margin: 3px 0; }
+.trial-summary-evidence summary { cursor: pointer; color: #356b4e; }
 .trial-summary-flow { margin: 14px 0 0; font-size: 12px; overflow-wrap: anywhere; line-height: 2; }
 .trial-summary-flow a { display: inline-block; padding: 2px 7px; background: #edf1ea; border-radius: 4px; }
 .trial-summary-facts > div { display: flex; gap: 14px; align-items: flex-start; padding: 13px 0; border-top: 1px solid #e6ece2; }

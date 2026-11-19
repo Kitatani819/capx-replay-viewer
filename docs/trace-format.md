@@ -138,6 +138,95 @@ start fields (`source`, `task`, `condition`, `seed`, `attempt_index`,
 Events that belong to no episode go to the unscoped log of their run. Their files are in
 `unscoped.<pid>.files/`, and their artifact paths are relative to the run directory.
 
+### 4.1.1 Stopping-condition evidence (optional, backward compatible)
+
+New recordings include `stop_context` in `episode_start.data`, `episode_end.data`
+and `episode.json`. The start contains the actual loaded limits; the end adds the
+final counters. Missing fields mean **unrecorded**, never a default inferred from
+the official task pack. The recorder reads named attributes and already-loaded
+module constants only: it calls no simulator API and imports no CaP-X module.
+
+| Field | Recorded fact |
+|---|---|
+| `step_limit` | `low_level_env.max_steps` |
+| `steps_used` | Final `low_level_env._sim_step_count`; absent at start, before reset |
+| `env_horizon` | `low_level_env.robosuite_env.horizon`, when directly available |
+| `horizon_steps_used` | Final underlying `low_level_env.robosuite_env.timestep`, allowing an early horizon to be distinguished from the wrapper's step limit |
+| `trial_time_limit_s` | Loaded `capx.envs.runner.TRIAL_TIMEOUT_SECONDS` |
+| `trial_attempt_limit` | Loaded `capx.envs.runner.MAX_TRIAL_RETRIES` |
+| `multiturn_limit` | Loaded `capx.envs.trial.MULTITURN_LIMIT` (a block-index bound, not a claim that exactly this many model calls ran) |
+| `turns_used` | Number of code blocks actually started (`n_code_blocks`) |
+| `model_turn_index` | Recorder's final multi-turn decision index |
+| `code_time_limit_s` | Web session's actual `execution_timeout` (independent per-code-block timeout) |
+| `sources` | Map from numeric field name to the actual attribute/constant read |
+| `job` | Optional scheduler provenance described below |
+
+Web episodes read `multiturn_limit` from the loaded `capx.web.async_trial_runner`
+module and do not inherit the batch runner timeout. H13 observes the web runner's
+explicit timeout `CodeExecutionResultEvent` through `Session.emit` and records a
+`code_execution_timeout` event (`code_timeout: true`, `block_index`,
+`code_time_limit_s`, and public source). This is a failed execution; a subsequent
+turn can still recover, so the event alone does not declare the whole trial failed.
+
+`episode.json.harness_summary` also retains `terminated` and `truncated` from the
+returned summary. These flags are independent of its text `log.truncated`, which
+means only that a long text was shortened. `episode.json.end_note` preserves why
+the recorder closed an abandoned episode; this is not the trial's own verdict.
+
+The event envelope's final `sim_step` and final `code_block_end.data.sim_step_range`
+remain useful for older traces. A maximum over all recorded steps is unsafe:
+`episode_start` runs before reset, so a reused environment can still carry the
+previous trial's step count. New `steps_used` is sampled at the end.
+
+`eval.json` may carry a `job` object, also copied into trial `stop_context.job` when
+known: `scheduler: "slurm"`, `job_id`, `time_limit_s`, `state`, `ended_at`, and
+`reason`. Only these allowlisted facts are stored. Job ids come from
+`SLURM_JOB_ID`/`SLURM_JOBID`; `SLURM_TIMELIMIT` supplies minutes or a Slurm duration.
+Explicit scheduler integrations can set `CAPX_TRACE_JOB_TIME_LIMIT_S`,
+`CAPX_TRACE_JOB_STATE`, `CAPX_TRACE_JOB_ENDED_AT`, and `CAPX_TRACE_JOB_REASON`.
+Accepted end states are `TIMEOUT`, `CANCELLED`, `COMPLETED`, `FAILED`,
+`OUT_OF_MEMORY`, `PREEMPTED`, and `NODE_FAIL`; reasons are categorical
+(`time_limit`, `user_cancelled`, `replaced`, `preempted`, `infrastructure_error`).
+No command line, hostname, scheduler logs or environment dump is collected.
+A recorded SIGTERM means interruption; it does **not** establish a Slurm timeout.
+
+A killed process cannot record the scheduler's subsequent accounting result.
+After obtaining it independently, an epilog or operator can import the explicit
+facts without editing any episode:
+
+```sh
+python -m capx_trace_recorder job-end --trace-root ./traces --run-id <evaluation-id> \
+  --job-id 12345 --state TIMEOUT --ended-at 2026-11-20T01:02:03Z \
+  --time-limit-s 3600 --reason time_limit
+```
+
+This opt-in command validates and atomically updates the existing evaluation's
+`job` metadata, refusing a different recorded job id. It does not query Slurm or
+change the recorded process exit result. Old traces and eval records need none
+of these optional fields.
+
+The trial and evaluation APIs return `end_classification` from the single Python
+classifier. Existing `reason`, `label`, and `evidence` retain their coarse meanings.
+Its additive `cause` object has `code`, Japanese `label`, a team-facing `headline`
+with recorded counts, and a plain Japanese `explanation`,
+`limit`, `used`, public/generic rule `source`, exact field/value `evidence`, and
+`missing_evidence`. Null limits mean unrecorded; the official pack is never used
+to fill a missing local limit. Old `TrialTimeout` exception messages can supply
+their recorded effective seconds. `env_horizon` requires a recorded horizon and
+underlying timestep; a contradictory wrapper counter alone does not prove it.
+`rule_differences` compares actual recorded settings against the versioned public
+pack snapshot; an absent official per-trial wall limit is represented as null.
+Each difference has a plain `explanation` and a public `source` link. Recorded
+local runner provenance can establish success-check timing, and recorded retry
+attempts establish retries without supplying an unrecorded historical limit.
+
+`end_classification.verdict` is the classifier's matched task verdict. Both APIs
+and the UI use it when present, including an explicit scheduler end that makes a
+fresh but stale heartbeat cease to mean `running`. It remains `unknown` when task
+success was not recorded. Older servers can omit it. A known stopping cause does
+not supply a missing task-success verdict. Missing verdicts retain their coarse
+unjudged filter/count while cells can display the specific known stopping cause.
+
 ### 4.2 Ids
 
 - Every id matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`. Other characters become `-`, and

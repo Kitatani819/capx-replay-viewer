@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from capx_trace_viewer import evals, reader
+from capx_trace_recorder.stop_context import job_context
 
 HEARTBEAT_INTERVAL_S = 60.0
 WORKER_WAIT_TIMEOUT_S = 60.0
@@ -165,6 +166,51 @@ def _wait_for_workers(pgid: int, timeout: float) -> bool:
         time.sleep(min(.1, remaining))
 
 
+def job_end_main(words: Sequence[str] | None = None) -> int:
+    """Import explicit scheduler facts after a killed evaluation cannot write them.
+
+    Intended for an epilog/accounting integration. The command never guesses a
+    scheduler state from the evaluation's exit signal and never reads job logs.
+    """
+    parser = argparse.ArgumentParser(prog="capx-trace-recorder job-end")
+    parser.add_argument("--trace-root", required=True, type=Path)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--job-id", required=True)
+    parser.add_argument("--state", required=True, choices=("TIMEOUT", "CANCELLED", "COMPLETED", "FAILED",
+                                                        "OUT_OF_MEMORY", "PREEMPTED", "NODE_FAIL"))
+    parser.add_argument("--ended-at", required=True)
+    parser.add_argument("--time-limit-s", type=int)
+    parser.add_argument("--reason", choices=("time_limit", "user_cancelled", "replaced", "preempted",
+                                           "infrastructure_error"))
+    args = parser.parse_args(words)
+    if not reader.is_valid_id(args.run_id):
+        parser.error("invalid run id")
+    provided = {"SLURM_JOB_ID": args.job_id, "CAPX_TRACE_JOB_STATE": args.state,
+                "CAPX_TRACE_JOB_ENDED_AT": args.ended_at}
+    if args.time_limit_s is not None:
+        provided["CAPX_TRACE_JOB_TIME_LIMIT_S"] = str(args.time_limit_s)
+    if args.reason:
+        provided["CAPX_TRACE_JOB_REASON"] = args.reason
+    job = job_context(provided)
+    if "job_id" not in job or "ended_at" not in job or (args.time_limit_s is not None and "time_limit_s" not in job):
+        parser.error("invalid job metadata")
+    # Reject symlinks beneath the requested root, as the viewer does.
+    try:
+        with reader.Dir.open_root(args.trace_root) as root, root.subdir(args.run_id) as run:
+            record, error, _stat = reader.read_json_at(run, "eval.json", evals.MAX_EVAL_BYTES)
+        if error:
+            raise ValueError("cannot read eval.json")
+        evals.validate_eval_record(record, eval_id=args.run_id)
+        previous = record.get("job") or {}
+        if previous.get("job_id") not in (None, args.job_id):
+            raise ValueError("job id differs from the recorded job")
+        record["job"] = {**previous, **job}
+        _write_record(args.trace_root / args.run_id / "eval.json", record)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    return 0
+
+
 def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              baseline: str | None = None, eval_set: str | None = None, by: str = "",
              repo: Path | None = None, trust_repo: bool = False,
@@ -188,6 +234,8 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         "git": git_revision(Path.cwd() if repo is None else repo, trust_repo=trust_repo), "started_at": started,
         "heartbeat_at": started, "ended_at": None, "summary": None,
     }
+    if job := job_context():
+        record["job"] = job
     # Validate options before creating a directory or starting a command.
     evals.validate_eval_record(record, eval_id=eval_id)
     if shared_root is not None:
@@ -258,6 +306,8 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
                        "end": end,
                        "ended_at": _now(), "heartbeat_at": _now(),
                        "summary": evals.summarize_run(trace_root, eval_id)})
+        if job := job_context():
+            record["job"] = job
         try:
             _write_record(path, record)
         except (OSError, ValueError) as exc:

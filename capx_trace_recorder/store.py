@@ -1143,7 +1143,7 @@ class TraceStore:
     def _summary_from_start(self, event: dict[str, Any]) -> dict[str, Any]:
         data = event.get("data", {})
         keys = ("source", "task", "condition", "seed", "attempt_index", "runner_invocation",
-                "condition_label", "models", "config_flags", "env")
+                "condition_label", "models", "config_flags", "env", "stop_context")
         summary = {k: data.get(k) for k in keys}
         summary["started_wall_time"] = event.get("wall_time")
         summary["pid"] = event.get("pid")
@@ -1153,13 +1153,14 @@ class TraceStore:
         data = event.get("data", {})
         wep.summary["ended_wall_time"] = event.get("wall_time")
         for key in ("end_reason", "duration_s", "alarm_seen", "n_code_blocks", "n_model_calls",
-                    "n_http_attempts", "tracer_overhead_s"):
+                    "n_http_attempts", "tracer_overhead_s", "stop_context", "end_note"):
             wep.summary[key] = data.get(key)
         hs = data.get("harness_summary")
         if isinstance(hs, dict):
             wep.summary["harness_summary"] = {
                 k: hs.get(k) for k in ("reward", "task_completed", "sandbox_rc", "success",
-                                       "num_code_blocks", "num_regenerations", "num_finishes")
+                                       "num_code_blocks", "num_regenerations", "num_finishes",
+                                       "terminated", "truncated")
             }
         wep.summary["exception"] = data.get("exception")
 

@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { evalApi } from '../../evals/api';
 import type { EvalDetail, EvalTrial } from '../../evals/api';
-import { END_LABELS } from '../../evals/failureReasons';
+import { causeEvidence, causeHeadline, ruleSourceHref } from '../../evals/failureReasons';
 import { ApiError, episodeFileUrl, traceApi, type EpisodeRef } from '../api';
 import { fmtDuration } from '../format';
 import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
@@ -70,6 +70,8 @@ export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOption
   // An answer whose first line is just the decision word would read "REGENERATE — REGENERATE".
   const answer = answerLine.trim().toUpperCase() === facts.decision?.text.toUpperCase() ? '' : answerLine;
   const endingEvent = summary.end_classification?.evidence.event_id;
+  const ending = summary.end_classification;
+  const cause = ending?.cause;
   const hasStats = !!summary.end_classification || facts.turnCount !== null || facts.durationSeconds !== null;
   const hasFacts = !!(facts.firstError || facts.observation && observation || facts.decision || currentFrame || baselineFrame || currentFrameMissing || baselineFrameMissing);
   const frame = (image: SummaryFrame, target: EpisodeRef, label: string) => <figure>
@@ -86,7 +88,19 @@ export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOption
     </div>
     {(hasStats || hasFacts || facts.flow.length > 0) && <div className="trial-summary-card">
       {hasStats && <dl className="trial-summary-stats">
-        {summary.end_classification && <div><dt>終わり方</dt><dd>{END_LABELS[summary.end_classification.reason]}{typeof endingEvent === 'string' && <> · {link(endingEvent)}</>}</dd></div>}
+        {ending && <div><dt>終わり方</dt><dd><strong>{causeHeadline(ending)}</strong>
+          {cause && <div className="trial-summary-cause">
+            <p>{cause.explanation}</p>
+          </div>}
+          {(cause || typeof endingEvent === 'string') && <details className="trial-summary-cause trial-summary-evidence">
+            <summary>根拠を見る</summary>
+            {causeEvidence(ending) && <p>根拠：{causeEvidence(ending)}</p>}
+            {typeof endingEvent === 'string' && <p>{link(endingEvent)}</p>}
+            {cause?.source && <p>規則：{ruleSourceHref(cause.source)
+              ? <a href={ruleSourceHref(cause.source)} target="_blank" rel="noreferrer">{cause.source}</a> : cause.source}</p>}
+            {!!cause?.missing_evidence?.length && <p>不足している記録：{cause.missing_evidence.join('、')}</p>}
+          </details>}
+        </dd></div>}
         {facts.turnCount !== null && <div><dt>ターン</dt><dd>{facts.turnCount}（書き直し {facts.regenerationCount}回）</dd></div>}
         {facts.durationSeconds !== null && <div><dt>かかった時間</dt><dd>{fmtDuration(facts.durationSeconds)}</dd></div>}
       </dl>}

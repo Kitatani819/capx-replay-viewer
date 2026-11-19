@@ -659,3 +659,28 @@ def test_sigterm_is_forwarded_to_child_process_group(tmp_path):
                 os.killpg(int(child_ready.read_text()), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_eval_records_job_id_without_guessing_timeout_from_signal(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLURM_JOB_ID", "98765")
+    monkeypatch.setenv("SLURM_TIMELIMIT", "01:00:00")
+    assert wrapper.run_eval([sys.executable, "-c", "pass"], trace_root=tmp_path / "traces") == 0
+    data = read_record(tmp_path / "traces")
+    assert data["job"] == {"scheduler": "slurm", "job_id": "98765", "time_limit_s": 3600}
+    assert "state" not in data["job"]
+
+
+def test_job_end_imports_explicit_accounting_facts(tmp_path):
+    root = tmp_path / "traces"
+    assert wrapper.run_eval([sys.executable, "-c", "pass"], trace_root=root) == 0
+    data = read_record(root)
+    assert wrapper.job_end_main(["--trace-root", str(root), "--run-id", data["eval_id"], "--job-id", "98765",
+                                 "--state", "TIMEOUT", "--ended-at", "2026-11-20T01:02:03Z",
+                                 "--time-limit-s", "3600", "--reason", "time_limit"]) == 0
+    updated = read_record(root)
+    assert updated["job"] == {"scheduler": "slurm", "job_id": "98765", "state": "TIMEOUT",
+                              "ended_at": "2026-11-20T01:02:03Z", "time_limit_s": 3600, "reason": "time_limit"}
+    assert updated["end"] == data["end"]
+    with pytest.raises(SystemExit):
+        wrapper.job_end_main(["--trace-root", str(root), "--run-id", data["eval_id"], "--job-id", "other",
+                              "--state", "TIMEOUT", "--ended-at", "2026-11-20T01:02:03Z"])
