@@ -141,14 +141,29 @@ test('duplicates are dropped; quiet passes count up and reset on new events', as
   const pager = new EventsPager(server(file).fetchPage, t.onUpdate);
   await pager.pump();
   assert.equal(t.last().quietPasses, 0);
+  const original = t.last().events;
   await pager.pump();
   await pager.pump();
+  assert.equal(t.last().events, original, 'quiet polls keep the events array identity');
   assert.equal(t.last().quietPasses, 2);
   assert.equal(t.last().passes, 3);
   file.events.push(ev('A', 1), ev('B', 2)); // a repeated id is not added twice
   await pager.pump();
+  assert.notEqual(t.last().events, original, 'a new event publishes a new events array');
   assert.deepEqual(t.last().events.map((e) => e.event_id), ['A', 'B']);
   assert.equal(t.last().quietPasses, 0);
+});
+
+test('a refresh containing only duplicate event ids also keeps the events array identity', async () => {
+  const t = track();
+  const pager = new EventsPager(async () => ({
+    events: [ev('A', 1)], next_offset: 100, generation: 'g1', eof: true,
+  }), t.onUpdate);
+  await pager.pump();
+  const original = t.last().events;
+  await pager.pump();
+  assert.equal(t.last().events, original);
+  assert.equal(t.last().quietPasses, 1);
 });
 
 test('errors are reported; a disposed pager publishes nothing', async () => {
