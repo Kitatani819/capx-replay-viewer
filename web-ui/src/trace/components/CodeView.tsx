@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { highlight, splitHighlightedLines } from '../highlight';
 import { CopyButton } from './common';
+import { scrollWithinNearestBox } from '../scrollWithin';
 
 interface CodeViewProps {
   code: string;
@@ -45,7 +46,7 @@ export function CodeView({
   const html = useMemo(() => splitHighlightedLines(highlight(shown, language)), [shown, language]);
   const markRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (scrollToMark) markRef.current?.scrollIntoView({ block: 'center' });
+    if (scrollToMark) scrollWithinNearestBox(markRef.current);
   }, [markLine, code, scrollToMark]);
 
   const text = compact ? 'text-[11px] leading-[1.15rem]' : 'text-xs leading-5';

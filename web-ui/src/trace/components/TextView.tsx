@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { scrollWithinNearestBox } from '../scrollWithin';
 
 export interface HighlightRange {
   start: number;
@@ -141,7 +142,7 @@ export function TextView({
   useEffect(() => {
     if (!scrollToFocus || !focusRangeId || !containerRef.current) return;
     const el = containerRef.current.querySelector(`[data-rid~="${CSS.escape(focusRangeId)}"]`);
-    el?.scrollIntoView({ block: 'center' });
+    scrollWithinNearestBox(el);
   }, [focusRangeId, focusToken, limit, scrollToFocus]);
 
   const base = tone === 'stderr' ? 'text-red-300' : 'text-text-primary';
