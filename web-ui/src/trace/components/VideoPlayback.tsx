@@ -1,6 +1,7 @@
 /** Bidirectional, frame-based replay using the existing native video player. */
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { apiDefinition } from '../apiDefinitions';
+import { useStoredState } from '../hooks';
 import { enclosingBlock, nodeTitle, type EpisodeModel, type TNode } from '../model';
 import { cameraVideos, chooseExecutionVideo, cueAt, groupCues, isPrimaryReplayNode, playbackMap, primaryPlaybackCues, type TrialVideo, type PlaybackCue } from '../playback';
 import { processLabel, processTitle, recordedTurns, turnOf } from '../replay';
@@ -40,7 +41,8 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const [mediaError,setMediaError]=useState(false);
   const [playing,setPlaying]=useState(false);
   const [playError,setPlayError]=useState(false);
-  const [showLogs,setShowLogs]=useState(false);
+  const [belowVideo,setBelowVideo]=useStoredState<'list'|'process'>('capx.replay.belowVideo','list');
+  const showLogs=Boolean(logPanel) && belowVideo!=='process';
   const [turn,setTurn]=useState<number|null>(null);
   const video=useRef<HTMLVideoElement>(null);
   const list=useRef<HTMLDivElement>(null);
@@ -247,7 +249,10 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
           }}><option value="all">すべて</option>{turns.map(t=><option key={t} value={t}>{t}</option>)}</select></label>
         </div>
         <div className="replay-log-tools">
-          {logPanel && <button className="replay-text-button" onClick={()=>setShowLogs(!showLogs)}>{showLogs ? (apiMode ? 'APIとPythonに戻る' : '処理タイムライン') : '詳細ログ'}</button>}
+          {logPanel && <div role="group" aria-label="動画の下に出す内容" className="replay-content-switch">
+            <button type="button" aria-pressed={showLogs} onClick={()=>setBelowVideo('list')}>一覧</button>
+            <button type="button" aria-pressed={!showLogs} onClick={()=>setBelowVideo('process')}>{apiMode ? 'APIとPython' : '処理タイムライン'}</button>
+          </div>}
           <details className="replay-playback-options"><summary>再生設定</summary><div>
             <SmallButton onClick={()=>{if(video.current){resumeFollow();video.current.pause();video.current.currentTime=Math.max(0,time-2);setTime(video.current.currentTime);}}}>2秒巻き戻す</SmallButton>
             <label>速度 <select aria-label="動画の再生速度" defaultValue="0.5" onChange={e=>{if(video.current)video.current.playbackRate=Number(e.target.value);}}>{[0.25,0.5,1,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label>

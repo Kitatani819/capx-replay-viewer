@@ -79,6 +79,8 @@ test('the legacy process list centers on selection, turn and visibility changes 
   };
   try {
     await p.metadata();
+    assert.deepEqual(positions, [], 'the process timeline starts hidden behind the compact list');
+    await toggleLogs('処理タイムライン');
     assert.deepEqual(positions, [50]);
 
     const warning = { ...rec.tail.primary, event_id: 'extra-warning', seq: rec.tail.seq + 1, event_type: 'trace_warning' };
@@ -92,7 +94,7 @@ test('the legacy process list centers on selection, turn and visibility changes 
     assert.equal(positions.length, 2);
     await changeSelect(p, 'リプレイのターン', '1');
     assert.equal(positions.length, 3);
-    await toggleLogs('詳細ログ');
+    await toggleLogs('一覧');
     assert.equal(positions.length, 3);
     await toggleLogs('処理タイムライン');
     assert.equal(positions.length, 4);
@@ -361,7 +363,7 @@ test('collapsing the selected log row clears the URL and stops Live and playback
   }
 });
 
-test('picking another trial opens its default API/Python view and clears the previous selection and seek',async()=>{
+test('picking another trial opens its default compact list and clears the previous selection and seek',async()=>{
   resetBrowser();const run=makeRun();
   for(const id of ['e1','e2'])addEpisode(run,id,{status:'ended'},[
     ev(id,1,'episode_start',{}),ev(id,2,'code_block_start',{code_block_id:`${id}_2`,code:'x=1'}),
@@ -378,7 +380,9 @@ test('picking another trial opens its default API/Python view and clears the pre
   const pane = mount(MediaPane, { ...media, videos: [{ name: 'video_combined.mp4', url: '/video' }] });
   const video = mount(VideoPlayback, propsOf<PlayerProps>(pane.output, VideoPlayback));
   assert.equal(findAll(video.output, 'select').some(element => element.props['aria-label'] === '表示する処理'), false);
-  assert.equal(findAll(video.output, ApiPythonPanel).length, 1);
+  assert.equal(findAll(video.output, ApiPythonPanel).length, 0);
+  assert.equal(findAll(video.output, 'button').find(button => button.props.children === '一覧')?.props['aria-pressed'], true);
+  assert.equal(propsOf<TimelineProps>(video.output, Timeline).selectedKey, null);
   video.unmount(); pane.unmount();
   assert.equal(media.seekRequest,null);
   assert.equal(media.selection,null);
