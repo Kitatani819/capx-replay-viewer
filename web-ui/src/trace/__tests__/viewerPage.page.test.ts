@@ -136,6 +136,74 @@ for (const initialStatus of ['running', 'incomplete'] as const) {
   });
 }
 
+for (const videoPending of [false, true]) {
+  test(`an hours-old incomplete snapshot polls at most once a minute and still detects imports (video pending: ${videoPending})`, async () => {
+    resetBrowser();
+    const run = makeRun();
+    const data = { ...KEY, attempt_index: 1 };
+    const e1 = addEpisode(run, 'e1', { status: 'incomplete', heartbeat_age_s: 7200,
+      episode: { video_copy_pending: videoPending }, ...data }, [ev('e1', 1, 'episode_start', data)]);
+    serve(run);
+    const p = open('/traces?view=details&run=r1&episode=e1');
+    try {
+      await advance(100);
+      for (let n = 0; n < 3; n++) {
+        e1.summary = { ...e1.summary, heartbeat_age_s: 7200 + 60 * (n + 1) };
+        await advance(60_000);
+      }
+      for (const path of [/\/events$/, /\/episodes\/e1$/]) {
+        const reads = requests(path).list;
+        assert.equal(reads.length, 4, 'the initial read and three import checks');
+        for (let n = 1; n < reads.length; n++) {
+          assert.ok(reads[n].sentAt - reads[n - 1].sentAt >= 60_000,
+            `${reads[n].path} must not be re-read within a minute`);
+        }
+      }
+      assert.equal(bar(p).reader.count, 1);
+      e1.events.push(ev('e1', 2, 'trace_warning', { code: 'next_import' }));
+      await advance(59_900);
+      assert.equal(bar(p).reader.count, 1, 'no extra read before the next minute');
+      await advance(200);
+      assert.equal(bar(p).reader.count, 2, 'a later import is read even with an hours-old heartbeat');
+
+      e1.events.push(ev('e1', 3, 'episode_end', { end_reason: 'completed', trace_complete: true }));
+      e1.summary = { ...e1.summary, status: 'ended', trace_complete: true,
+        episode: { video_copy_pending: false } };
+      await advance(80_000);
+      assert.equal(bar(p).summary?.status, 'ended');
+      assert.equal(bar(p).reader.count, 3, 'the completed import reads its tail');
+      const before = { events: requests(/\/events$/).sent, summary: requests(/\/episodes\/e1$/).sent };
+      await advance(30_000);
+      assert.equal(requests(/\/events$/).sent, before.events);
+      assert.equal(requests(/\/episodes\/e1$/).sent, before.summary);
+    } finally {
+      p.unmount();
+    }
+  });
+}
+
+test('a running trial keeps its one-second Live polls regardless of heartbeat age', async () => {
+  resetBrowser();
+  const run = makeRun();
+  const data = { ...KEY, attempt_index: 1 };
+  const e1 = addEpisode(run, 'e1', { status: 'running', heartbeat_age_s: 7200, ...data },
+    [ev('e1', 1, 'episode_start', data)]);
+  serve(run);
+  const p = open('/traces?view=details&run=r1&episode=e1');
+  try {
+    await advance(100);
+    e1.events.push(ev('e1', 2, 'trace_warning', { code: 'live_event' }));
+    await advance(1200);
+    assert.equal(bar(p).reader.count, 2);
+    await advance(4000);
+    assert.ok(requests(/\/events$/).sent >= 5);
+    assert.ok(requests(/\/episodes\/e1$/).sent >= 5);
+    assert.equal(bar(p).summary?.status, 'running');
+  } finally {
+    p.unmount();
+  }
+});
+
 test('Browse rechecks incomplete status and fetches the final imported tail when it ends', async () => {
   resetBrowser();
   const run = makeRun();

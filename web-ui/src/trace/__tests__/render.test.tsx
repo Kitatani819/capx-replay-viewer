@@ -69,7 +69,18 @@ function sel(m: EpisodeModel, ev: TraceEvent): Selection {
 }
 
 function timeline(m: EpisodeModel): string {
-  return text(<Timeline model={m} ep={EP} running={false} selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  // These regressions inspect card contents in the viewer's all-details mode.
+  const browser = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: { getItem: (key: string) => key === 'capx.timeline.allDetails' ? 'true' : null } },
+  });
+  try {
+    return text(<Timeline model={m} ep={EP} running={false} selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  } finally {
+    if (browser) Object.defineProperty(globalThis, 'window', browser);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
 }
 
 test('the replay header keeps the trial picker at the right with details collapsed', () => {

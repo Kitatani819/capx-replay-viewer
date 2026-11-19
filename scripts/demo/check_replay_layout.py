@@ -101,13 +101,19 @@ def check(base_url: str, root: Path, output: Path):
             expect(page.get_by_role('button', name='試行の詳細', exact=True)).to_have_attribute('aria-expanded', 'false')
             expect(page.get_by_role("tab")).to_have_count(3)
             page.evaluate("window.__acceptanceVideo = document.querySelector('video[aria-label=\"試行の録画\"]')")
+            # The compact log is the default below the video; the API-and-Python view is one click away.
+            list_view = page.get_by_role("button", name="一覧", exact=True)
+            api_view = page.get_by_role("button", name="APIとPython", exact=True)
+            expect(list_view).to_have_attribute("aria-pressed", "true")
+            api_view.click()
+            expect(api_view).to_have_attribute("aria-pressed", "true")
 
             def cue(name):
                 return page.locator(f'[data-timeline-event="{manifest["events"][name]}"]')
 
             def select_log(name, query):
-                if page.get_by_role("button", name="詳細ログ", exact=True).is_visible():
-                    page.get_by_role("button", name="詳細ログ", exact=True).click()
+                if page.get_by_role("button", name="一覧", exact=True).get_attribute("aria-pressed") != "true":
+                    page.get_by_role("button", name="一覧", exact=True).click()
                 search = page.get_by_label("タイムラインを検索", exact=True)
                 search.fill(query)
                 log = page.get_by_role("region", name="タイムラインのイベント", exact=True)
@@ -231,7 +237,7 @@ def check(base_url: str, root: Path, output: Path):
             synthesis.get_by_role("button", name=re.compile("実行されたPython")).click()
             expect(page.get_by_role("tab", name="入出力", exact=True)).to_have_attribute("aria-selected", "true")
             expect(panel).to_contain_text("このPythonを生成したモデル")
-            page.get_by_role("button", name="APIとPythonに戻る", exact=True).click()
+            page.get_by_role("button", name="APIとPython", exact=True).click()
             expect(api_panel).to_be_visible()
             expect(api_panel).to_contain_text("Success!")
             assert video.evaluate("v => v.paused")
@@ -246,7 +252,7 @@ def check(base_url: str, root: Path, output: Path):
             all_turns()
             select_log("synthesis_0", "ensemble_synthesis")
             expect(page.locator('[data-synthesis]')).to_contain_text("Pythonコード")
-            page.get_by_role("button", name="APIとPythonに戻る", exact=True).click()
+            page.get_by_role("button", name="APIとPython", exact=True).click()
             # Complete the preceding manual selection/seek before exercising a
             # separate native seek+play action (React effects run after paint).
             page.evaluate("() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))")
@@ -275,7 +281,7 @@ def check(base_url: str, root: Path, output: Path):
             passed.append("Detailed causal log below video selects SAM3 and preserves its recorded image and mask")
 
             page.emulate_media(reduced_motion="reduce")
-            page.get_by_role("button", name="APIとPythonに戻る", exact=True).click()
+            page.get_by_role("button", name="APIとPython", exact=True).click()
             api_panel.locator('[data-api-event]').first.click()
             reduced = api_panel.locator('[data-api-selected="true"]').evaluate("el => getComputedStyle(el).animationDuration")
             assert all(float(value.strip().removesuffix('s')) <= .001 for value in reduced.split(',')), reduced

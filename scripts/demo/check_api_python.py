@@ -136,7 +136,10 @@ def check_api_python(page, url, events, output):
             expect(details).to_contain_text('goto_pose')
     selected(goto0, 3)
     page.mouse.move(5, 5)
-    # Video, selected row and call line must actually fit in the desktop view.
+    # Video, selected row and call line must actually fit in the desktop view once the
+    # reader has scrolled past the trial summary to the replay layout.
+    page.evaluate("document.querySelector('main.replay-layout').scrollIntoView({block: 'start'})")
+    page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
     for locator in (video, row(goto0), api_panel.locator('[data-code-highlighted=true]'), api_panel.locator('[data-code-line="4"]')):
         box = locator.bounding_box()
         assert box and box['y'] >= 0 and box['y'] + box['height'] <= 1000, box
@@ -144,13 +147,13 @@ def check_api_python(page, url, events, output):
     passed.append('API/Python: playback follows API and Python line across turns; candidate/synthesis tabs preserve paused position and selected API')
 
     page.set_viewport_size({'width': 1366, 'height': 720})
-    page.evaluate('window.scrollTo(0, 0)')
+    page.evaluate("document.querySelector('main.replay-layout').scrollIntoView({block: 'start'})")
     page.wait_for_function("""() => {
         const film = document.querySelector('.replay-film').getBoundingClientRect();
         const mark = document.querySelector('[data-api-python-panel] [data-code-highlighted=true]');
         const line = mark.getBoundingClientRect();
         const code = mark.closest('.api-python-code-body').getBoundingClientRect();
-        return window.scrollY === 0 && film.height > 0 && film.top >= 0 && film.bottom <= innerHeight
+        return film.height > 0 && film.top >= 0 && film.bottom <= innerHeight
             && line.top >= code.top - 1 && line.bottom <= code.bottom + 1 && line.bottom <= innerHeight;
     }""")
     passed.append('API/Python: video and the highlighted call line fit in the viewport after reducing its height')

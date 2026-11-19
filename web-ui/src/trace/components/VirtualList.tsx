@@ -15,9 +15,12 @@ interface VirtualListProps<T> {
   items: T[];
   itemKey: (item: T) => string;
   estimateHeight: (item: T) => number;
+  /** Changes when disclosure/content invalidates a row's cached height. */
+  measurementKey?: (item: T) => string;
   renderItem: (item: T) => ReactNode;
-  /** Key of the row to bring into view; changing `scrollToken` repeats the request. */
+  /** Row for the next scroll request. A key change alone cancels any pending request. */
   scrollToKey: string | null;
+  /** Change to request a scroll, including when selecting a different row. */
   scrollToken: number;
   overscanPx?: number;
   className?: string;
@@ -43,6 +46,7 @@ export function VirtualList<T>({
   items,
   itemKey,
   estimateHeight,
+  measurementKey,
   renderItem,
   scrollToKey,
   scrollToken,
@@ -52,21 +56,23 @@ export function VirtualList<T>({
 }: VirtualListProps<T>) {
   const windowed = items.length > MAX_STATIC_ROWS;
   const containerRef = useRef<HTMLDivElement>(null);
-  const heights = useRef(new Map<string, number>());
+  const heights = useRef(new Map<string, { height: number; measurement: string | undefined }>());
   const [version, setVersion] = useState(0);
   const [view, setView] = useState({ top: 0, height: 800, scrollable: false });
   const rafRef = useRef<number | null>(null);
   const bumpRef = useRef<number | null>(null);
 
   const keys = useMemo(() => items.map(itemKey), [items, itemKey]);
+  const measurements = useMemo(() => items.map(item => measurementKey?.(item)), [items, measurementKey]);
   const offsets = useMemo(() => {
     const arr = new Float64Array(items.length + 1);
     for (let i = 0; i < items.length; i += 1) {
-      arr[i + 1] = arr[i] + (heights.current.get(keys[i]) ?? estimateHeight(items[i]));
+      const cached = heights.current.get(keys[i]);
+      arr[i + 1] = arr[i] + (cached && cached.measurement === measurements[i] ? cached.height : estimateHeight(items[i]));
     }
     return arr;
     // `version` changes when measured heights change.
-  }, [items, keys, estimateHeight, version]);
+  }, [items, keys, measurements, estimateHeight, version]);
 
   const observer = useMemo(() => {
     if (typeof ResizeObserver === 'undefined') return null;
@@ -76,8 +82,10 @@ export function VirtualList<T>({
         const key = (e.target as HTMLElement).dataset.vkey;
         if (!key) continue;
         const h = Math.round((e.target as HTMLElement).getBoundingClientRect().height);
-        if (h > 0 && heights.current.get(key) !== h) {
-          heights.current.set(key, h);
+        const measurement = (e.target as HTMLElement).dataset.vmeasurement;
+        const cached = heights.current.get(key);
+        if (h > 0 && (cached?.height !== h || cached.measurement !== measurement)) {
+          heights.current.set(key, { height: h, measurement });
           changed = true;
         }
       }
@@ -122,6 +130,52 @@ export function VirtualList<T>({
     return () => ro.disconnect();
   }, [readView]);
 
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    // The list's native anchor only protects its own scrollport. A summary or
+    // image above that scrollport can also move the whole list in the page.
+    // Observe preceding content without coupling this to a particular header.
+    let top = el.getBoundingClientRect().top;
+    let visible = false;
+    const remember = () => {
+      const rect = el.getBoundingClientRect();
+      top = rect.top;
+      visible = rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+    };
+    remember();
+    const ro = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      const delta = rect.top - top;
+      if (visible && rect.height > 0 && Math.abs(delta) > 1) {
+        let scroller: Element | null = el.parentElement;
+        while (scroller && scroller !== document.scrollingElement) {
+          const style = window.getComputedStyle(scroller);
+          if (scroller.scrollHeight > scroller.clientHeight && /^(auto|scroll)$/.test(style.overflowY)) break;
+          scroller = scroller.parentElement;
+        }
+        // Native page anchoring may already have kept `top` unchanged. Only
+        // compensate the remaining displacement, leaving list.scrollTop alone.
+        const target = scroller ?? document.scrollingElement;
+        if (target) target.scrollTop += delta;
+      }
+      remember();
+    });
+    for (let child: Element | null = el; child; child = child.parentElement) {
+      ro.observe(child);
+      for (let before = child.previousElementSibling; before; before = before.previousElementSibling) ro.observe(before);
+    }
+    // Capturing also covers an enclosing scroll pane. User scrolling starts a
+    // new baseline rather than being undone by a later ResizeObserver delivery.
+    window.addEventListener('scroll', remember, true);
+    window.addEventListener('resize', remember);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('scroll', remember, true);
+      window.removeEventListener('resize', remember);
+    };
+  }, []);
+
   const onScroll = () => {
     if (rafRef.current !== null) return;
     rafRef.current = window.requestAnimationFrame(() => {
@@ -139,8 +193,16 @@ export function VirtualList<T>({
   // update limit before ResizeObserver gets a chance to measure the new rows.
   // Declared before the effect below so both run in the same commit.
   const pending = useRef<{ key: string; until: number } | null>(null);
+  const requestedToken = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
-    pending.current = scrollToKey ? { key: scrollToKey, until: performance.now() + SCROLL_SETTLE_MS } : null;
+    // A list click updates selection without requesting a scroll. In particular,
+    // its newly expanded height must not prolong or restart an earlier request.
+    if (requestedToken.current !== scrollToken) {
+      pending.current = scrollToKey ? { key: scrollToKey, until: performance.now() + SCROLL_SETTLE_MS } : null;
+    } else if (pending.current?.key !== scrollToKey) {
+      pending.current = null;
+    }
+    requestedToken.current = scrollToken;
   }, [scrollToKey, scrollToken]);
   useLayoutEffect(() => {
     if (!pending.current) return;
@@ -199,30 +261,32 @@ export function VirtualList<T>({
       style={{ overflowAnchor: 'auto', overscrollBehaviorY: view.scrollable ? 'contain' : 'auto' }}
     >
       {n === 0 && empty}
-      {windowed && <div style={{ height: offsets[start] }} />}
+      {/* Spacers can span the viewport, but their fixed top is not a useful
+          scroll anchor. Anchor on a real row as measured offsets change. */}
+      {windowed && <div style={{ height: offsets[start], overflowAnchor: 'none' }} />}
       {items.slice(start, end).map((item, i) => {
         const key = keys[start + i];
         return (
-          <MeasuredRow key={key} vkey={key} observer={observer}>
+          <MeasuredRow key={key} vkey={key} measurement={measurements[start + i]} observer={observer}>
             {renderItem(item)}
           </MeasuredRow>
         );
       })}
-      {windowed && <div style={{ height: Math.max(0, total - offsets[end]) }} />}
+      {windowed && <div style={{ height: Math.max(0, total - offsets[end]), overflowAnchor: 'none' }} />}
     </div>
   );
 }
 
-function MeasuredRow({ vkey, observer, children }: { vkey: string; observer: ResizeObserver | null; children: ReactNode }) {
+function MeasuredRow({ vkey, measurement, observer, children }: { vkey: string; measurement: string | undefined; observer: ResizeObserver | null; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !observer) return;
     observer.observe(el);
     return () => observer.unobserve(el);
-  }, [observer]);
+  }, [observer, measurement]);
   return (
-    <div ref={ref} data-vkey={vkey}>
+    <div ref={ref} data-vkey={vkey} data-vmeasurement={measurement}>
       {children}
     </div>
   );

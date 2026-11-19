@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advance, currentParams, findAll, popState, propsOf, resetBrowser, setLocation } from './harness/browser';
+import { advance, currentParams, findAll, popState, propsOf, resetBrowser, setLocation, type FakeElement } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import TraceViewerPage from '../TraceViewerPage';
 import { MediaPane } from '../components/MediaPane';
@@ -8,6 +8,9 @@ import { VideoPlayback } from '../components/VideoPlayback';
 import { ApiPythonPanel } from '../components/ApiPythonPanel';
 import { DetailTabs } from '../components/DetailTabs';
 import { TopBar } from '../components/TopBar';
+import { Timeline } from '../components/Timeline';
+import { VirtualList } from '../components/VirtualList';
+import type { TNode } from '../model';
 import type { TraceEvent } from '../types';
 import { Rec } from './fixtures';
 import { addEpisode, makeRun, serve } from './pageServer';
@@ -16,6 +19,9 @@ type MediaProps = Parameters<typeof MediaPane>[0];
 type PlayerProps = Parameters<typeof VideoPlayback>[0];
 type DetailsProps = Parameters<typeof DetailTabs>[0];
 type BarProps = Parameters<typeof TopBar>[0];
+type TimelineProps = Parameters<typeof Timeline>[0];
+interface LogRow { node: TNode; expanded: boolean }
+interface LogListProps { items: LogRow[]; renderItem: (row: LogRow) => FakeElement; scrollToKey: string | null }
 
 function recording() {
   const r = new Rec(); r.episodeStart();
@@ -77,17 +83,23 @@ async function replay(running = false) {
   };
   const turn = () => findAll(player.output, 'select').find(select => select.props['aria-label'] === 'リプレイのターン')!;
   const panel = () => propsOf<Parameters<typeof ApiPythonPanel>[0]>(player.output, ApiPythonPanel);
+  const logs = () => propsOf<TimelineProps>(player.output, Timeline);
+  const chooseDisplay = async (label: '一覧' | 'APIとPython') => {
+    const button = findAll(player.output, 'button').find(button => button.props.children === label)!;
+    (button.props.onClick as () => void)(); await sync();
+  };
   const nodeOf = (event: TraceEvent) => mediaProps().model.nodeOfEvent.get(event.event_id)!;
   const selected = () => details().selection?.eventId;
   const navigate = async (event: TraceEvent) => { popState(`${url}&event=${event.event_id}`); await sync(); };
   const move = async (time: number) => { media.currentTime = time; notify('onTimeUpdate'); await sync(); };
   notify('onLoadedMetadata'); await sync();
-  return { rec, episode, page, pane, player, media, notify, sync, turn, panel, nodeOf, selected, navigate, move, details, bar,
+  return { rec, episode, page, pane, player, media, notify, sync, turn, panel, logs, chooseDisplay, nodeOf, selected, navigate, move, details, bar,
     close() { player.unmount(); pane.unmount(); page.unmount(); } };
 }
 
 for (const mapped of [true, false]) test(`URL selection survives overlapping turn-seek media events (${mapped ? 'mapped SAM3' : 'unmapped video record'})`, async () => {
   const p = await replay();
+  await p.chooseDisplay('APIとPython');
   try {
     assert.equal(p.selected(), p.rec.vdm.event_id);
     assert.equal(p.media.currentTime, 2);
@@ -129,6 +141,7 @@ for (const mapped of [true, false]) test(`URL selection survives overlapping tur
 
 test('URL-held service and unmapped selections release to native seek and playback; Live regains the latest event', async () => {
   const p = await replay(true);
+  await p.chooseDisplay('APIとPython');
   try {
     assert.equal(p.bar().live, true);
     assert.equal(p.selected(), p.rec.tail.event_id);
@@ -166,4 +179,67 @@ test('URL-held service and unmapped selections release to native seek and playba
     assert.equal(p.media.currentTime, 2);
     assert.equal(p.media.paused, true);
   } finally { p.close(); }
+});
+
+test('the default compact list expands and scrolls to URL, playback, slider and API-time selections; row clicks pause and seek', async () => {
+  const p = await replay();
+  const timeline = mount(Timeline, p.logs());
+  const syncLog = () => timeline.update(p.logs());
+  const list = () => propsOf<LogListProps>(timeline.output, VirtualList);
+  const selectedRow = (event: TraceEvent) => {
+    syncLog();
+    assert.equal(p.logs().selectedEventId, event.event_id);
+    const key = p.nodeOf(event).key;
+    assert.equal(p.logs().selectedKey, key);
+    assert.equal(list().scrollToKey, key);
+    const row = list().items.find(row => row.node.key === key);
+    if (!row) throw new Error('selected event is not reachable in the compact list');
+    assert.equal(row.expanded, true, 'selection expands its details');
+  };
+  try {
+    assert.equal(findAll(p.player.output, 'button').find(button => button.props.children === '一覧')?.props['aria-pressed'], true);
+    assert.equal(findAll(p.player.output, ApiPythonPanel).length, 0);
+    selectedRow(p.rec.vdm);
+    await p.media.play(); await p.move(2.3);
+    assert.equal(p.media.paused, false);
+    selectedRow(p.rec.apis[1]);
+    await p.navigate(p.rec.sam);
+    assert.equal(p.media.paused, true);
+    selectedRow(p.rec.sam);
+    const slider = findAll(p.player.output, 'input').find(input => input.props['aria-label'] === '動画の再生位置')!;
+    (slider.props.onChange as Function)({ target: { value: '2.3' } }); await p.sync();
+    assert.equal(p.media.currentTime, 2.3);
+    selectedRow(p.rec.apis[1]);
+
+    await p.chooseDisplay('APIとPython');
+    const apiPanel = mount(ApiPythonPanel, p.panel());
+    try {
+      const row = findAll(apiPanel.output, 'button').find(button => button.props['data-api-event'] === p.rec.apis[0].event_id)!;
+      assert.ok(row, 'API video-time row is selectable');
+      (row.props.onClick as () => void)(); await p.sync();
+    } finally { apiPanel.unmount(); }
+    await p.chooseDisplay('一覧');
+    selectedRow(p.rec.apis[0]);
+
+    await p.navigate(p.rec.vdm);
+    selectedRow(p.rec.vdm);
+    await p.media.play(); await p.sync();
+    assert.equal(p.media.paused, false);
+    selectedRow(p.rec.apis[1]);
+    const api = p.nodeOf(p.rec.apis[0]);
+    const row = list().items.find(row => row.node.key === api.key)!;
+    const boundary = list().renderItem(row);
+    const element = boundary.props.children as FakeElement;
+    const card = mount(element.type as (props: Record<string, unknown>) => unknown, element.props);
+    try {
+      const button = findAll(card.output, 'button').find(button => button.props['data-timeline-event'] === api.primary.event_id)!;
+      assert.ok(button, 'compact row is clickable');
+      (button.props.onClick as () => void)(); await p.sync();
+    } finally { card.unmount(); }
+    assert.equal(p.media.paused, true);
+    assert.equal(p.media.currentTime, 0);
+    assert.equal(currentParams().get('event'), api.primary.event_id);
+    selectedRow(p.rec.apis[0]);
+    assert.equal(findAll(p.player.output, 'button').find(button => button.props.children === '一覧')?.props['aria-pressed'], true);
+  } finally { timeline.unmount(); p.close(); }
 });

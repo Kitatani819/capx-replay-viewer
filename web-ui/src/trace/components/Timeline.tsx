@@ -4,9 +4,9 @@
  * -> code block -> API calls -> stdout/stderr -> evaluator -> VDM call ->
  * feedback -> next model call), with the card contents of 9.3, filters by
  * event type, role and failures, and a free-text search over code,
- * stdout/stderr, model text and API names. Nested API calls are folded by
- * default; frames and snapshots are never cards. Open start events and late
- * events carry the fixed markers of 9.3. A model call whose logical call failed
+ * stdout/stderr, model text and API names. Event details and nested calls are
+ * folded by default; frames and snapshots are never cards. Open start events
+ * and late events carry the fixed markers of 9.3. A model call whose logical call failed
  * (also after an HTTP 200) is shown as failed with that final error. Each card
  * is wrapped in an error boundary, so one event with an unexpected shape
  * cannot blank the page.
@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { episodeArrayImageUrl, episodeFileUrl } from '../api';
 import { dataAssetRef, isOversize } from '../dataAsset';
 import { firstLines, fmtDuration, fmtNum, truncate } from '../format';
-import { useFullText } from '../hooks';
+import { useFullText, useStoredState } from '../hooks';
 import { LABELS, NOT_MODEL_INPUT, REDACTED_SHORT, WARNING_CODE_LABELS, arrayBudgetLabel, harnessReadingLabel, modelErrorLabel } from '../labels';
 import {
   apiDepth,
@@ -99,6 +99,7 @@ interface Filters {
 interface Row {
   node: TNode;
   depth: number;
+  expanded: boolean;
   /** Shown only because a descendant matches the filters. */
   context: boolean;
 }
@@ -110,8 +111,8 @@ function isFailure(n: TNode, running: boolean): boolean {
 function flatten(
   roots: TNode[],
   f: Filters,
-  collapsed: Set<string>,
-  nestedOpen: Set<string>,
+  expandedKeys: Set<string>,
+  allDetails: boolean,
   running: boolean,
 ): { rows: Row[]; matched: number } {
   const q = f.query.trim().toLowerCase();
@@ -144,14 +145,14 @@ function flatten(
       if (!vis(n)) continue;
       const self = !active || selfMatch(n);
       if (active && self) matched += 1;
-      rows.push({ node: n, depth, context: active && !self });
+      // Filter matches inside a call must remain reachable through its parents.
+      const expanded = allDetails || expandedKeys.has(n.key) || (active && n.children.some(vis));
+      rows.push({ node: n, depth, expanded, context: active && !self });
       if (n.children.length === 0) continue;
-      if (!active && collapsed.has(n.key)) continue;
-      let kids = n.children;
-      if (n.kind === 'api_call' && !nestedOpen.has(n.key)) {
-        kids = kids.filter((c) => c.kind !== 'api_call' || (active && vis(c)));
-      }
-      walk(kids, depth + 1);
+      // Keep the model -> Python -> API flow visible. Only calls inside calls
+      // belong to their parent's disclosure.
+      if ((n.kind === 'api_call' || n.kind === 'service_call') && !expanded) continue;
+      walk(n.children, depth + 1);
     }
   };
   walk(roots, 0);
@@ -162,6 +163,11 @@ function flatten(
 // Timeline
 // ---------------------------------------------------------------------------
 
+export interface TimelineSelectionOptions {
+  /** A disclosure click keeps the row under the pointer instead of revealing it. */
+  from: 'list';
+}
+
 interface TimelineProps {
   model: EpisodeModel;
   summary?: EpisodeSummary | null;
@@ -169,35 +175,40 @@ interface TimelineProps {
   running: boolean;
   selectedKey: string | null;
   selectedEventId: string | null;
-  onSelect: (node: TNode, eventId?: string) => void;
+  onSelect: (node: TNode, eventId?: string, options?: TimelineSelectionOptions) => void;
+  onClearSelection?: () => void;
   scrollToken: number;
   /** False for a run's unscoped log, which is no episode and has no task text. */
   showTaskText?: boolean;
 }
 
-export function Timeline({ model, summary, ep, running, selectedKey, selectedEventId, onSelect, scrollToken, showTaskText = true }: TimelineProps) {
+export function Timeline({ model, summary, ep, running, selectedKey, selectedEventId, onSelect, onClearSelection, scrollToken, showTaskText = true }: TimelineProps) {
   const [types, setTypes] = useState<Set<TypeKey>>(new Set());
   const [roles, setRoles] = useState<Set<string>>(new Set());
   const [failuresOnly, setFailuresOnly] = useState(false);
   const [query, setQuery] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [nestedOpen, setNestedOpen] = useState<Set<string>>(new Set());
-  // Bumped when the filters are cleared, so the selected card is brought back into view.
+  const [opened, setOpened] = useState<Set<string>>(new Set());
+  const [storedAllDetails, setAllDetails] = useStoredState('capx.timeline.allDetails', false);
+  const allDetails = storedAllDetails === true;
+  // Repeat selection scrolling after clearing filters or changing global disclosure.
   const [filterToken, setFilterToken] = useState(0);
-  // Playback can select an API hidden inside a collapsed parent.
-  useEffect(() => {
-    const node = model.allNodes.find(n => n.key === selectedKey);
-    if (!node) return;
-    const parents: string[] = [];
-    for (let p = node.parent; p; p = p.parent) parents.push(p.key);
-    setCollapsed(old => old.size && parents.some(k => old.has(k)) ? new Set([...old].filter(k => !parents.includes(k))) : old);
-    setNestedOpen(old => parents.some(k => !old.has(k)) ? new Set([...old, ...parents]) : old);
-  }, [selectedKey, model]);
+  // Derive selection disclosure synchronously, including hidden ancestors, so
+  // VirtualList can find the selection on its first scroll-to-row request.
+  const expandedKeys = useMemo(() => {
+    const keys = new Set(opened);
+    const q = query.trim().toLowerCase();
+    for (const node of model.allNodes) {
+      const detailMatch = q && node.searchText.includes(q) && !rowSummary(node).toLowerCase().includes(q);
+      if (node.key !== selectedKey && !detailMatch) continue;
+      for (let n: TNode | null = node; n; n = n.parent) keys.add(n.key);
+    }
+    return keys;
+  }, [opened, query, model, selectedKey]);
 
   const filters = useMemo<Filters>(() => ({ types, roles, failuresOnly, query }), [types, roles, failuresOnly, query]);
   const { rows, matched } = useMemo(
-    () => flatten(model.roots, filters, collapsed, nestedOpen, running),
-    [model, filters, collapsed, nestedOpen, running],
+    () => flatten(model.roots, filters, expandedKeys, allDetails, running),
+    [model, filters, expandedKeys, allDetails, running],
   );
   const roleList = useMemo(() => Array.from(new Set(model.calls.map((c) => c.role))).sort(), [model]);
   const episodeEndHasGap = dataOf(model.episodeEnd, 'episode_end').trace_complete === false &&
@@ -212,6 +223,7 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
 
   const itemKey = useCallback((r: Row) => r.node.key, []);
   const estimate = useCallback((r: Row) => {
+    if (!r.expanded) return collapsedError(r.node) ? 64 : 42;
     switch (r.node.kind) {
       case 'code_block':
         return 210;
@@ -226,6 +238,7 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
         return 60;
     }
   }, []);
+  const measurementKey = useCallback((r: Row) => `${r.expanded}|${r.node.lastSeq}|${query}`, [query]);
 
   const filtersActive = types.size > 0 || roles.size > 0 || failuresOnly || query.trim().length > 0;
   const selectionHidden = selectedKey !== null && !rows.some((r) => r.node.key === selectedKey);
@@ -257,16 +270,25 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
           running={running}
           selected={r.node.key === selectedKey}
           selectedEventId={selectedEventId}
-          collapsed={collapsed.has(r.node.key)}
-          nestedOpen={nestedOpen.has(r.node.key)}
+          query={query}
           onSelect={onSelect}
-          onToggle={() => toggle(collapsed, r.node.key, setCollapsed)}
-          onToggleNested={() => toggle(nestedOpen, r.node.key, setNestedOpen)}
+          onToggle={() => {
+            setOpened(old => {
+              const next = new Set(old);
+              // A child's row stays reachable after clearing its selection.
+              for (let p = r.node.parent; p; p = p.parent) next.add(p.key);
+              if (r.expanded) next.delete(r.node.key);
+              else next.add(r.node.key);
+              return next;
+            });
+            if (r.expanded && r.node.key === selectedKey) onClearSelection?.();
+            else onSelect(r.node, undefined, { from: 'list' });
+          }}
         />
       </ErrorBoundary>
     ),
     // Every input of the card is listed, so a card re-renders when any of them changes.
-    [model, episodeEndHasGap, ep, running, selectedKey, selectedEventId, collapsed, nestedOpen, onSelect],
+    [model, episodeEndHasGap, ep, running, selectedKey, selectedEventId, query, onSelect, onClearSelection],
   );
 
   return (
@@ -302,9 +324,25 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
           <FilterChip active={failuresOnly} onClick={() => setFailuresOnly(!failuresOnly)} tone="red">
             失敗のみ
           </FilterChip>
-          <span className="ml-auto text-[11px] text-text-tertiary">
-            {matched} 件表示
-          </span>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 border-t border-surface-border pt-1">
+          <span className="text-[11px] text-text-tertiary">{matched} 件表示</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={allDetails}
+            onClick={() => {
+              setAllDetails(!allDetails);
+              setOpened(new Set());
+              setFilterToken(t => t + 1);
+            }}
+            className="inline-flex items-center gap-2 min-h-9 rounded px-1 text-[11px] text-text-secondary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          >
+            <span aria-hidden="true" className={`relative h-4 w-7 rounded-full transition-colors ${allDetails ? 'bg-accent' : 'bg-surface-border-light'}`}>
+              <span className={`absolute top-0.5 left-0.5 h-3 w-3 rounded-full bg-text-primary transition-transform ${allDetails ? 'translate-x-3' : ''}`} />
+            </span>
+            詳細をすべて表示
+          </button>
         </div>
         {filtersActive && (
           <div className="flex items-center gap-2 text-[11px]">
@@ -319,6 +357,7 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
         items={rows}
         itemKey={itemKey}
         estimateHeight={estimate}
+        measurementKey={measurementKey}
         renderItem={renderItem}
         scrollToKey={selectedKey}
         scrollToken={scrollToken + filterToken}
@@ -432,6 +471,80 @@ export function roleTone(role: string | null | undefined): Tone {
   }
 }
 
+/** Short context that remains visible when a card's body is folded. */
+function secondaryText(node: TNode): string {
+  if (node.kind === 'model_call') return node.call?.turnIndex != null ? `ターン ${node.call.turnIndex}` : '';
+  if (node.kind === 'api_call') {
+    const line = dataOf(node.primary, 'api_call_start').call_site?.line;
+    return line != null ? `行 ${line}` : '';
+  }
+  if (node.kind === 'code_block' || node.kind === 'feedback') {
+    const turn = dataOf(node.primary, 'code_block_start').turn_index;
+    return turn != null ? `ターン ${turn}` : '';
+  }
+  return '';
+}
+
+function rowSummary(node: TNode): string {
+  return `${KIND_TAG[node.kind].label} ${nodeTitle(node)} ${secondaryText(node)}`;
+}
+
+/** Use the original text for excerpts; the search index is case-folded. */
+function searchExcerpt(node: TNode, query: string): string {
+  for (const event of node.events) {
+    const d = event.data as Record<string, unknown>;
+    const texts = ['code', 'text', 'content', 'user_feedback', 'message', 'partial_content',
+      'role', 'call_kind', 'model', 'error_type', 'name', 'qualname', 'api_class', 'service', 'function']
+      .map(key => textOf(d?.[key]));
+    texts.push(textOf((d?.reasoning as { text?: unknown } | undefined)?.text), event.event_type);
+    for (const text of texts) {
+      const index = text.toLowerCase().indexOf(query);
+      if (index < 0) continue;
+      return `${index > 60 ? '…' : ''}${text.slice(Math.max(0, index - 60), index + query.length + 100)}${index + query.length + 100 < text.length ? '…' : ''}`;
+    }
+  }
+  return '';
+}
+
+/** Count every call that opening this call will make reachable. */
+function nestedCallCount(node: TNode): number {
+  if (node.kind !== 'api_call' && node.kind !== 'service_call') return 0;
+  const count = (n: TNode): number => n.children.reduce((sum, c) => sum +
+    (c.kind === 'api_call' || c.kind === 'service_call' || c.kind === 'model_call' ? 1 : 0) + count(c), 0);
+  return count(node);
+}
+
+/** A single error line also survives disclosure (including text-asset previews). */
+function collapsedError(node: TNode): string {
+  const line = (prefix: string, message: unknown) => truncate(
+    `${prefix}${lastLines(textOf(message), 1)}`.replace(/\s+/g, ' ').trim(), 240,
+  );
+  if (node.kind === 'model_call' && node.call) {
+    if (!node.failed) return '';
+    const outcome = callOutcome(node.call);
+    const error = outcome.finalError ?? [...node.call.attempts.flatMap(a => a.errors), ...node.call.strayErrors].pop();
+    if (error) {
+      const d = dataOf(error, 'model_error');
+      const prefix = outcome.httpAnswer ? `HTTP ${dataOf(outcome.httpAnswer, 'model_response').http_status ?? '2xx'} の応答の後に失敗 · ` : '';
+      return line(`${prefix}${modelErrorLabel(d)}: `, d.message);
+    }
+  }
+  for (const ev of [...node.events].reverse()) {
+    const d = ev.data as { error_type?: unknown; message?: unknown; exception?: { type?: unknown; message?: unknown } | null };
+    if (d?.exception) {
+      return line(`${textOf(d.exception.type) || 'Error'}: `, d.exception.message);
+    }
+    if (node.failed && (d?.error_type || (ev.status === 'error' && d?.message))) {
+      return line(`${textOf(d.error_type) || 'Error'}: `, d.message);
+    }
+  }
+  if (node.failed && node.kind === 'code_block') {
+    const stderr = node.children.filter(c => c.kind === 'stderr').map(c => textOf(dataOf(c.primary, 'stderr').text)).join('\n');
+    return line('', stderr) || `sandbox_rc=${dataOf(node.end, 'code_block_end').sandbox_rc ?? '?'}`;
+  }
+  return node.failed ? '失敗' : '';
+}
+
 interface NodeCardProps {
   row: Row;
   model: EpisodeModel;
@@ -440,20 +553,24 @@ interface NodeCardProps {
   running: boolean;
   selected: boolean;
   selectedEventId: string | null;
-  collapsed: boolean;
-  nestedOpen: boolean;
+  query: string;
   onSelect: (node: TNode, eventId?: string) => void;
   onToggle: () => void;
-  onToggleNested: () => void;
 }
 
-function NodeCard({ row, model, episodeEndHasGap, ep, running, selected, selectedEventId, collapsed, nestedOpen, onSelect, onToggle, onToggleNested }: NodeCardProps) {
-  const { node, depth, context } = row;
+function NodeCard({ row, model, episodeEndHasGap, ep, running, selected, selectedEventId, query, onSelect, onToggle }: NodeCardProps) {
+  const { node, depth, context, expanded } = row;
   const tag = KIND_TAG[node.kind];
   const dur = nodeDuration(node);
-  const hasKids = node.children.length > 0;
+  const secondary = secondaryText(node);
+  const nested = expanded ? 0 : nestedCallCount(node);
+  const error = expanded ? '' : collapsedError(node);
+  const q = query.trim().toLowerCase();
+  // Existing bodies intentionally preview long text. Keep a search hit visible
+  // even if it falls beyond those previews (e.g. the seventh line of Python).
+  const match = q && !rowSummary(node).toLowerCase().includes(q) ? searchExcerpt(node, q) : '';
   // Keyboard navigation: when focus was on another card, it follows the selection.
-  const cardRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const active = document.activeElement;
     if (selected && cardRef.current && active !== cardRef.current && active instanceof HTMLElement && active.dataset.timelineCard !== undefined) {
@@ -464,55 +581,43 @@ function NodeCard({ row, model, episodeEndHasGap, ep, running, selected, selecte
     <div className="relative pr-2 py-0.5" style={{ paddingLeft: 8 + depth * 14 }}>
       {depth > 0 && <div className="absolute top-0 bottom-0 border-l border-surface-border" style={{ left: 8 + depth * 14 - 8 }} />}
       <div
-        ref={cardRef}
-        data-timeline-card=""
-        data-timeline-event={node.primary.event_id}
-        role="button"
-        tabIndex={selected ? 0 : -1}
-        aria-pressed={selected}
-        onClick={() => onSelect(node)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            onSelect(node);
-          }
-        }}
-        className={`rounded-md border transition-colors cursor-pointer ${
+        className={`rounded-md border transition-colors ${
           selected ? 'border-accent/70 bg-accent/[0.06] border-gold-glow' : 'border-surface-border bg-surface-raised hover:border-surface-border-light'
         } ${context ? 'opacity-45' : ''} ${node.late ? 'border-dashed' : ''}`}
       >
-        <div className="flex items-center gap-1.5 px-2 pt-1.5">
-          {hasKids ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle();
-              }}
-              aria-label={collapsed ? '展開' : '折りたたむ'}
-              className="w-4 h-4 flex items-center justify-center text-text-tertiary hover:text-accent"
-            >
-              <svg className={`w-3 h-3 transition-transform ${collapsed ? '' : 'rotate-90'}`} fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-              </svg>
-            </button>
-          ) : (
-            <span className="w-4" />
-          )}
+        <button
+          ref={cardRef}
+          type="button"
+          data-timeline-card=""
+          data-timeline-event={node.primary.event_id}
+          aria-expanded={expanded}
+          aria-pressed={selected}
+          onClick={onToggle}
+          className="flex w-full min-h-9 items-center gap-1.5 rounded-md px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          <svg aria-hidden="true" className={`w-3 h-3 flex-shrink-0 text-text-tertiary transition-transform ${expanded ? 'rotate-90' : ''}`} fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+          </svg>
           <Badge tone={tag.tone}>{tag.label}</Badge>
-          <span className="font-display text-[13px] text-text-primary truncate min-w-0" title={nodeTitle(node)}>
+          <span className="font-display text-[13px] text-text-primary truncate min-w-[40%] shrink" title={nodeTitle(node)}>
             {nodeTitle(node)}
           </span>
+          {/* The secondary text gives way first, so a narrow column still shows the call's name. */}
+          {(secondary || nested > 0) && <span className="text-[10px] text-text-tertiary truncate min-w-0 shrink-[100]" title={`${secondary}${nested ? ` ＋中の呼び出し ${nested}件` : ''}`}>
+            {secondary}{nested > 0 && `${secondary ? ' · ' : ''}＋中の呼び出し ${nested}件`}
+          </span>}
           <span className="ml-auto flex items-center gap-1 flex-shrink-0">
             {dur !== null && <span className="text-[11px] text-text-tertiary font-mono">{fmtDuration(dur)}</span>}
             <StatusBadge node={node} running={running} />
             <span className="text-[10px] text-text-muted font-mono">#{node.seq}</span>
           </span>
-        </div>
-        <div className="px-2 pb-1.5 pt-1 pl-7 space-y-1 min-w-0">
-          <CardBody node={node} model={model} episodeEndHasGap={episodeEndHasGap} ep={ep} selectedEventId={selectedEventId} onSelect={onSelect} nestedOpen={nestedOpen} onToggleNested={onToggleNested} />
+        </button>
+        {error && <div className="px-2 pb-1.5 pl-7 text-[11px] font-mono text-red-300 truncate" title={error}>{error}</div>}
+        {expanded && <div className="px-2 pb-1.5 pt-1 pl-7 space-y-1 min-w-0">
+          <CardBody node={node} model={model} episodeEndHasGap={episodeEndHasGap} ep={ep} selectedEventId={selectedEventId} onSelect={onSelect} />
+          {match && <div className="text-[11px] text-text-secondary break-all whitespace-pre-wrap" aria-label="検索一致">{match}</div>}
           <Markers node={node} running={running} />
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -593,8 +698,6 @@ interface BodyProps {
   ep: EpisodeRef;
   selectedEventId: string | null;
   onSelect: (node: TNode, eventId?: string) => void;
-  nestedOpen: boolean;
-  onToggleNested: () => void;
 }
 
 function CardBody(props: BodyProps) {
@@ -795,13 +898,12 @@ function CodeBlockBody({ node, onSelect }: BodyProps) {
   );
 }
 
-function ApiCallBody({ node, model, ep, nestedOpen, onToggleNested }: BodyProps) {
+function ApiCallBody({ node, model, ep }: BodyProps) {
   const d = dataOf(node.primary, 'api_call_start');
   const endEv = node.end;
   const ed = endEv ? dataOf(endEv, 'api_call_end') : null;
   const isErr = endEv?.event_type === 'api_call_error';
   const depth = apiDepth(node);
-  const nested = node.children.filter((c) => c.kind === 'api_call').length;
   const kf = keyFramesOf(model, node);
   const before = kf.before[0];
   const after = kf.after.find((k) => k.camera === before?.camera) ?? kf.after[0];
@@ -862,18 +964,6 @@ function ApiCallBody({ node, model, ep, nestedOpen, onToggleNested }: BodyProps)
             </div>
           )}
         </div>
-      )}
-      {nested > 0 && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggleNested();
-          }}
-          className="text-[11px] text-accent-light hover:text-accent"
-        >
-          {nestedOpen ? '内部呼び出しを隠す' : `内部呼び出し ${nested} 件を表示`}
-        </button>
       )}
     </>
   );
