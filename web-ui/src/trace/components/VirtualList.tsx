@@ -130,6 +130,52 @@ export function VirtualList<T>({
     return () => ro.disconnect();
   }, [readView]);
 
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    // The list's native anchor only protects its own scrollport. A summary or
+    // image above that scrollport can also move the whole list in the page.
+    // Observe preceding content without coupling this to a particular header.
+    let top = el.getBoundingClientRect().top;
+    let visible = false;
+    const remember = () => {
+      const rect = el.getBoundingClientRect();
+      top = rect.top;
+      visible = rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
+    };
+    remember();
+    const ro = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+      const delta = rect.top - top;
+      if (visible && rect.height > 0 && Math.abs(delta) > 1) {
+        let scroller: Element | null = el.parentElement;
+        while (scroller && scroller !== document.scrollingElement) {
+          const style = window.getComputedStyle(scroller);
+          if (scroller.scrollHeight > scroller.clientHeight && /^(auto|scroll)$/.test(style.overflowY)) break;
+          scroller = scroller.parentElement;
+        }
+        // Native page anchoring may already have kept `top` unchanged. Only
+        // compensate the remaining displacement, leaving list.scrollTop alone.
+        const target = scroller ?? document.scrollingElement;
+        if (target) target.scrollTop += delta;
+      }
+      remember();
+    });
+    for (let child: Element | null = el; child; child = child.parentElement) {
+      ro.observe(child);
+      for (let before = child.previousElementSibling; before; before = before.previousElementSibling) ro.observe(before);
+    }
+    // Capturing also covers an enclosing scroll pane. User scrolling starts a
+    // new baseline rather than being undone by a later ResizeObserver delivery.
+    window.addEventListener('scroll', remember, true);
+    window.addEventListener('resize', remember);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('scroll', remember, true);
+      window.removeEventListener('resize', remember);
+    };
+  }, []);
+
   const onScroll = () => {
     if (rafRef.current !== null) return;
     rafRef.current = window.requestAnimationFrame(() => {

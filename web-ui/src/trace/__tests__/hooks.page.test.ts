@@ -13,7 +13,8 @@ import { advance, net, requests, resetBrowser } from './harness/browser';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mount } from './harness/fakeReact';
-import { STALLED_READ_MS, useAsync, type AsyncState } from '../hooks';
+import { STALLED_READ_MS, useAsync, useEpisodeEvents, type AsyncState, type EpisodeEvents } from '../hooks';
+import type { TraceEvent } from '../types';
 
 interface Answer {
   key: string;
@@ -124,4 +125,37 @@ test('useAsync: reload() gives up a stalled read at once instead of waiting for 
   await advance(5000);
   assert.equal(requests(/^\/x$/).sent, 2, 'the queued re-read belonged to the read that was given up');
   p.unmount();
+});
+
+test('useEpisodeEvents: empty refreshes keep the events identity and appended events replace it', async () => {
+  resetBrowser();
+  const events: TraceEvent[] = [{ event_id: 'first', event_type: 'episode_start', seq: 1 }];
+  net.handler = req => req.path.endsWith('/events') ? { json: {
+    events: events.slice(Number(req.query.get('after_offset')) / 100),
+    next_offset: events.length * 100, generation: 'g1', eof: true,
+  } } : null;
+  const seen: { state: EpisodeEvents | null } = { state: null };
+  function Probe() {
+    seen.state = useEpisodeEvents('r1', 'e1', false);
+    return null;
+  }
+  const page = mount(Probe, {});
+  try {
+    await advance(100);
+    const original = seen.state!.events;
+    assert.equal(original.length, 1);
+    for (let n = 0; n < 3; n++) {
+      seen.state!.refresh();
+      await advance(100);
+      assert.equal(seen.state!.events, original, 'pager metadata updates cannot invalidate derived event data');
+    }
+    assert.equal(seen.state!.quietPasses, 3);
+    events.push({ event_id: 'next', event_type: 'trace_warning', seq: 2 });
+    seen.state!.refresh();
+    await advance(100);
+    assert.notEqual(seen.state!.events, original);
+    assert.deepEqual(seen.state!.events.map(event => event.event_id), ['first', 'next']);
+  } finally {
+    page.unmount();
+  }
 });

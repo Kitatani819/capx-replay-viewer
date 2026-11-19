@@ -169,3 +169,136 @@ test('measured heights above the viewport leave native anchoring to real rows', 
     else Reflect.deleteProperty(globalThis, 'ResizeObserver');
   }
 });
+
+test('equivalent rows and measurement callbacks preserve offscreen measured heights', async () => {
+  resetBrowser();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  let measure: ResizeObserverCallback;
+  class Observer {
+    constructor(callback: ResizeObserverCallback) { measure = callback; }
+    observe() {} unobserve() {} disconnect() {}
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: Observer });
+  const idle = { ...props, scrollToKey: null, measurementKey: () => 'unchanged' };
+  const page = mount(VirtualList<string>, idle);
+  try {
+    const row = { dataset: { vkey: 'row-0', vmeasurement: 'unchanged' }, getBoundingClientRect: () => ({ height: 1000 }) };
+    measure!([{ target: row } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(16);
+    const container = { scrollTop: 3000, clientHeight: 300, scrollHeight: 10900,
+      getBoundingClientRect: () => ({ top: 0, bottom: 300, height: 300 }), querySelector: () => null };
+    (findAll(page.output, 'div')[0].props.ref as { current: unknown }).current = container;
+    page.update({ ...idle, items: [...items] });
+    await advance(0);
+    const leadingHeight = () => (findAll(page.output, 'div')[1].props.style as { height: number }).height;
+    const before = leadingHeight();
+    page.update({ ...idle, items: [...items], itemKey: item => item,
+      estimateHeight: () => 100, measurementKey: () => 'unchanged' });
+    await advance(64);
+    assert.equal(leadingHeight(), before, 'fresh arrays and functions do not replace measured heights with estimates');
+    assert.equal(container.scrollTop, 3000);
+  } finally {
+    page.unmount();
+    if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+  }
+});
+
+for (const outer of ['document', 'pane'] as const) {
+test(`a growing summary above the list preserves the visible row in the outer ${outer}`, async () => {
+  resetBrowser();
+  const resizeDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  const scrollDescriptor = Object.getOwnPropertyDescriptor(document, 'scrollingElement');
+  const heightDescriptor = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+  const styleDescriptor = Object.getOwnPropertyDescriptor(window, 'getComputedStyle');
+  const listenerDescriptor = Object.getOwnPropertyDescriptor(window, 'addEventListener');
+  const addListener = window.addEventListener;
+  let scrollListener: (() => void) | undefined;
+  Object.defineProperty(window, 'addEventListener', { configurable: true,
+    value: (type: string, listener: () => void, options?: boolean | AddEventListenerOptions) => {
+      if (type === 'scroll') scrollListener = listener;
+      addListener.call(window, type, listener, options);
+    } });
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<unknown> }> = [];
+  class Observer {
+    targets = new Set<unknown>();
+    constructor(readonly callback: ResizeObserverCallback) { observers.push(this); }
+    observe(target: unknown) { this.targets.add(target); }
+    unobserve(target: unknown) { this.targets.delete(target); }
+    disconnect() { this.targets.clear(); }
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: Observer });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 });
+  let summaryHeight = 150, documentTop = 80, pageWrites = 0;
+  const scroller = {
+    get scrollTop() { return documentTop; },
+    set scrollTop(value: number) { documentTop = value; pageWrites++; },
+    clientHeight: 700, scrollHeight: 2000,
+    parentElement: null as unknown, previousElementSibling: null,
+  };
+  const documentScroller = outer === 'document' ? scroller : { scrollTop: 0, parentElement: null, previousElementSibling: null };
+  if (outer === 'pane') scroller.parentElement = documentScroller;
+  Object.defineProperty(window, 'getComputedStyle', { configurable: true,
+    value: (target: unknown) => ({ overflowY: outer === 'pane' && target === scroller ? 'auto' : 'visible' }) });
+  Object.defineProperty(document, 'scrollingElement', { configurable: true, value: documentScroller });
+  const summary = { previousElementSibling: null };
+  const layout = { parentElement: scroller, previousElementSibling: summary };
+  const container = {
+    scrollTop: 450, clientHeight: 300, scrollHeight: 10000,
+    parentElement: layout, previousElementSibling: null,
+    getBoundingClientRect: () => {
+      const top = summaryHeight + 60 - documentTop;
+      return { top, bottom: top + 300, height: 300 };
+    },
+    querySelector: () => null,
+  };
+  const idle = { ...props, scrollToKey: null };
+  // Attach the fake DOM before layout effects, as React does in the browser.
+  const page = mount((p: typeof idle) => {
+    const output = VirtualList(p);
+    (output.props.ref as { current: unknown }).current = container;
+    return output;
+  }, idle);
+  try {
+    await advance(32);
+    const rowTop = () => container.getBoundingClientRect().top + 500 - container.scrollTop;
+    const before = rowTop(), listTop = container.scrollTop;
+    const observer = observers.find(item => item.targets.has(summary));
+    assert.ok(observer, 'the observer includes a summary sibling above the layout, outside the list scrollport');
+    if (!observer) throw new Error('missing outer layout observer');
+    summaryHeight += 120;
+    observer.callback([{ target: summary } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(64);
+    assert.equal(rowTop(), before, 'summary growth must not move the row on screen');
+    assert.equal(scroller.scrollTop, 200, 'the enclosing scrollport absorbs the layout displacement');
+    if (outer === 'pane') assert.equal(documentScroller.scrollTop, 0, 'a nested scroll pane absorbs its own displacement');
+    assert.equal(container.scrollTop, listTop, 'the list keeps its own reading position');
+    assert.equal(pageWrites, 1);
+    // If native page anchoring already compensated a later image load, there
+    // is no residual displacement and the virtualizer must not apply it twice.
+    summaryHeight += 90; documentTop += 90;
+    observer.callback([{ target: summary } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(64);
+    assert.equal(rowTop(), before);
+    assert.equal(pageWrites, 1, 'native compensation is preserved without another scroll write');
+    documentTop += 40;
+    scrollListener!();
+    const afterManualScroll = rowTop();
+    summaryHeight += 70;
+    observer.callback([{ target: summary } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(64);
+    assert.equal(rowTop(), afterManualScroll, 'a manual scroll establishes the new reading position');
+    assert.equal(pageWrites, 2);
+  } finally {
+    page.unmount();
+    for (const [target, key, descriptor] of [
+      [globalThis, 'ResizeObserver', resizeDescriptor], [document, 'scrollingElement', scrollDescriptor],
+      [window, 'innerHeight', heightDescriptor], [window, 'getComputedStyle', styleDescriptor],
+      [window, 'addEventListener', listenerDescriptor],
+    ] as const) {
+      if (descriptor) Object.defineProperty(target, key, descriptor);
+      else Reflect.deleteProperty(target, key);
+    }
+  }
+});
+}

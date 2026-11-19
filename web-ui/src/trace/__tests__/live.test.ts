@@ -8,7 +8,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BROWSE_SUMMARY_MS, GRACE_MAX_MS, GRACE_MIN_MS, INCOMPLETE_POLL_MS, INTERRUPTED_COPY_POLL_MS, graceActive, live3dState, pollPlan, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage } from '../live';
+import { BROWSE_SUMMARY_MS, GRACE_MAX_MS, GRACE_MIN_MS, INCOMPLETE_POLL_MS, INTERRUPTED_COPY_POLL_MS, STALE_HEARTBEAT_S, STALE_INCOMPLETE_POLL_MS, graceActive, incompletePollMs, live3dState, pollPlan, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage } from '../live';
 import { EventsPager, type PagerSnapshot } from '../pager';
 import type { EpisodeSummary, EventsPage, TraceEvent } from '../types';
 
@@ -21,6 +21,21 @@ test('poll plan per mode', () => {
   assert.deepEqual(pollPlan({ live: false, running: false, incomplete: true, grace: false }), { events: false, summaryMs: INCOMPLETE_POLL_MS });
   assert.deepEqual(pollPlan({ live: false, running: false, grace: false, videoPending: true }), { events: true, summaryMs: 1000 });
   assert.deepEqual(pollPlan({ live: false, running: false, grace: false, videoPending: true, videoCopyInterrupted: true }), { events: false, summaryMs: INTERRUPTED_COPY_POLL_MS });
+});
+
+test('old incomplete snapshots check for imports at most once a minute without changing running polls', () => {
+  assert.equal(incompletePollMs(null), INCOMPLETE_POLL_MS);
+  assert.equal(incompletePollMs(STALE_HEARTBEAT_S - 1), INCOMPLETE_POLL_MS);
+  assert.equal(incompletePollMs(STALE_HEARTBEAT_S), STALE_INCOMPLETE_POLL_MS);
+  for (const live of [true, false]) {
+    const stale = { live, running: false, grace: false, incomplete: true, heartbeatAgeS: 7200 };
+    assert.deepEqual(pollPlan(stale), { events: false, summaryMs: STALE_INCOMPLETE_POLL_MS });
+    assert.deepEqual(pollPlan({ ...stale, videoPending: true }), { events: false, summaryMs: STALE_INCOMPLETE_POLL_MS });
+    assert.deepEqual(pollPlan({ ...stale, videoCopyInterrupted: true }), { events: false, summaryMs: STALE_INCOMPLETE_POLL_MS });
+    assert.deepEqual(pollPlan({ ...stale, running: true }), {
+      events: live, summaryMs: live ? 1000 : BROWSE_SUMMARY_MS,
+    });
+  }
 });
 
 test('copy pending keeps polling when an ended episode is opened and reports interrupted copies',()=>{
@@ -56,10 +71,16 @@ test('the grace period lasts at least 15 s, then until two quiet event polls and
   assert.equal(graceActive(null, { now: 0, passes: 0, quietPasses: 0, summaryReads: 0, stableSummaryReads: 0 }), false);
 });
 
-test('the summary digest changes when late events or gaps are counted', () => {
+test('the summary digest ignores liveness changes but includes recorded content', () => {
   const base: EpisodeSummary = { episode_id: 'e', status: 'ended', trace_complete: true, late_events: 0 };
-  assert.equal(summaryDigest(base), summaryDigest({ ...base, task: 'other field' }));
+  assert.equal(summaryDigest(base), summaryDigest({ ...base, heartbeat_age_s: 7200,
+    last_modified: 1234, liveness_source: 'heartbeat', status_detail: 'heartbeat file older than 30 s' }));
+  assert.notEqual(summaryDigest(base), summaryDigest({ ...base, task: 'other field' }));
   assert.notEqual(summaryDigest(base), summaryDigest({ ...base, late_events: 1, trace_complete: false }));
+  assert.notEqual(summaryDigest(base), summaryDigest({ ...base, episode: { video_copy_pending: true } }));
+  assert.notEqual(summaryDigest(base), summaryDigest({ ...base, episode: { last_frame: 'frame.png' } }));
+  assert.notEqual(summaryDigest(base), summaryDigest({ ...base, events_bytes: 1000 }));
+  assert.notEqual(summaryDigest(base), summaryDigest({ ...base, status: 'running' }));
   assert.equal(summaryDigest(null), null);
 });
 

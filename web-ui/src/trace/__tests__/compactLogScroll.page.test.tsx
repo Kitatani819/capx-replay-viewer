@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advance, currentParams, findAll, popState, propsOf, resetBrowser, setLocation, type FakeElement } from './harness/browser';
+import { advance, currentParams, findAll, popState, propsOf, requests, resetBrowser, setLocation, type FakeElement } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import TraceViewerPage from '../TraceViewerPage';
 import { MediaPane } from '../components/MediaPane';
@@ -8,11 +8,12 @@ import { VideoPlayback } from '../components/VideoPlayback';
 import { DetailTabs } from '../components/DetailTabs';
 import { Timeline } from '../components/Timeline';
 import { VirtualList } from '../components/VirtualList';
+import { TopBar } from '../components/TopBar';
 import { playbackMap } from '../playback';
 import type { TNode } from '../model';
-import type { TraceEvent } from '../types';
+import type { EpisodeSummary, TraceEvent } from '../types';
 import { Rec } from './fixtures';
-import { addEpisode, makeRun, serve } from './pageServer';
+import { addEpisode, ev, makeRun, serve } from './pageServer';
 
 type MediaProps = Parameters<typeof MediaPane>[0];
 type PlayerProps = Parameters<typeof VideoPlayback>[0];
@@ -51,11 +52,12 @@ function namedElement(value: unknown, name: string): FakeElement | undefined {
   return Object.values(element.props).map(child => namedElement(child, name)).find(Boolean);
 }
 
-async function replay(display: 'video' | 'recorded') {
+async function replay(display: 'video' | 'recorded', summary: Partial<EpisodeSummary> = {}) {
   resetBrowser();
   const rec = recording(); const run = makeRun();
-  addEpisode(run, 'e1', { status: 'ended', trace_complete: true },
-    rec.events.map(event => ({ ...event, run_id: 'r1', episode_id: 'e1' })));
+  const episode = addEpisode(run, 'e1', { status: 'ended', trace_complete: true, ...summary },
+    rec.events.filter(event => summary.status !== 'incomplete' || event.event_type !== 'episode_end')
+      .map(event => ({ ...event, run_id: 'r1', episode_id: 'e1' })));
   serve(run);
   const url = '/traces?view=details&run=r1&episode=e1';
   setLocation(`${url}&event=${rec.lastApi.event_id}`);
@@ -136,7 +138,7 @@ async function replay(display: 'video' | 'recorded') {
     (root().props.onScroll as Function)(); await advance(32);
     writes = 0;
   };
-  return { rec, page, pane, player, timeline, media, mediaProps, details, logs, listProps, list, root, container, heights,
+  return { rec, episode, page, pane, player, timeline, media, mediaProps, details, logs, listProps, list, root, container, heights,
     nodeOf, notify, sync, click, position, writes: () => writes,
     top: (event: TraceEvent) => offset(nodeOf(event).key) - scrollTop,
     async navigate(event: TraceEvent) { popState(`${url}&event=${event.event_id}`); await sync(); },
@@ -189,6 +191,111 @@ for (const display of ['video', 'recorded'] as const) {
     }
   });
 }
+
+for (const [age, interval] of [[120, 20_000], [3600, 60_000]] as const) {
+  test(`incomplete compact API details survive heartbeat-only polls (${age}s old)`, async () => {
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+    const observed: unknown[] = [], unobserved: unknown[] = [];
+    class Observer {
+      constructor(readonly callback: ResizeObserverCallback) {}
+      observe(target: unknown) { observed.push(target); }
+      unobserve(target: unknown) { unobserved.push(target); }
+      disconnect() {}
+    }
+    Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: Observer });
+    const p = await replay('recorded', { status: 'incomplete', trace_complete: false, heartbeat_age_s: age });
+    let measured: ReturnType<typeof mount<Record<string, unknown>>> | null = null;
+    try {
+      // Actually close and open the selected API through its compact header.
+      await p.click(p.rec.lastApi); await p.click(p.rec.lastApi);
+      propsOf<Parameters<typeof TopBar>[0]>(p.page.output, TopBar).onLive(true);
+      await p.sync();
+      const firstRow = p.listProps().items[0];
+      const firstKey = p.listProps().itemKey(firstRow);
+      const rowType = namedElement(p.list.output, 'MeasuredRow')!.type;
+      const rowElements = () => findAll(p.list.output, rowType) as Array<FakeElement & { key: string }>;
+      const observer = rowElements()[0].props.observer as Observer;
+      // A tall row measured before it leaves the window must keep contributing
+      // its real height when the parent is re-rendered by summary/event polls.
+      p.heights.set(firstKey, 500);
+      observer.callback([{ target: { dataset: { vkey: firstKey, vmeasurement: p.listProps().measurementKey!(firstRow) },
+        getBoundingClientRect: () => ({ height: 500 }) } } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+      await advance(32);
+      await p.position(p.rec.lastApi, 80);
+      const key = p.nodeOf(p.rec.lastApi).key;
+      const element = () => rowElements().find(row => row.props.vkey === key)!;
+      const initialElement = element();
+      assert.ok(initialElement, 'the expanded API row is mounted in the virtual window');
+      const target = { dataset: { vkey: key, vmeasurement: initialElement.props.measurement },
+        getBoundingClientRect: () => ({ height: 118 }) };
+      // The harness renders one component at a time. Retain the keyed measured
+      // row as React would, and supply its DOM ref before layout effects run.
+      measured = mount((props: Record<string, unknown>) => {
+        const output = (rowType as (props: Record<string, unknown>) => FakeElement)(props);
+        (output.props.ref as { current: unknown }).current = target;
+        return output;
+      }, initialElement.props);
+      const model = p.logs().model, rows = p.listProps().items, videos = p.mediaProps().videos;
+      const summary = p.logs().summary;
+      const measurement = p.listProps().measurementKey!(rows.find(row => row.node.key === key)!);
+      const before = p.container.scrollTop, top = p.top(p.rec.lastApi);
+      const spacer = () => (findAll(p.list.output, 'div')[1].props.style as { height: number }).height;
+      const leadingHeight = spacer(), subscriptions = observed.length, removals = unobserved.length;
+      const readsBefore = requests(/\/episodes\/e1$/).sent;
+      const eventReadsBefore = requests(/\/events$/).sent;
+      for (let i = 1; i <= 3; i++) {
+        p.episode.summary = { ...p.episode.summary, heartbeat_age_s: age + i * interval / 1000 };
+        await advance(interval + 50); await p.sync();
+        assert.equal(p.logs().model, model, 'heartbeat and empty event reads do not rebuild the episode model');
+        assert.equal(p.listProps().items, rows, 'the Timeline keeps the same derived row array');
+        assert.equal(p.logs().summary, summary, 'content above the list receives a stable summary');
+        assert.equal(p.mediaProps().videos, videos, 'heartbeat-only reads do not rebuild the media descriptors');
+        assert.equal(element().type, initialElement.type);
+        assert.equal(element().key, initialElement.key, 'the visible API row keeps its React identity');
+        measured.update(element().props);
+        assert.equal(p.listProps().measurementKey!(rows.find(row => row.node.key === key)!), measurement);
+        assert.equal(observed.length, subscriptions, 'the row remains mounted without restarting its measurement');
+        assert.equal(unobserved.length, removals, 'the row measurement is never torn down');
+        assert.equal(spacer(), leadingHeight, 'offscreen measured heights survive the polls');
+        assert.equal(p.container.scrollTop, before);
+        assert.equal(p.top(p.rec.lastApi), top);
+        assert.equal(p.writes(), 0, 'polling never requests a selection scroll');
+      }
+      assert.equal(requests(/\/episodes\/e1$/).sent - readsBefore, 3, 'three summary polls ran');
+      assert.equal(requests(/\/events$/).sent - eventReadsBefore, 3, 'three empty Live event refreshes ran');
+      for (const re of [/\/episodes\/e1$/, /\/events$/]) {
+        const reads = requests(re).list;
+        for (let i = 2; i < reads.length; i++) assert.ok(reads[i].sentAt - reads[i - 1].sentAt >= interval,
+          'stale incomplete traces are read at most once a minute');
+      }
+    } finally {
+      measured?.unmount(); p.close();
+      if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+      else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+    }
+  });
+}
+
+test('a stale incomplete trial still imports new events into its expanded compact log', async () => {
+  const p = await replay('recorded', { status: 'incomplete', trace_complete: false, heartbeat_age_s: 3600 });
+  try {
+    await p.click(p.rec.lastApi); await p.click(p.rec.lastApi);
+    propsOf<Parameters<typeof TopBar>[0]>(p.page.output, TopBar).onLive(true);
+    await p.sync(); await p.position(p.rec.lastApi, 80);
+    const before = p.logs().model, rows = p.listProps().items;
+    const added = ev('e1', Math.max(...p.episode.events.map(event => event.seq)) + 1, 'trace_warning', { message: 'imported after wall-clock limit' });
+    p.episode.events.push(added);
+    p.episode.summary = { ...p.episode.summary, heartbeat_age_s: 3660 };
+    await advance(60_100); await p.sync();
+    assert.notEqual(p.logs().model, before, 'new events rebuild the episode model');
+    assert.notEqual(p.listProps().items, rows, 'new data rebuilds the Timeline rows');
+    const node = p.logs().model.nodeOfEvent.get(added.event_id);
+    if (!node) throw new Error('the next minute poll must import the new event without manual refresh');
+    assert.ok(p.listProps().items.some(row => row.node.key === node.key));
+    assert.ok(p.listProps().items.find(row => row.node.key === p.nodeOf(p.rec.lastApi).key)?.expanded,
+      'the API details stay expanded after imported data arrives');
+  } finally { p.close(); }
+});
 
 test('an unmapped model-call list selection survives queued seek events until explicit replay input', async () => {
   const p = await replay('video');

@@ -12,8 +12,8 @@
  * stops following new events but still re-reads the episode status every 5 s.
  * When the episode stops running, events and status are polled for a short
  * grace period so the tail and late events are read (live.ts). Incomplete
- * episodes keep re-reading status, and in Live their events, every 20 s to
- * detect the next import even after its copied heartbeat expires. Nothing here
+ * episodes keep re-reading status, and in Live their events, every 20 s (once
+ * a minute after a ten-minute-old heartbeat) to detect the next import. Nothing here
  * can pause or stop an experiment. A poll tick never aborts the read still in
  * flight unless it has been in flight for 60 s (hooks.ts useAsync `poll`).
  *
@@ -45,7 +45,7 @@ import { fmtClock } from './format';
 import { useAsync, useDataAssets, useEpisodeEvents, useInterval, useStoredState, useUrlParams } from './hooks';
 import { LABELS } from './labels';
 import { useMissingEpisodeImport } from './importEpisode';
-import { GRACE_MAX_MS, INCOMPLETE_POLL_MS, RUNNER_POLL_MS, graceActive, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
+import { GRACE_MAX_MS, RUNNER_POLL_MS, graceActive, incompletePollMs, live3dState, pollPlan, runnerPollActive, summaryDigest, videoCopyFinished, videoCopyInterrupted, videoCopyMessage, type GraceStart, type Live3dState } from './live';
 import { buildEpisodeModel, liveTarget, resolveSelection, selectionEventId, type TNode } from './model';
 import { awaitingOracleHookEvidence, episodeRecordingWarnings } from './recordingWarnings';
 import { episodeKeyOf, runnerRecordFor } from './runner';
@@ -100,6 +100,11 @@ export default function TraceViewerPage() {
     }
   } : null, [runId, episodeId]);
   const runDetail = useAsync(runId ? (s) => traceApi.run(runId, s) : null, [runId]);
+  // Poll results carry a new heartbeat age even when the recording did not
+  // change. Keep content-derived props (including media above the list) stable;
+  // liveness and polling below still use the latest summary read.
+  const digest = summaryDigest(summary.data);
+  const contentSummary = useMemo(() => summary.data, [epKey, digest]);
   const status = summary.data?.status ?? null;
   const running = status === 'running';
   const videoPending = summary.data?.episode?.video_copy_pending === true;
@@ -108,7 +113,8 @@ export default function TraceViewerPage() {
   const [live, setLive] = useState<boolean>(() => !new URLSearchParams(window.location.search).get('event'));
   // Polling after the episode stopped running (tail and late events); see live.ts.
   const [grace, setGrace] = useState<GraceStart | null>(null);
-  const plan = pollPlan({ live, running, incomplete: status === 'incomplete', grace: grace !== null, videoPending,
+  const incompleteMs = incompletePollMs(summary.data?.heartbeat_age_s);
+  const plan = pollPlan({ live, running, incomplete: status === 'incomplete', heartbeatAgeS: summary.data?.heartbeat_age_s, grace: grace !== null, videoPending,
     videoCopyInterrupted: videoCopyInterrupted(summary.data) });
   const events = useEpisodeEvents(runId, episodeId, plan.events && !!runId && !!episodeId);
   const importReady = useCallback(() => {
@@ -121,7 +127,7 @@ export default function TraceViewerPage() {
   useInterval(summary.poll, plan.summaryMs ?? 1000, plan.summaryMs !== null && !!runId && !!episodeId);
   // Copied heartbeats retain their source mtime and can expire before the next
   // import. Keep detecting new data without claiming that the writer is alive.
-  useInterval(events.refresh, INCOMPLETE_POLL_MS,
+  useInterval(events.refresh, incompleteMs,
     live && status === 'incomplete' && !plan.events && !!runId && !!episodeId);
 
   // Summary reads, and how many in a row were identical (ends the grace period).
@@ -206,13 +212,13 @@ export default function TraceViewerPage() {
 
   // The runner record of this episode: while it is missing and the run may still append it
   // (the run was seen with a running episode less than a minute ago), re-read slowly.
-  const startWall = (model.episodeStart?.wall_time ?? null) ?? summary.data?.start_wall_time ?? null;
+  const startWall = (model.episodeStart?.wall_time ?? null) ?? contentSummary?.start_wall_time ?? null;
   const runnerRecords = runDetail.data?.runner_records ?? null;
   const hasRunnerRecord = useMemo(
     () =>
-      runnerRecordFor(runnerRecords ?? [], episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, summary.data, startWall)).record !==
+      runnerRecordFor(runnerRecords ?? [], episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, contentSummary, startWall)).record !==
       null,
-    [runnerRecords, model.episodeStart, summary.data, startWall],
+    [runnerRecords, model.episodeStart, contentSummary, startWall],
   );
   useEffect(() => {
     if (runId && runDetail.data?.episodes?.some((e) => e && e.status === 'running')) setRunSeenRunningAt({ runId, at: Date.now() });
@@ -252,9 +258,9 @@ export default function TraceViewerPage() {
   const videos = useMemo(() => {
     if (!runId || !ep) return [];
     const match = runnerRecords?.length ? runnerRecordFor(runnerRecords,
-      episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, summary.data, startWall)) : null;
+      episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, contentSummary, startWall)) : null;
     return videosForEpisode(ep, model, match, config.data?.runner_roots ?? []);
-  }, [runId, ep, runnerRecords, model, summary.data, startWall, config.data]);
+  }, [runId, ep, runnerRecords, model, contentSummary, startWall, config.data]);
 
   // Only a running trial owns a live tail. An archived replay with no event URL
   // waits for the player's verified frame map to choose its first visible cue.
@@ -372,11 +378,11 @@ export default function TraceViewerPage() {
     if (graceOn) return { text: `終了後に届くイベントを確認中（最長 ${GRACE_MAX_MS / 1000} 秒）`, tone: 'gold' };
     if (running && live) return { text: `ライブ更新中（約1秒ごと）${events.lastFetch ? ` · ${fmtClock(events.lastFetch)}` : ''}`, tone: 'gold' };
     if (running && !live) return { text: '更新停止中（Browse。状態は 5 秒ごとに確認）', tone: 'neutral' };
-    if (status === 'incomplete') return { text: `記録の再開を ${INCOMPLETE_POLL_MS / 1000} 秒ごとに確認中${live ? '' : '（Browse。イベントの追従停止）'}`, tone: 'neutral' };
+    if (status === 'incomplete') return { text: `記録の再開を ${incompleteMs / 1000} 秒ごとに確認中${live ? '' : '（Browse。イベントの追従停止）'}`, tone: 'neutral' };
     if (status === 'unscoped') return { text: '自動更新なし（「更新」で再取得）', tone: 'neutral' };
     if (status) return { text: '更新停止（エピソード終了）', tone: 'neutral' };
     return { text: '更新停止', tone: 'neutral' };
-  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data, episodeImport]);
+  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data, episodeImport, incompleteMs]);
 
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
   const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-a-left-width', Math.round((window.innerWidth - 112) * .6));
@@ -403,6 +409,9 @@ export default function TraceViewerPage() {
     const header = layout.parentElement?.querySelector('.replay-header');
     const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     if (header) observer?.observe(header);
+    // A summary card or its images can grow above main without resizing the
+    // header. Recompute the document position and available log height too.
+    if (layout.parentElement) observer?.observe(layout.parentElement);
     if (details) observer?.observe(details);
     window.addEventListener('resize', measure);
     window.addEventListener('scroll', updateVisibleHeight, { passive: true });
@@ -572,7 +581,7 @@ export default function TraceViewerPage() {
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
                 key={epKey}
                 model={model}
-                summary={summary.data}
+                summary={contentSummary}
                 ep={ep}
                 running={running}
                 selectedKey={selection?.node.key ?? null}
@@ -599,7 +608,7 @@ export default function TraceViewerPage() {
               <DetailTabs
                 model={model}
                 ep={ep}
-                summary={summary.data}
+                summary={contentSummary}
                 selection={selection}
                 missingEventId={eventParam && !selection && events.eof && !events.loading ? eventParam : null}
                 running={running}
