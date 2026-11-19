@@ -28,7 +28,9 @@ def test_defaults_without_file(config):
         "shared_root": "~/shared-storage/traces", "mine": [], "team": [], "interval_s": 120,
     }
     assert settings.configured
-    assert gmo.api_ssh_argv(settings) == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+    command = gmo.api_ssh_argv(settings)
+    assert command[:5] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+    assert "ControlMaster=auto" in command
 
 
 @pytest.mark.parametrize("overrides", [

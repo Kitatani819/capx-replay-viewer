@@ -347,6 +347,16 @@ def api_ssh_argv(settings: GmoSettings) -> list[str]:
             raise FetchError("Test ssh command is empty")
         return command
     command = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+    if os.name != "nt" and sys.platform != "win32":
+        # A private, short local path also fits macOS's Unix-socket path limit.
+        # Multiplexing avoids a fresh login for every live manifest and rsync.
+        control_dir = Path("/tmp") / f"capx-gmo-ssh-{os.getuid()}"
+        control_dir.mkdir(mode=0o700, exist_ok=True)
+        st = control_dir.lstat()
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
+            raise FetchError("SSH control directory must be private and owned by the current user")
+        command += ["-o", "ControlMaster=auto", "-o", "ControlPersist=30",
+                    "-o", f"ControlPath={control_dir}/%C"]
     if settings.port is not None:
         command += ["-p", str(settings.port)]
     if settings.identity_file is not None:
@@ -828,7 +838,7 @@ def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[
 
 def _transfer_episode(runner: ProcessRunner, settings: GmoSettings, run: RemoteRun,
                       episode_id: str, dest: Path, *, max_bytes: int, deadline: float,
-                      notes: list[str] | None = None) -> int:
+                      notes: list[str] | None = None, changes: list[str] | None = None) -> int:
     files = _episode_changes(run, episode_id, dest)
     pending = sum(size for _, size, _ in files)
     # Apply the login-node limit to the preflight manifest. Active recorders append
@@ -836,6 +846,8 @@ def _transfer_episode(runner: ProcessRunner, settings: GmoSettings, run: RemoteR
     # growth so running episodes can be followed, with later imports catching up.
     if pending >= max_bytes:
         raise FetchError(f"{human(pending)} exceeds the 1 GiB transfer limit")
+    if changes is not None:
+        changes.extend(rel for rel, _, _ in files)
     if not files:
         return 0
     local_run = dest / run.run_id
@@ -876,11 +888,11 @@ def _transfer_episode(runner: ProcessRunner, settings: GmoSettings, run: RemoteR
 
 def fetch_episode(runner: ProcessRunner, settings: GmoSettings, row: dict[str, Any],
                   dest: Path, *, max_bytes: int = MAX_FETCH_BYTES,
-                  notes: list[str] | None = None) -> int:
+                  notes: list[str] | None = None, changes: list[str] | None = None) -> int:
     deadline = time.monotonic() + 30 * 60
     run = _episode_files(runner, settings, row, timeout=min(60, deadline - time.monotonic()))
     return _transfer_episode(runner, settings, run, row["episode_id"], dest,
-                             max_bytes=max_bytes, deadline=deadline, notes=notes)
+                             max_bytes=max_bytes, deadline=deadline, notes=notes, changes=changes)
 
 
 def prefetch_mine(dest: Path) -> int:

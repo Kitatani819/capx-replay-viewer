@@ -13,8 +13,11 @@
  * When the episode stops running, events and status are polled for a short
  * grace period so the tail and late events are read (live.ts). Incomplete
  * episodes keep re-reading status, and in Live their events, every 20 s (once
- * a minute after a ten-minute-old heartbeat) to detect the next import. Nothing here
- * can pause or stop an experiment. A poll tick never aborts the read still in
+ * a minute after a ten-minute-old heartbeat) to detect the next import.
+ * An open remote trial also renews the backend's lease (remoteLive.ts), which
+ * copies changes about every two seconds independently of automatic imports.
+ * The active follower keeps the one-second local reads during recovery.
+ * Nothing here can pause or stop an experiment. A poll tick never aborts the read still in
  * flight unless it has been in flight for 60 s (hooks.ts useAsync `poll`).
  *
  * Runner records (the top bar's verdict) are read with the run and read again
@@ -55,6 +58,7 @@ import { episodeKeyOf, runnerRecordFor } from './runner';
 import { videosForEpisode } from './playback';
 import type { ReplaySeek } from './components/VideoPlayback';
 import { replayTab } from './replay';
+import { useRemoteLive } from './remoteLive';
 import { headerVerdict } from './outcome';
 import { dataOf } from './types';
 import { DetailTabs, type RangeFocus } from './components/DetailTabs';
@@ -119,11 +123,12 @@ export default function TraceViewerPage() {
 
   // Live: newest event selected; start in Browse when the URL names an event.
   const [live, setLive] = useState<boolean>(() => !new URLSearchParams(window.location.search).get('event'));
+  const remoteLive = useRemoteLive(runId, episodeId, live, status, videoPending);
   // Polling after the episode stopped running (tail and late events); see live.ts.
   const [grace, setGrace] = useState<GraceStart | null>(null);
   const incompleteMs = incompletePollMs(summary.data?.heartbeat_age_s);
   const plan = pollPlan({ live, running, incomplete: status === 'incomplete', heartbeatAgeS: summary.data?.heartbeat_age_s, grace: grace !== null, videoPending,
-    videoCopyInterrupted: videoCopyInterrupted(summary.data) });
+    videoCopyInterrupted: videoCopyInterrupted(summary.data), remoteFollowing: remoteLive.status?.following });
   const events = useEpisodeEvents(runId, episodeId, plan.events && !!runId && !!episodeId);
   const importReady = useCallback(() => {
     summary.reload();
@@ -388,7 +393,12 @@ export default function TraceViewerPage() {
     if (events.error) return { text: `取得エラー: ${events.error}`, tone: 'red' };
     if (events.replaced && events.loading) return { text: 'events.jsonl が置き換えられたため読み直し中', tone: 'amber' };
     if (events.loading) return { text: '読み込み中', tone: 'gold' };
+    if (remoteLive.status?.stopped_reason === 'replaced') return { text: '別の試行を追従しているため、リモートの更新を停止しました', tone: 'neutral' };
+    if (remoteLive.status?.stopped_reason === 'settings_changed') return { text: '接続設定が変わったため、リモートの更新を停止しました', tone: 'neutral' };
+    const remoteError = remoteLive.error || remoteLive.status?.last_error;
+    if (remoteError) return { text: `リモートの更新を再試行中：${remoteError}`, tone: 'amber' };
     if (videoPending) return { text: videoCopyMessage(summary.data) ?? '動画を保存中', tone: 'gold' };
+    if (remoteLive.status?.following) return { text: `リモートからライブ更新中（約${remoteLive.status.interval_s}秒ごと）`, tone: 'gold' };
     if (graceOn) return { text: `終了後に届くイベントを確認中（最長 ${GRACE_MAX_MS / 1000} 秒）`, tone: 'gold' };
     if (running && live) return { text: `ライブ更新中（約1秒ごと）${events.lastFetch ? ` · ${fmtClock(events.lastFetch)}` : ''}`, tone: 'gold' };
     if (running && !live) return { text: '更新停止中（Browse。状態は 5 秒ごとに確認）', tone: 'neutral' };
@@ -396,7 +406,7 @@ export default function TraceViewerPage() {
     if (status === 'unscoped') return { text: '自動更新なし（「更新」で再取得）', tone: 'neutral' };
     if (status) return { text: '更新停止（エピソード終了）', tone: 'neutral' };
     return { text: '更新停止', tone: 'neutral' };
-  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data, episodeImport, incompleteMs]);
+  }, [events.error, events.loading, events.replaced, events.lastFetch, graceOn, running, live, status, videoPending, summary.data, episodeImport, incompleteMs, remoteLive.error, remoteLive.status]);
 
   // Resizable panes (sizes are a per-viewer convenience kept in localStorage).
   const [leftWidth, setLeftWidth] = useStoredState<number>('capx-replay-a-left-width', Math.round((window.innerWidth - 112) * .6));

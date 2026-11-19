@@ -18,6 +18,9 @@ from capx_trace_viewer.trace_api import (
 )
 
 CACHE_SECONDS = 30
+LIVE_INTERVAL_S = 2.0
+LIVE_LEASE_S = 30.0
+LIVE_MAX_BACKOFF_S = 30.0
 
 
 def _timestamp(value: float | None = None) -> str:
@@ -31,6 +34,7 @@ class GmoService:
         self.max_fetch_bytes = gmo.MAX_FETCH_BYTES
         self._lock = threading.Lock()
         self._refresh_lock = threading.Lock()
+        self._transfer_lock = threading.Lock()
         self._cache: dict[str, list[dict[str, Any]]] | None = None
         self._cache_settings: gmo.GmoSettings | None = None
         self._cache_until = 0.0
@@ -55,6 +59,16 @@ class GmoService:
         self._auto_queued = 0
         self._auto_jobs_pending = 0
         self._auto_skipped: list[dict[str, Any]] = []
+        self._live: dict[str, Any] | None = None
+        self._live_settings: gmo.GmoSettings | None = None
+        self._live_thread: threading.Thread | None = None
+        self._live_cycle_thread: threading.Thread | None = None
+        self._live_wake = threading.Event()
+        self._live_status: dict[str, Any] = {
+            "following": False, "run_id": None, "episode_id": None,
+            "last_ok_at": None, "last_error": None, "interval_s": LIVE_INTERVAL_S,
+            "copied_bytes": 0, "stopped_reason": None,
+        }
 
     def invalidate(self) -> None:
         with self._lock:
@@ -73,7 +87,155 @@ class GmoService:
             gmo.save_settings(settings)
             self._invalidate_locked()
             self._sync_auto_settings_locked(settings)
+            stopped = self._stop_live_locked("settings_changed") if self._live and settings != self._live["settings"] else None
+        if stopped is not None:
+            stopped.close()
+        self._live_wake.set()
         self._auto_wake.set()
+
+    def _stop_live_locked(self, reason: str) -> gmo.ProcessRunner | None:
+        if self._live is None:
+            return None
+        runner = self._live["runner"]
+        self._live = None
+        self._live_status.update(following=False, stopped_reason=reason)
+        return runner
+
+    def live_status(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._live_status)
+
+    def follow(self, run_id: str, episode_id: str) -> dict[str, Any]:
+        """Start one remote follower, or renew its lease without another listing."""
+        key = (run_id, episode_id)
+        with self._lock:
+            if self._closed:
+                raise gmo.FetchError("GMO service is shutting down")
+            settings = gmo.load_settings()
+            if self._live and self._live["key"] == key and self._live["settings"] == settings:
+                self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
+                self._live_wake.set()
+                return dict(self._live_status)
+            if (self._live_status["stopped_reason"] == "episode_ended"
+                    and (self._live_status["run_id"], self._live_status["episode_id"]) == key
+                    and self._live_settings == settings):
+                return dict(self._live_status)
+        row, settings, generation = self._episode_row(run_id, episode_id)
+        with self._lock:
+            if self._closed:
+                raise gmo.FetchError("GMO service is shutting down")
+            if generation != self._generation or settings != gmo.load_settings():
+                raise gmo.FetchError("GMO settings changed during listing; please retry")
+            if self._live and self._live["key"] == key and self._live["settings"] == settings:
+                self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
+                return dict(self._live_status)
+            stopped = self._stop_live_locked("replaced")
+            self._live_settings = settings
+            self._live = {
+                "key": key, "row": row, "settings": settings, "runner": gmo.ProcessRunner(),
+                "lease_until": time.monotonic() + LIVE_LEASE_S, "next": time.monotonic(),
+                "failures": 0, "end_seen": False, "offset": 0, "generation": None,
+            }
+            self._live_status = {
+                "following": True, "run_id": run_id, "episode_id": episode_id,
+                "last_ok_at": None, "last_error": None, "interval_s": LIVE_INTERVAL_S,
+                "copied_bytes": 0, "stopped_reason": None,
+            }
+            if self._live_thread is None:
+                self._live_thread = threading.Thread(target=self._live_loop, name="capx-gmo-live", daemon=True)
+                self._live_thread.start()
+            status = dict(self._live_status)
+        if stopped is not None:
+            stopped.close()
+        self._live_wake.set()
+        return status
+
+    def _live_loop(self) -> None:
+        # This monitor stays responsive while a manifest/rsync is in flight. A
+        # closed page must also stop a slow transfer when its lease expires.
+        while True:
+            self._live_wake.clear()
+            stopped = None
+            with self._lock:
+                if self._closed:
+                    return
+                live = self._live
+                if live is not None:
+                    try:
+                        changed = live["settings"] != gmo.load_settings()
+                    except (gmo.FetchError, OSError) as exc:
+                        changed = True
+                        self._live_status["last_error"] = str(exc)[-300:]
+                    if changed:
+                        stopped = self._stop_live_locked("settings_changed")
+                    elif time.monotonic() >= live["lease_until"]:
+                        stopped = self._stop_live_locked("lease_expired")
+                    elif (time.monotonic() >= live["next"]
+                          and (self._live_cycle_thread is None or not self._live_cycle_thread.is_alive())):
+                        self._live_cycle_thread = threading.Thread(
+                            target=self._run_live_cycle, args=(live,), name="capx-gmo-live-copy", daemon=True)
+                        self._live_cycle_thread.start()
+            if stopped is not None:
+                stopped.close()
+            self._live_wake.wait(timeout=0.25)
+
+    def _live_episode_ended(self, live: dict[str, Any]) -> bool:
+        """Read only the newly copied event tail, through the reader's safe opens."""
+        with reader.Dir.open_below(self.dest, live["key"]) as directory:
+            metadata, _error, _st = reader.read_json_at(directory, "episode.json")
+            try:
+                fd, st = directory.open_file("events.jsonl")
+            except FileNotFoundError:
+                return False
+            try:
+                generation = reader.events_generation(fd, st)
+                if generation != live["generation"] or live["offset"] > st.st_size:
+                    live.update(generation=generation, offset=0, end_seen=False)
+                while True:
+                    page = reader.read_events_page(fd, live["offset"])
+                    if any(event.get("type") == "episode_end" for event in page.events()):
+                        live["end_seen"] = True
+                    previous = live["offset"]
+                    live["offset"] = page.next_offset
+                    if page.eof or page.next_offset == previous:
+                        break
+            finally:
+                reader.close_quietly(fd)
+        return live["end_seen"] and not (isinstance(metadata, dict) and metadata.get("video_copy_pending") is True)
+
+    def _run_live_cycle(self, live: dict[str, Any]) -> None:
+        started = time.monotonic()
+        stopped = None
+        try:
+            with self._transfer_lock:
+                with self._lock:
+                    if self._closed or self._live is not live:
+                        return
+                changes: list[str] = []
+                end_seen = live["end_seen"]
+                size = gmo.fetch_episode(live["runner"], live["settings"], live["row"], self.dest,
+                                         max_bytes=self.max_fetch_bytes, changes=changes)
+                ended = self._live_episode_ended(live)
+            with self._lock:
+                if self._live is not live:
+                    return
+                live["failures"] = 0
+                live["next"] = started + LIVE_INTERVAL_S
+                self._live_status.update(last_ok_at=_timestamp(), last_error=None, interval_s=LIVE_INTERVAL_S,
+                                         copied_bytes=self._live_status["copied_bytes"] + size)
+                if end_seen and ended and not changes:
+                    stopped = self._stop_live_locked("episode_ended")
+        except Exception as exc:
+            with self._lock:
+                if self._live is live:
+                    live["failures"] += 1
+                    delay = min(LIVE_MAX_BACKOFF_S, LIVE_INTERVAL_S * 2 ** min(live["failures"], 30))
+                    live["next"] = time.monotonic() + delay
+                    self._live_status.update(last_error=str(exc)[-300:], interval_s=delay)
+        finally:
+            if stopped is not None:
+                stopped.close()
+            self._live_wake.set()
 
     @staticmethod
     def _auto_enabled(settings: gmo.GmoSettings) -> bool:
@@ -280,6 +442,19 @@ class GmoService:
                 raise gmo.FetchError("GMO service is shutting down")
             if key in self._pending:
                 raise HTTPException(409, "This episode is already queued or running")
+        row, settings, generation = self._episode_row(run_id, episode_id)
+        with self._lock:
+            if self._closed:
+                raise gmo.FetchError("GMO service is shutting down")
+            if generation != self._generation or settings != gmo.load_settings():
+                raise gmo.FetchError("GMO settings changed during listing; please retry")
+            if key in self._pending:
+                raise HTTPException(409, "This episode is already queued or running")
+            return self._enqueue_locked(row, settings)
+
+    def _episode_row(self, run_id: str, episode_id: str) -> tuple[dict[str, Any], gmo.GmoSettings, int]:
+        """One shared lookup for manual fetches and live followers."""
+        key = (run_id, episode_id)
         listing, settings, generation = self._remote_snapshot()
         matches = [row for row in listing["episodes"] if (row["run_id"], row["episode_id"]) == key]
         if not matches:
@@ -291,9 +466,7 @@ class GmoService:
                 raise gmo.FetchError("GMO service is shutting down")
             if generation != self._generation or settings != gmo.load_settings():
                 raise gmo.FetchError("GMO settings changed during listing; please retry")
-            if key in self._pending:
-                raise HTTPException(409, "This episode is already queued or running")
-            return self._enqueue_locked(matches[0], settings)
+            return matches[0], settings, generation
 
     def _enqueue_locked(self, row: dict[str, Any], settings: gmo.GmoSettings,
                         manifest: gmo.RemoteRun | None = None,
@@ -333,16 +506,17 @@ class GmoService:
                 job["started_at"] = _timestamp()
             try:
                 notes: list[str] = []
-                with self._lock:
-                    if self._closed:
-                        raise gmo.FetchError("GMO service is shutting down")
-                if manifest is None:
-                    size = gmo.fetch_episode(self.runner, settings, row, self.dest,
-                                             max_bytes=self.max_fetch_bytes, notes=notes)
-                else:
-                    size = gmo._transfer_episode(self.runner, settings, manifest, row["episode_id"], self.dest,
-                                                 max_bytes=self.max_fetch_bytes,
-                                                 deadline=time.monotonic() + 30 * 60, notes=notes)
+                with self._transfer_lock:
+                    with self._lock:
+                        if self._closed:
+                            raise gmo.FetchError("GMO service is shutting down")
+                    if manifest is None:
+                        size = gmo.fetch_episode(self.runner, settings, row, self.dest,
+                                                 max_bytes=self.max_fetch_bytes, notes=notes)
+                    else:
+                        size = gmo._transfer_episode(self.runner, settings, manifest, row["episode_id"], self.dest,
+                                                     max_bytes=self.max_fetch_bytes,
+                                                     deadline=time.monotonic() + 30 * 60, notes=notes)
             except Exception as exc:
                 with self._lock:
                     job["state"] = "failed"
@@ -381,8 +555,16 @@ class GmoService:
                 return
             self._closed = True
             self._auto_next = self._auto_next_at = None
+            stopped = self._stop_live_locked("shutdown")
         self._auto_wake.set()
+        self._live_wake.set()
+        if stopped is not None:
+            stopped.close()
         self.runner.close()
+        if self._live_thread is not None:
+            self._live_thread.join(timeout=5)
+        if self._live_cycle_thread is not None:
+            self._live_cycle_thread.join(timeout=5)
         if self._auto_thread is not None:
             self._auto_thread.join(timeout=5)
         if self._worker is not None:
@@ -496,5 +678,23 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False) -> APIR
     @router.get("/jobs")
     def jobs():
         return json_response(service.jobs())
+
+    @router.get("/live")
+    def live_status():
+        return json_response(service.live_status())
+
+    @router.post("/live")
+    async def live(request: Request):
+        try:
+            data = await request.json()
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid JSON body") from exc
+        if (not isinstance(data, dict) or set(data) != {"run_id", "episode_id"}
+                or not reader.is_valid_id(data.get("run_id")) or not reader.is_valid_id(data.get("episode_id"))):
+            raise HTTPException(400, "Valid run_id and episode_id are required")
+        try:
+            return json_response(await run_in_threadpool(service.follow, data["run_id"], data["episode_id"]))
+        except (gmo.FetchError, OSError) as exc:
+            raise HTTPException(502, str(exc)[-300:]) from exc
 
     return router

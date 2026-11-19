@@ -58,7 +58,9 @@ async function replay(running = false) {
   const details = () => propsOf<DetailsProps>(page.output, DetailTabs);
   const bar = () => propsOf<BarProps>(page.output, TopBar);
   const videos = [{ name: 'video_combined.mp4', url: '/video' }];
-  const pane = mount(MediaPane, { ...mediaProps(), videos });
+  // Exercise the recorded player's selection protocol even for a synthetic
+  // running trial with an MP4. The live-camera branch is covered separately.
+  const pane = mount(MediaPane, { ...mediaProps(), follow: false, videos });
   const player = mount(VideoPlayback, propsOf<PlayerProps>(pane.output, VideoPlayback));
   const video = () => findAll(player.output, 'video')[0];
   const notify = (name: string) => (video().props[name] as Function)({ currentTarget: media });
@@ -76,7 +78,7 @@ async function replay(running = false) {
   const sync = async () => {
     for (let i = 0; i < 2; i++) {
       await advance(0);
-      pane.update({ ...mediaProps(), videos });
+      pane.update({ ...mediaProps(), follow: false, videos });
       player.update(propsOf<PlayerProps>(pane.output, VideoPlayback));
     }
     await advance(0);
