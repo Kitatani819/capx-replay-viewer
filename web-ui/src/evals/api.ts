@@ -5,6 +5,7 @@ import type { EndClassification } from '../trace/types';
 
 export interface EvalCounts { trials: number; success: number }
 export interface EvalSummary extends EvalCounts {
+  by_task?: Record<string, EvalCounts>;
   failure: number;
   unknown: number;
   incomplete: number;
