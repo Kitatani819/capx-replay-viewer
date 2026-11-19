@@ -41,6 +41,7 @@ import { evalApi } from '../evals/api';
 import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
 import './replay.css';
 import { ApiError, traceApi } from './api';
+import { cameraForVideo, mainCameraOf } from './cameras';
 import { applyDataAssets, dataAssetTargets, withTargetsLoading } from './dataAsset';
 import { nextFocusToken } from './focus';
 import { fmtClock } from './format';
@@ -268,6 +269,12 @@ export default function TraceViewerPage() {
       episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, contentSummary, startWall)) : null;
     return videosForEpisode(ep, model, match, config.data?.runner_roots ?? []);
   }, [runId, ep, runnerRecords, model, contentSummary, startWall, config.data]);
+  const cameraOptions = useMemo(() => [...new Set([...model.framesByCamera.keys(),
+    ...videos.map(video => cameraForVideo(model, video.name)).filter((name): name is string => name !== null)])], [model, videos]);
+  const cameraParam = params.get('camera');
+  const camera = cameraParam && cameraOptions.includes(cameraParam)
+    ? cameraParam : mainCameraOf(model);
+  const onCameraChange = useCallback((next: string) => setParams({ camera: next }), [setParams]);
 
   // Only a running trial owns a live tail. An archived replay with no event URL
   // waits for the player's verified frame map to choose its first visible cue.
@@ -496,7 +503,7 @@ export default function TraceViewerPage() {
     task: trialTask, seed: trialSeed, condition: summary.data?.condition ?? start?.condition ?? trial?.condition,
   });
   const compareHref = runId && episodeId && baseline && evaluation.data?.baseline
-    ? comparisonUrl(runId, episodeId, evaluation.data.baseline.eval_id, baseline.episode_id) : undefined;
+    ? comparisonUrl(runId, episodeId, evaluation.data.baseline.eval_id, baseline.episode_id, camera) : undefined;
   const breadcrumbs = showLegacy ? [
     { label: '試行を選ぶ', href: '/traces' },
     { label: legacyRun, href: `/traces?${new URLSearchParams({ legacy_run: legacyRun })}` },
@@ -582,7 +589,7 @@ export default function TraceViewerPage() {
         </div>
       )}
       {ep && contentSummary && status !== 'unscoped' && !missing && <ErrorBoundary label="試行の要約" resetKey={epKey}>
-        <TrialSummary ep={ep} model={model} summary={contentSummary} evaluation={evaluation.data} runnerRecords={runnerRecords ?? []} onJump={eventId => {
+        <TrialSummary ep={ep} model={model} cameraOptions={cameraOptions} camera={camera} onCameraChange={onCameraChange} summary={contentSummary} evaluation={evaluation.data} runnerRecords={runnerRecords ?? []} onJump={eventId => {
           setPlaybackSelection(null); setReplaySeek(null); setLive(false); setFocus(null); setTab(0);
           setParams({ event: eventId, view: 'details' }); setScrollToken(token => token + 1);
         }} />
@@ -618,7 +625,7 @@ export default function TraceViewerPage() {
               </div>
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
-                <MediaPane model={model} ep={ep} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonVisibleChange={setApiPythonVisible}
+                <MediaPane model={model} ep={ep} camera={camera} onCameraChange={onCameraChange} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonVisibleChange={setApiPythonVisible}
                   assetStates={shownAssetStates} onRetryAsset={assets.retry}
                   selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline

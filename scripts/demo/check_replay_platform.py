@@ -16,6 +16,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from check_replay_layout import check
+from check_multi_camera import check as check_multi_camera
 
 
 def main() -> None:
@@ -23,6 +24,7 @@ def main() -> None:
     parser.add_argument('--fixture', type=Path, default=Path('outputs/ci-demo'))
     parser.add_argument('--out', type=Path, default=Path('outputs/ci-checks'))
     parser.add_argument('--port', type=int, default=8390)
+    parser.add_argument('--multi-camera', action='store_true', help='Run the three-camera acceptance flow')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     fixture = args.fixture.resolve()
@@ -54,7 +56,7 @@ def main() -> None:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f'Viewer did not become ready; see {output / "server.log"}')
                 time.sleep(.2)
-            check(base_url, fixture, output)
+            (check_multi_camera if args.multi_camera else check)(base_url, fixture, output)
         finally:
             server.terminate()
             try:

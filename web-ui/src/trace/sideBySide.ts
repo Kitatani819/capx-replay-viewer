@@ -27,13 +27,16 @@ export interface ComparisonRow {
   firstDifference: boolean;
 }
 
-export function trialEventUrl(runId: string, episodeId: string, eventId?: string): string {
+export function trialEventUrl(runId: string, episodeId: string, eventId?: string, camera?: string | null): string {
   const query = new URLSearchParams({ run: runId, episode: episodeId });
   if (eventId) query.set('event', eventId);
+  if (camera) query.set('camera', camera);
   return `/traces?${query}`;
 }
-export function comparisonUrl(runId: string, episodeId: string, baselineRunId: string, baselineEpisodeId: string): string {
-  return `/traces/compare?${new URLSearchParams({ run: runId, episode: episodeId, baseline_run: baselineRunId, baseline_episode: baselineEpisodeId })}`;
+export function comparisonUrl(runId: string, episodeId: string, baselineRunId: string, baselineEpisodeId: string, camera?: string | null): string {
+  const query = new URLSearchParams({ run: runId, episode: episodeId, baseline_run: baselineRunId, baseline_episode: baselineEpisodeId });
+  if (camera) query.set('camera', camera);
+  return `/traces/compare?${query}`;
 }
 
 const ellipsis = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit - 1)}…` : text;

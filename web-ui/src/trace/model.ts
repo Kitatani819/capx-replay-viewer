@@ -1148,13 +1148,19 @@ export interface KeyFrame {
   reason: string | null;
 }
 
+function recordedFrameRefs(data: { frame_ref?: FrameRef | FrameRef[] | null; frame_refs?: FrameRef[] | null }): FrameRef[] {
+  return [...frameRefsOf(data.frame_ref), ...frameRefsOf(data.frame_refs)];
+}
+
 function keyFramesOfEvent(model: EpisodeModel, ev: TraceEvent | null, refs: FrameRef[]): KeyFrame[] {
   if (!ev) return [];
   const out: KeyFrame[] = [];
-  const seen = new Set<string>();
+  const seen = new Set<string | null>();
   const eventSimStep = ev.sim_step ?? null;
   for (const ref of refs) {
     const camera = ref.camera ?? null;
+    if (seen.has(camera)) continue;
+    seen.add(camera);
     const epoch = ref.epoch ?? null;
     const bi = ref.buffer_index ?? null;
     const frame = camera !== null && epoch !== null && bi !== null ? model.frameByKey.get(frameKey(camera, epoch, bi)) ?? null : null;
@@ -1173,7 +1179,6 @@ function keyFramesOfEvent(model: EpisodeModel, ev: TraceEvent | null, refs: Fram
       bufferIndex: bi,
       reason: ref.reason ?? frame?.writeReason ?? (path === null ? 'frame_ref に画像の位置がありません' : null),
     });
-    if (camera !== null) seen.add(camera);
   }
   for (const f of model.keyframesFor.get(ev.event_id) ?? []) {
     if (seen.has(f.camera)) continue;
@@ -1198,14 +1203,14 @@ function keyFramesOfEvent(model: EpisodeModel, ev: TraceEvent | null, refs: Fram
 export function keyFramesOf(model: EpisodeModel, n: TNode): { before: KeyFrame[]; after: KeyFrame[] } {
   if (n.kind === 'code_block') {
     return {
-      before: keyFramesOfEvent(model, n.primary, frameRefsOf(dataOf(n.primary, 'code_block_start').frame_ref)),
-      after: keyFramesOfEvent(model, n.end, frameRefsOf(n.end ? dataOf(n.end, 'code_block_end').frame_ref : null)),
+      before: keyFramesOfEvent(model, n.primary, recordedFrameRefs(dataOf(n.primary, 'code_block_start'))),
+      after: keyFramesOfEvent(model, n.end, n.end ? recordedFrameRefs(dataOf(n.end, 'code_block_end')) : []),
     };
   }
   if (n.kind === 'api_call') {
     return {
-      before: keyFramesOfEvent(model, n.primary, frameRefsOf(dataOf(n.primary, 'api_call_start').frame_ref)),
-      after: keyFramesOfEvent(model, n.end, frameRefsOf(n.end ? dataOf(n.end, 'api_call_end').frame_ref : null)),
+      before: keyFramesOfEvent(model, n.primary, recordedFrameRefs(dataOf(n.primary, 'api_call_start'))),
+      after: keyFramesOfEvent(model, n.end, n.end ? recordedFrameRefs(dataOf(n.end, 'api_call_end')) : []),
     };
   }
   return { before: [], after: [] };

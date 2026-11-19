@@ -74,6 +74,19 @@
 .replay-detail-body { padding: 26px 28px; }
 .replay-player { gap: 0; }
 .replay-film { flex: 0 0 auto; width: 100%; height: clamp(230px, 43vh, 520px); object-fit: contain; background: #e0e5de; border-radius: 8px; }
+.replay-camera-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-bottom: 8px; font-size: 12px; flex-shrink: 0; }
+.replay-camera-stage { display: grid; grid-template-rows: minmax(0, 1fr); gap: 6px; height: clamp(230px, 43vh, 520px); min-height: 0; }
+.replay-camera-pair { height: clamp(200px, 32vh, 440px); }
+.replay-camera-stage-all .replay-camera-main { box-shadow: inset 0 0 0 2px #467e5c; }
+.replay-camera-stage-all .replay-camera-main .replay-camera-label { font-weight: 600; }
+.replay-camera-view { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #e0e5de; border-radius: 6px; overflow: hidden; }
+.replay-camera-view[hidden] { display: none; }
+.replay-camera-main { grid-column: 1 / -1; order: -1; }
+.replay-camera-stage .replay-film { flex: 1 1 0; height: 0; min-height: 0; border-radius: 0; }
+.replay-camera-film { flex: 1 1 0; width: 100%; height: 0; min-height: 0; object-fit: contain; }
+.replay-camera-label { flex-shrink: 0; padding: 2px 7px; font-size: 11px; color: #435748; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay-camera-pick { position: absolute; inset: 0; width: 100%; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; }
+.replay-camera-pick:hover, .replay-camera-pick:focus-visible { border-color: #467e5c; outline: 2px solid #467e5c; outline-offset: -2px; }
 .replay-playbar { display: flex; align-items: center; gap: 20px; min-height: 70px; flex-shrink: 0; }
 .replay-play-button { background: #2e5743; color: white; border: 0; border-radius: 5px; min-width: 96px; padding: 8px 13px; white-space: nowrap; }
 .replay-playbar input[type="range"] { flex: 1; width: 0; accent-color: #356b4e; height: 4px; }
@@ -110,6 +123,9 @@
 .replay-video:has(.replay-api-python) { display: flex; flex: 1; min-height: 0; }
 .replay-api-python { width: 100%; min-width: 0; }
 .replay-api-python .replay-film { flex: 1 1 0; height: auto; min-height: 128px; max-height: 520px; }
+.replay-api-python .replay-camera-stage { flex: 1 1 0; height: auto; min-height: 210px; max-height: 520px; }
+.replay-api-python .replay-camera-pair { max-height: 440px; }
+.replay-api-python .replay-camera-stage .replay-film { height: 0; min-height: 0; }
 .replay-api-python .replay-process-log { display: flex; flex: 1 1 calc(7rem + var(--replay-log-extra)); flex-direction: column; min-height: 0; }
 .replay-api-python :is(.replay-log-heading, .replay-log-tools, .replay-sync-warning, .replay-warning) { flex-shrink: 0; }
 .replay-recorded-frame-viewport {

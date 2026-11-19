@@ -17,6 +17,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { episodeFileUrl } from '../api';
+import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
 import { fmtBytes, shortSha } from '../format';
 import { LABELS, frameOffsetLabel } from '../labels';
 import type { Live3dState } from '../live';
@@ -45,6 +46,8 @@ import type { EpisodeRef } from './ValueView';
 export type { Live3dState } from '../live';
 
 interface MediaPaneProps extends EventDataAccess {
+  camera?: string | null;
+  onCameraChange?: (camera: string) => void;
   logPanel?: ReactNode;
   seekRequest?: ReplaySeek | null;
   videos?: TrialVideo[];
@@ -63,7 +66,7 @@ interface MediaPaneProps extends EventDataAccess {
   follow: boolean;
 }
 
-export function MediaPane({ model, ep, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonVisibleChange, assetStates, onRetryAsset }: MediaPaneProps) {
+export function MediaPane({ model, ep, camera: sharedCamera, onCameraChange, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonVisibleChange, assetStates, onRetryAsset }: MediaPaneProps) {
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -74,8 +77,10 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
     () => Array.from(new Set([...kf.before, ...kf.after].map((k) => k.camera).filter((c): c is string => c !== null))),
     [kf],
   );
-  const allCameras = useMemo(() => Array.from(new Set([...cameras, ...kfCameras])).sort(), [cameras, kfCameras]);
-  const cam = camera && allCameras.includes(camera) ? camera : kfCameras[0] ?? allCameras[0] ?? null;
+  const allCameras = useMemo(() => Array.from(new Set([...cameras, ...kfCameras,
+    ...videos.map(video => cameraForVideo(model, video.name)).filter((name): name is string => name !== null)])).sort(), [cameras, kfCameras, videos, model]);
+  const preferredCamera = sharedCamera ?? camera ?? mainCameraOf(model);
+  const cam = preferredCamera && allCameras.includes(preferredCamera) ? preferredCamera : kfCameras[0] ?? allCameras[0] ?? null;
 
   useEffect(() => {
     if (!live3d.available && tab === 'live') setTab('recorded');
@@ -95,13 +100,15 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
             カメラ
             <select
               name="trace-camera"
+              aria-label="記録フレームのカメラ"
+              title={cam ?? undefined}
               value={cam ?? ''}
-              onChange={(e) => setCamera(e.target.value)}
+              onChange={(e) => { setCamera(e.target.value); onCameraChange?.(e.target.value); }}
               className="bg-surface-sunken border border-surface-border rounded px-1.5 py-0.5 text-[11px] text-text-primary"
             >
               {allCameras.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+                <option key={c} value={c} title={c}>
+                  {cameraLabel(c)}
                 </option>
               ))}
             </select>
@@ -111,6 +118,7 @@ export function MediaPane({ model, ep, selection, live3d, follow, videos = [], o
       {tab === 'video' ? (
         <div className="replay-video min-w-0">
           <VideoPlayback key={`${ep.runId}/${ep.episodeId}/${ep.generation ?? ''}`} model={model} ep={ep} videos={videos} onSelect={onPlaybackSelect ?? (() => {})} onClearSelection={onPlaybackClear} seekRequest={seekRequest} initialKey={selection?.node.key} logPanel={logPanel} onApiPythonVisibleChange={onApiPythonVisibleChange}
+            camera={sharedCamera ?? cam} onCameraChange={onCameraChange}
             assetStates={assetStates} onRetryAsset={onRetryAsset}
             selectionFromPlayback={selectionFromPlayback} liveMode={replayLive} allowInitialSelection={allowReplayInitialSelection} onInteract={onReplayInteract}/>
         </div>

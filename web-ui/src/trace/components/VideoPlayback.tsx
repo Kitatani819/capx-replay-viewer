@@ -1,6 +1,7 @@
 /** Bidirectional, frame-based replay using the existing native video player. */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { apiDefinition } from '../apiDefinitions';
+import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
 import { useStoredState } from '../hooks';
 import { enclosingBlock, nodeTitle, type EpisodeModel, type TNode } from '../model';
 import { cameraVideos, chooseExecutionVideo, cueAt, groupCues, isPrimaryReplayNode, playbackMap, primaryPlaybackCues, type TrialVideo, type PlaybackCue } from '../playback';
@@ -12,7 +13,17 @@ import type { EpisodeRef } from './ValueView';
 
 export interface ReplaySeek { key: string; token: number }
 
-export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRequest, initialKey, selectionFromPlayback = false, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract, ep, onApiPythonVisibleChange, assetStates, onRetryAsset}: EventDataAccess & {
+/** All cameras: two side by side at equal size; three or more as the main camera
+ * on the left (two thirds) and the others stacked on the right. */
+function cameraStageStyle(all: boolean, count: number): CSSProperties {
+  if (!all) return {gridTemplateColumns:'minmax(0, 1fr)', gridTemplateRows:'minmax(0, 1fr)'};
+  if (count <= 2) return {gridTemplateColumns:'repeat(2, minmax(0, 1fr))', gridTemplateRows:'minmax(0, 1fr)'};
+  return {gridTemplateColumns:'minmax(0, 2fr) minmax(0, 1fr)', gridTemplateRows:`repeat(${count-1}, minmax(0, 1fr))`};
+}
+
+export function VideoPlayback({model, videos, camera, onCameraChange, onSelect, onClearSelection, seekRequest, initialKey, selectionFromPlayback = false, simple = false, logPanel, allowInitialSelection = false, liveMode = false, onInteract, ep, onApiPythonVisibleChange, assetStates, onRetryAsset}: EventDataAccess & {
+  camera?: string | null;
+  onCameraChange?: (camera: string) => void;
   ep?: EpisodeRef;
   onApiPythonVisibleChange?: (visible: boolean) => void;
   /** A followed frame before the first API has no API selection in any pane. */
@@ -30,11 +41,15 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const combined = cameraVideos(videos);
   videos = combined.length ? combined : videos;
   const [name,setName]=useState('');
+  const multipleCameras=combined.length>1;
+  const [cameraLayout,setCameraLayout]=useStoredState<'all'|'single'>('capx.replay.cameraLayout','all');
+  const showAllCameras=multipleCameras && cameraLayout!=='single';
   const initialNode=model.allNodes.find(n=>n.key===initialKey);
   const initialBlock=initialNode ? enclosingBlock(model,initialNode) ?? initialNode.call?.producedBlocks[0] : undefined;
   const preferred=combined.length===0 && initialBlock ? chooseExecutionVideo(initialBlock,videos).video : undefined;
   const selectedRecording=videos.find(v=>v.name===name);
-  const chosen=selectedRecording ?? preferred ?? videos[0];
+  const chosen=videos.find(v=>camera && cameraForVideo(model,v.name)===camera) ?? selectedRecording ?? preferred
+    ?? videos.find(v=>cameraForVideo(model,v.name)===mainCameraOf(model)) ?? videos[0];
   const [duration,setDuration]=useState(0);
   const [time,setTime]=useState(0);
   const [follow,setFollow]=useState(false);
@@ -44,7 +59,10 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const [belowVideo,setBelowVideo]=useStoredState<'list'|'process'>('capx.replay.belowVideo','list');
   const showLogs=Boolean(logPanel) && belowVideo!=='process';
   const [turn,setTurn]=useState<number|null>(null);
-  const video=useRef<HTMLVideoElement>(null);
+  const video=useRef<HTMLVideoElement|null>(null);
+  const recordings=useRef(new Map<string,HTMLVideoElement>());
+  const activeRecording=useRef<{url:string; element:HTMLVideoElement|null}|null>(null);
+  const transfer=useRef<{url:string; time:number; rate:number; playing:boolean}|null>(null);
   const list=useRef<HTMLDivElement>(null);
   const lastCentered=useRef<string|null>(null);
   const selected=useRef<string|null>(null);
@@ -79,7 +97,49 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
   const showProcessRows = !map.pending || mediaError;
   const visibleWithoutTime = !apiMode && showProcessRows
     ? withoutTime.filter(node => turn === null || turnOf(node) === turn) : [];
-  useEffect(()=>{setDuration(0);setTime(0);setMediaError(false);setPlaying(false);setPlayError(false);following.current=false;setFollow(false);selected.current=null;appliedSeek.current=null;initialized.current=false;programmaticSeek.current=null;},[chosen?.url]);
+  // All camera elements stay mounted when their roles change. Transfer the
+  // clock before paint; selection/follow guards belong to the trial, not camera.
+  useLayoutEffect(()=>{
+    const previous=activeRecording.current;
+    const next=(multipleCameras && chosen ? recordings.current.get(chosen.url) : video.current) ?? null;
+    video.current=next;
+    activeRecording.current=chosen ? {url:chosen.url,element:next} : null;
+    if(multipleCameras && previous && previous.url!==chosen?.url && videos.some(v=>v.url===previous.url)) {
+      const old=previous.element;
+      if(old && next && chosen) {
+        const snapshot={url:chosen.url,time:old.currentTime,rate:old.playbackRate,playing:!old.paused};
+        transfer.current=next.error ? null : snapshot;
+        programmaticSeek.current=snapshot.time;
+        next.playbackRate=snapshot.rate;
+        if(next.readyState>0) {
+          next.currentTime=snapshot.time;
+          transfer.current=null;
+          if(snapshot.playing)void next.play().catch(()=>setPlayError(true));
+          else next.pause();
+        }
+        setTime(snapshot.time);
+        setDuration(next.readyState>0 ? next.duration : 0);
+        setMediaError(Boolean(next.error));setPlayError(false);
+      }
+      return;
+    }
+    if(previous?.url===chosen?.url)return;
+    if(multipleCameras && next)next.playbackRate=0.5;
+    setDuration(0);setTime(0);setMediaError(false);setPlaying(false);setPlayError(false);following.current=false;setFollow(false);selected.current=null;appliedSeek.current=null;initialized.current=false;programmaticSeek.current=null;
+  },[chosen?.url]);
+  const syncCameras=(force=false)=>{
+    const main=video.current;
+    if(!multipleCameras || !main)return;
+    if(transfer.current?.url===activeRecording.current?.url && main.readyState===0)return;
+    for(const other of recordings.current.values()) {
+      if(other===main)continue;
+      other.playbackRate=main.playbackRate;
+      if(other.readyState>0 && (force || Math.abs(other.currentTime-main.currentTime)>.1))other.currentTime=main.currentTime;
+      if(main.paused || main.ended) {if(!other.paused)other.pause();}
+      else if(other.paused)void other.play().catch(()=>{});
+    }
+  };
+  useEffect(()=>{syncCameras(true);},[chosen?.url,showAllCameras]);
   useEffect(()=>{
     if(liveMode){video.current?.pause();following.current=false;setFollow(false);selected.current=null;}
   },[liveMode]);
@@ -180,6 +240,11 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
     following.current = true;
     setFollow(true);
   };
+  const chooseCamera=(recording:TrialVideo)=>{
+    setName(recording.name);
+    const nextCamera=cameraForVideo(model,recording.name);
+    if(nextCamera)onCameraChange?.(nextCamera);
+  };
   if(!chosen)return <div className="p-3 text-xs text-text-tertiary">この試行の動画は見つかりません。「記録フレーム」から保存画像を確認できます。</div>;
   const clock=(seconds:number)=>Number.isFinite(seconds)?`${Math.floor(seconds/60)}:${(seconds%60).toFixed(2).padStart(5,'0')}`:'0:00';
   // A range with centisecond steps can round the last selectable value.
@@ -199,16 +264,65 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
       <span className="replay-event-kind">{cue?.candidateCount !== undefined ? `候補生成（${cue.candidateCount}件）` : processLabel(node) || '記録'}</span>
     </button>;
   };
+  const recordingVideo=(recording:TrialVideo,isMain:boolean)=>{
+    const isActive=()=>activeRecording.current?.url===recording.url;
+    const rawCamera=cameraForVideo(model,recording.name);
+    return <video key={recording.url} ref={multipleCameras ? element=>{
+      if(element)recordings.current.set(recording.url,element);
+      else recordings.current.delete(recording.url);
+      if(isMain)video.current=element;
+    } : video} src={recording.url} controls={isMain && simple} preload={multipleCameras?'auto':'metadata'}
+      muted={multipleCameras} playsInline={multipleCameras}
+      data-camera={rawCamera??recording.name} data-main-camera={isMain?'true':'false'}
+      aria-label={isMain?'試行の録画':`${cameraLabel(rawCamera??recording.name)}の録画`}
+      className={isMain?`replay-film ${simple?'h-full':''}`:'replay-camera-film'}
+      onLoadedMetadata={e=>{
+        if(!isMain || !isActive()){syncCameras(true);return;}
+        activeRecording.current={url:recording.url,element:e.currentTarget};
+        const pending=transfer.current;
+        if(pending?.url===recording.url) {
+          e.currentTarget.currentTime=pending.time;e.currentTarget.playbackRate=pending.rate;
+          transfer.current=null;
+          if(pending.playing)void e.currentTarget.play().catch(()=>setPlayError(true));
+          else e.currentTarget.pause();
+        }else if(!multipleCameras)e.currentTarget.playbackRate=0.5;
+        setDuration(e.currentTarget.duration);syncCameras(true);
+      }}
+      onPlay={()=>{if(!isActive())return;setPlaying(true);setPlayError(false);resumeFollow();syncCameras(true);}}
+      onPause={e=>{if(!isActive())return;setPlaying(false);setTime(e.currentTarget.currentTime);syncCameras(true);}}
+      onRateChange={()=>{if(isActive())syncCameras();}}
+      onSeeking={e=>{if(!isActive())return;if(programmaticSeek.current===null || Math.abs(e.currentTarget.currentTime-programmaticSeek.current)>.01)resumeFollow();setTime(e.currentTarget.currentTime);syncCameras(true);}}
+      onTimeUpdate={e=>{if(!isActive())return;setTime(e.currentTarget.currentTime);syncCameras();}}
+      onSeeked={e=>{if(!isActive())return;setTime(e.currentTarget.currentTime);syncCameras(true);}}
+      onEnded={()=>{if(!isActive())return;setTime(duration);setPlaying(false);syncCameras(true);}}
+      onError={()=>{if(isActive()){setDuration(0);setMediaError(true);}}}/>;
+  };
   return <div className={`replay-player flex flex-col${simple ? ' h-full min-h-0' : ''}${apiPanelVisible ? ' replay-api-python' : ''}`}>
     {syncMessage && <div role="status" className="replay-sync-warning">{syncMessage}</div>}
-    <video key={chosen.url} ref={video} src={chosen.url} controls={simple} preload="metadata" aria-label="試行の録画" className={`replay-film ${simple ? 'h-full' : ''}`}
-      onLoadedMetadata={e=>{setDuration(e.currentTarget.duration);e.currentTarget.playbackRate=0.5;}}
-      onPlay={()=>{setPlaying(true);setPlayError(false);resumeFollow();}}
-      onPause={e=>{setPlaying(false);setTime(e.currentTarget.currentTime);}}
-      onSeeking={e=>{if(programmaticSeek.current===null || Math.abs(e.currentTarget.currentTime-programmaticSeek.current)>.01)resumeFollow();setTime(e.currentTarget.currentTime);}}
-      onTimeUpdate={e=>setTime(e.currentTarget.currentTime)}
-      onSeeked={e=>setTime(e.currentTarget.currentTime)}
-      onEnded={()=>{setTime(duration);setPlaying(false);}} onError={()=>{setDuration(0);setMediaError(true);}}/>
+    {multipleCameras ? <>
+      <div className="replay-camera-tools">
+        <div role="group" aria-label="カメラの表示" className="replay-content-switch">
+          <button type="button" aria-pressed={showAllCameras} onClick={()=>setCameraLayout('all')}>全カメラ</button>
+          <button type="button" aria-pressed={!showAllCameras} onClick={()=>setCameraLayout('single')}>1台</button>
+        </div>
+        {!showAllCameras && <label>カメラ <select aria-label="録画カメラ" title={cameraForVideo(model,chosen.name)??chosen.name} value={chosen.name}
+          onChange={e=>{const next=videos.find(v=>v.name===e.target.value);if(next)chooseCamera(next);}}>
+          {videos.map(v=>{const raw=cameraForVideo(model,v.name)??v.name;return <option key={v.url} value={v.name} title={raw}>{cameraLabel(raw)}</option>;})}
+        </select></label>}
+      </div>
+      <div className={`replay-camera-stage${showAllCameras?' replay-camera-stage-all':''}${showAllCameras && videos.length===2?' replay-camera-pair':''}`} style={cameraStageStyle(showAllCameras,videos.length)}>
+        {videos.map(v=>{
+          const main=v.url===chosen.url;
+          const raw=cameraForVideo(model,v.name)??v.name;
+          return <div key={v.url} className={`replay-camera-view${main?' replay-camera-main':''}`} hidden={!main && !showAllCameras}
+            style={main && showAllCameras ? {gridColumn:'1', gridRow:videos.length>2?`1 / span ${videos.length-1}`:'1'} : undefined}>
+            {recordingVideo(v,main)}
+            <span className="replay-camera-label" title={raw}>{cameraLabel(raw)}</span>
+            {!main && <button type="button" className="replay-camera-pick" aria-label={`${cameraLabel(raw)}をメインにする`} title={raw} onClick={()=>chooseCamera(v)}/>}
+          </div>;
+        })}
+      </div>
+    </> : recordingVideo(chosen,true)}
     {!simple && <>
       <div className="replay-playbar">
         <button className="replay-play-button" disabled={mediaError} aria-label={playing?'一時停止':'再生'} onClick={()=>{
@@ -263,7 +377,7 @@ export function VideoPlayback({model, videos, onSelect, onClearSelection, seekRe
           <details className="replay-playback-options"><summary>再生設定</summary><div>
             <SmallButton onClick={()=>{if(video.current){resumeFollow();video.current.pause();video.current.currentTime=Math.max(0,time-2);setTime(video.current.currentTime);}}}>2秒巻き戻す</SmallButton>
             <label>速度 <select aria-label="動画の再生速度" defaultValue="0.5" onChange={e=>{if(video.current)video.current.playbackRate=Number(e.target.value);}}>{[0.25,0.5,1,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label>
-            {videos.length > 1 && <label>録画 <select aria-label="録画カメラ" value={chosen.name} onChange={e=>setName(e.target.value)}>{videos.map(v=><option key={v.url}>{v.name}</option>)}</select></label>}
+            {!multipleCameras && videos.length > 1 && <label>録画 <select aria-label="録画カメラ" value={chosen.name} onChange={e=>setName(e.target.value)}>{videos.map(v=><option key={v.url}>{v.name}</option>)}</select></label>}
             <label><input type="checkbox" checked={follow} onChange={e=>{if(e.target.checked)resumeFollow();else{selected.current=null;following.current=false;setFollow(false);}}}/> 再生位置に追従</label>
             <span className="text-xs">{map.reason ? '動画位置を特定できない処理も記録順に確認できます。' : 'フレーム記録から同期（間は補間）。同じ位置の処理は記録順です。'}</span>
           </div></details>
