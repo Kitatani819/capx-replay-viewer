@@ -66,13 +66,15 @@ def test_missing_or_ambiguous_trial_settings_refuse_repeat_identity(damage):
     assert repeat_reference.episode_settings(episodes) is None
 
 
-@pytest.mark.parametrize("damage", ["git", "dirty", "diff", "mixed", "incomplete", "unknown", "running", "model", "flags"])
+@pytest.mark.parametrize("damage", ["git", "dirty", "dirty_hashed", "diff", "mixed", "incomplete", "unknown", "running", "model", "flags"])
 def test_record_identity_requires_known_code_and_unmixed_settings(damage):
     value = valid_record("ev-one")
     if damage == "git":
         value["git"] = None
     elif damage == "dirty":
         value["git"]["dirty"] = None
+    elif damage == "dirty_hashed":
+        value["git"].update(dirty=True, diff_sha256="b" * 64)
     elif damage == "diff":
         value["git"]["dirty"] = True
     elif damage in ("mixed", "incomplete", "unknown"):

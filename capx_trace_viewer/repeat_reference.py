@@ -17,9 +17,7 @@ def record_key(record: dict[str, Any] | None) -> str | None:
     if not record or record.get("status") != "completed":
         return None
     git, summary = record.get("git"), record.get("summary")
-    if not isinstance(git, dict) or type(git.get("dirty")) is not bool:
-        return None
-    if git["dirty"] and not git.get("diff_sha256"):
+    if not isinstance(git, dict) or git.get("dirty") is not False:
         return None
     if not isinstance(summary, dict) or summary.get("mixed") or summary.get("incomplete") or summary.get("unknown"):
         return None
