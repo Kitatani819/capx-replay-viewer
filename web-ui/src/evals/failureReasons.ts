@@ -20,6 +20,7 @@ export const END_CAUSE_LABELS: Record<EndCauseCode, string> = {
   finish_unmet: '「終わった」と答えたが未達成', parser_finish: '終了と解釈されたが未達成', execution_error: 'エラーで停止', simulator_crash: 'シミュレーターの異常終了',
   slurm_time_limit: '評価ジョブが時間制限で打ち切られた', manual_stop: '手動で停止', replaced: '別の試行に置き換え',
   recording_incomplete: '記録が途中で終わった', unknown: '終了原因を特定できない',
+  evaluation_budget: '評価全体の時間制限に到達',
 };
 // Canonical cell vocabulary mirrored from end_reason.py; parity is tested.
 export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = {
@@ -39,6 +40,7 @@ export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = 
   unknown: ["不明", "終了原因を特定する記録が足りない"],
   parser_finish: ["終了扱い", "続行の指示がなく終了と扱われたが課題は未達成"],
   env_horizon: ["環境期限", "シミュレーター自身のステップ数の期限に到達"],
+  evaluation_budget: ["評価時間", "評価全体の時間制限に到達"],
 };
 export const END_CAUSE_CELL_WORDS = Object.fromEntries(
   Object.entries(END_CAUSE_WORDS).map(([code, [word]]) => [code, word]),
@@ -86,7 +88,7 @@ export function causeHeadline(ending: EndClassification): string {
     return `${causeLabel(ending)}（${count}）`;
   }
   if (limit != null) {
-    const unit = ['code_time_limit', 'slurm_time_limit'].includes(code) ? ' 秒' : ' 回';
+    const unit = ['code_time_limit', 'slurm_time_limit', 'evaluation_budget'].includes(code) ? ' 秒' : ' 回';
     return `${causeLabel(ending)}（上限 ${evidenceValue(limit)}${unit}）`;
   }
   return causeLabel(ending);

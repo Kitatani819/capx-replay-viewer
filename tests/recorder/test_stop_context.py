@@ -69,6 +69,8 @@ class Summary:
     terminated: bool = False
     truncated: bool = True
     sandbox_rc: int = 0
+    budget_exhausted: bool = True
+    stopping_reason: str = "evaluation_budget"
 
 
 def test_trial_start_and_end_persist_limits_final_usage_and_truncation(tmp_path, monkeypatch):
@@ -100,6 +102,8 @@ def test_trial_start_and_end_persist_limits_final_usage_and_truncation(tmp_path,
         assert doc["stop_context"] == end
         assert doc["harness_summary"]["truncated"] is True
         assert doc["harness_summary"]["terminated"] is False
+        assert doc["harness_summary"]["budget_exhausted"] is True
+        assert doc["harness_summary"]["stopping_reason"] == "evaluation_budget"
     finally:
         rec.close()
 
@@ -149,3 +153,24 @@ def test_web_timeout_is_recorded_without_ending_trial(tmp_path, monkeypatch):
         assert "trial_time_limit_s" not in context
     finally:
         rec.close()
+
+
+def test_cycle_limiter_metadata_overrides_simulator_horizon(monkeypatch):
+    runner = ModuleType('capx.envs.runner')
+    runner.TRIAL_TIMEOUT_SECONDS = 0
+    runner.MAX_TRIAL_RETRIES = 1
+    runner.EVAL_BUDGET_SECONDS = 600
+    runner.EVAL_BUDGET_STARTED_AT = 1000
+    monkeypatch.setitem(sys.modules, runner.__name__, runner)
+    monkeypatch.setattr('capx_trace_recorder.stop_context.time.time', lambda: 1123)
+    low = SimpleNamespace(max_steps=11500, _sim_step_count=1800,
+                          _capx_trial_steplimit=1500, _capx_steps_used=1500,
+                          _capx_success_policy='per_cycle_sticky', _capx_success=True)
+    context = trial_context(SimpleNamespace(low_level_env=low))
+    assert context['step_limit'] == context['steps_used'] == 1500
+    assert context['success_policy'] == 'per_cycle_sticky'
+    assert context['sticky_success'] is True
+    assert context['evaluation_budget_s'] == 600
+    assert context['evaluation_elapsed_s'] == 123
+    start = trial_context(SimpleNamespace(low_level_env=low), include_usage=False)
+    assert not {'sticky_success', 'steps_used', 'evaluation_elapsed_s'} & start.keys()

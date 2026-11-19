@@ -5,6 +5,7 @@ import { useAsync, useInterval } from '../trace/hooks';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
+import { TrialConditions } from './TrialConditions';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
@@ -93,7 +94,7 @@ function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: {
   const tooltip = trial.end_classification && causeTooltip(trial.end_classification);
   return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title={tooltip ? `${tooltip}\n試行を開く` : '試行を開く'} aria-label={`${label}（試行を開く）`}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
-  </a>{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
+  </a><TrialConditions ending={trial.end_classification} />{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
 }
 export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
