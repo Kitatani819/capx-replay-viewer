@@ -62,3 +62,14 @@ test('trial without an evaluation links through the picker and run, including en
   assert.deepEqual(items[2], { label: 'cube · seed 0' });
   assert.ok(!items.some(item => item.href?.startsWith('/evals')));
 });
+
+test('a trial whose run looks like an evaluation ID shows the evaluation trail while the record loads', () => {
+  const items = trialBreadcrumbs({ runId: 'ev-20261119T052637Z-5e53', episodeId: 'ep', evaluation: undefined, task: 'cube', seed: 7 });
+  assert.deepEqual(items, [
+    { label: '評価一覧', href: '/evals' },
+    { label: 'ev-20261119T052637Z-5e53', href: '/evals/ev-20261119T052637Z-5e53' },
+    { label: 'cube · seed 7' },
+  ]);
+  const other = trialBreadcrumbs({ runId: 'my-run', episodeId: 'ep', evaluation: undefined, task: 'cube', seed: 7 });
+  assert.equal(other[0].label, '試行を選ぶ');
+});

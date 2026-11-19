@@ -17,6 +17,9 @@ export function Breadcrumb({ items }: { items: readonly BreadcrumbItem[] }) {
 }
 
 /** Keep the title identical everywhere an evaluation appears. */
+// The evaluation wrapper's ID format (capx_trace_recorder.eval): ev-YYYYMMDDThhmmssZ-xxxx.
+const EVAL_ID = /^ev-\d{8}T\d{6}Z-[0-9a-f]{4}$/;
+
 export function evaluationTitle(record: EvalRecord): string {
   return record.baseline_eval_id ? record.changed : `${record.changed || '評価'}（基準）`;
 }
@@ -29,10 +32,15 @@ export function trialBreadcrumbs({ runId, episodeId, evaluation, task, seed, com
   seed?: number | null;
   compare?: boolean;
 }): BreadcrumbItem[] {
+  // While the evaluation record is still loading, a run named like an evaluation ID already
+  // shows the evaluation trail (with the ID as its title), so the trail does not jump.
+  const looksLikeEval = !evaluation && !!runId && EVAL_ID.test(runId);
   const items: BreadcrumbItem[] = evaluation
     ? [{ label: '評価一覧', href: '/evals' }, { label: evaluationTitle(evaluation), href: `/evals/${encodeURIComponent(evaluation.eval_id)}` }]
-    : [{ label: '試行を選ぶ', href: '/traces' }];
-  if (!evaluation && runId) items.push({ label: runId, href: `/traces?${new URLSearchParams({ run: runId })}` });
+    : looksLikeEval
+      ? [{ label: '評価一覧', href: '/evals' }, { label: runId!, href: `/evals/${encodeURIComponent(runId!)}` }]
+      : [{ label: '試行を選ぶ', href: '/traces' }];
+  if (!evaluation && !looksLikeEval && runId) items.push({ label: runId, href: `/traces?${new URLSearchParams({ run: runId })}` });
   if (runId && episodeId) items.push({
     label: `${task || episodeId}${typeof seed === 'number' ? ` · seed ${seed}` : ''}`,
     href: trialEventUrl(runId, episodeId),
