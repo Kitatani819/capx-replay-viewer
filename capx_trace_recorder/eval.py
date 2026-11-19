@@ -166,6 +166,61 @@ def _wait_for_workers(pgid: int, timeout: float) -> bool:
         time.sleep(min(.1, remaining))
 
 
+def finalize_trial_outcomes(trace_root: Path, run_id: str) -> int:
+    """Score interrupted attempts only after all evaluation workers have stopped.
+
+    The explicit marker distinguishes newly finalized attempts from historical
+    missing results. Never follow a trace's symlinks or manufacture episode_end.
+    """
+    count = 0
+    with reader.Dir.open_below(trace_root, [run_id]) as run:
+        for name in run.names():
+            if not reader.is_valid_id(name):
+                continue
+            try:
+                directory = run.subdir(name)
+            except OSError:
+                continue
+            with directory:
+                raw, error, _st = reader.read_json_at(directory, "episode.json", 2 * 1024 * 1024)
+                if error or not isinstance(raw, dict) or raw.get("episode_id") != name:
+                    continue
+                explicit = raw.get("trial_outcome")
+                if isinstance(explicit, dict) and type(explicit.get("task_success")) is bool:
+                    continue
+                harness = raw.get("harness_summary")
+                if (raw.get("episode_end_written") is True and isinstance(harness, dict)
+                        and type(harness.get("task_completed")) is bool):
+                    continue
+                context = raw.get("stop_context") or {}
+                recovered = reader.trial_end_classification_at(
+                    directory, reader.episode_summary_from_metadata(run_id, name, raw))
+                known = recovered.get("verdict") in ("success", "failure")
+                success = (isinstance(harness, dict) and harness.get("task_completed") is True
+                           or isinstance(context, dict) and context.get("success_policy") == "per_cycle_sticky"
+                           and context.get("sticky_success") is True)
+                if known:
+                    success = recovered["verdict"] == "success"
+                raw["trial_outcome"] = {"task_success": bool(success), "source": "evaluation_finalizer",
+                                        "reason": "terminal_event_recovered" if known else "evaluation_interrupted",
+                                        "resumable": not bool(success) and (
+                                            not known or recovered.get("cause", {}).get("code") == "evaluation_budget")}
+                temporary = f".outcome-{os.getpid()}-{time.time_ns()}"
+                try:
+                    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IMODE(_st.st_mode), dir_fd=directory.fd)
+                    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        json.dump(raw, stream, ensure_ascii=True)
+                        stream.write("\n")
+                    os.replace(temporary, "episode.json", src_dir_fd=directory.fd, dst_dir_fd=directory.fd)
+                    count += 1
+                finally:
+                    try:
+                        os.unlink(temporary, dir_fd=directory.fd)
+                    except FileNotFoundError:
+                        pass
+    return count
+
+
 def job_end_main(words: Sequence[str] | None = None) -> int:
     """Import explicit scheduler facts after a killed evaluation cannot write them.
 
@@ -302,6 +357,11 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         end = {"exit_code": returncode, "signal": -returncode if returncode < 0 else None}
         if child is not None and os.name == "posix" and not _wait_for_workers(child.pid, worker_wait_timeout):
             end["workers_left_running"] = True
+        if not end.get("workers_left_running"):
+            try:
+                finalize_trial_outcomes(trace_root, eval_id)
+            except (OSError, ValueError):
+                print("eval: could not finalize interrupted trial outcomes", file=sys.stderr)
         record.update({"status": "completed" if returncode == 0 else "interrupted",
                        "end": end,
                        "ended_at": _now(), "heartbeat_at": _now(),

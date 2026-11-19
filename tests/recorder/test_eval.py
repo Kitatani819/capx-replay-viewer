@@ -684,3 +684,37 @@ def test_job_end_imports_explicit_accounting_facts(tmp_path):
     with pytest.raises(SystemExit):
         wrapper.job_end_main(["--trace-root", str(root), "--run-id", data["eval_id"], "--job-id", "other",
                               "--state", "TIMEOUT", "--ended-at", "2026-11-20T01:02:03Z"])
+
+
+def test_finalizer_scores_only_explicit_new_closures_and_refuses_symlinks(tmp_path):
+    run = tmp_path / 'ev-finalize'
+    run.mkdir()
+    for name, extras in [('interrupted', {}), ('success', {'harness_summary': {'task_completed': True}}),
+                         ('ended', {'episode_end_written': True, 'harness_summary': {'task_completed': False}})]:
+        directory = run / name
+        directory.mkdir()
+        (directory / 'episode.json').write_text(json.dumps({'episode_id': name, **extras}))
+    outside = tmp_path / 'outside.json'
+    outside.write_text('{"episode_id":"linked"}')
+    linked = run / 'linked'
+    linked.mkdir()
+    (linked / 'episode.json').symlink_to(outside)
+    assert wrapper.finalize_trial_outcomes(tmp_path, 'ev-finalize') == 2
+    assert json.loads((run / 'interrupted/episode.json').read_text())['trial_outcome']['task_success'] is False
+    assert json.loads((run / 'success/episode.json').read_text())['trial_outcome']['task_success'] is True
+    assert 'trial_outcome' not in json.loads((run / 'ended/episode.json').read_text())
+    assert outside.read_text() == '{"episode_id":"linked"}'
+    assert wrapper.finalize_trial_outcomes(tmp_path, 'ev-finalize') == 0
+
+
+def test_finalizer_preserves_success_from_a_flushed_terminal_event(tmp_path):
+    directory = tmp_path / 'ev-event' / 'episode'
+    directory.mkdir(parents=True)
+    (directory / 'episode.json').write_text(json.dumps({'episode_id': 'episode', 'episode_end_written': False}))
+    event = {'event_id': 'end', 'seq': 1, 'event_type': 'episode_end', 'data': {
+        'end_reason': 'completed', 'harness_summary': {'task_completed': True, 'sandbox_rc': 0}}}
+    (directory / 'events.jsonl').write_text(json.dumps(event) + '\n')
+    assert wrapper.finalize_trial_outcomes(tmp_path, 'ev-event') == 1
+    outcome = json.loads((directory / 'episode.json').read_text())['trial_outcome']
+    assert outcome['task_success'] is True and outcome['resumable'] is False
+    assert outcome['reason'] == 'terminal_event_recovered'

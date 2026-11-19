@@ -8,10 +8,13 @@ const verdict = (value: unknown): TaskVerdict => value === true ? 'success' : va
 export function episodeVerdict(episode: EpisodeSummary, records: RunnerRecord[] = []): TaskVerdict {
   const canonical = episode.end_classification?.verdict;
   if (canonical === 'success' || canonical === 'failure' || canonical === 'unknown' || canonical === 'running') return canonical;
-  if (episode.status === 'running') return 'running';
+  const explicit = episode.episode?.trial_outcome as { source?: unknown; task_success?: unknown } | undefined;
+  const terminal = explicit && ['recorder_terminal', 'evaluation_finalizer'].includes(String(explicit.source)) && typeof explicit.task_success === 'boolean';
+  if (episode.status === 'running' && !terminal) return 'running';
   const match = runnerRecordFor(records, episodeKeyOf(null, episode, episode.start_wall_time));
   if (match.attempt && Object.hasOwn(match.attempt, 'task_success')) return verdict(match.attempt.task_success);
   if (match.isFinal && match.record?.outcome) return verdict(match.record.outcome.task_success);
+  if (terminal) return verdict(explicit.task_success);
   const summary = episode.episode?.harness_summary;
   if (summary && typeof summary === 'object' && !Array.isArray(summary)) {
     const data = summary as Record<string, unknown>;

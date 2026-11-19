@@ -168,3 +168,13 @@ def test_condition_sets_ignore_order_and_flags_keep_json_types():
     summary = evals.aggregate_episodes([
         {"episode": {"config_flags": {"multi_turn": value}}} for value in (True, 1)])
     assert summary["mixed"] == ["multi_turn"] and summary["config_flags"] == {}
+
+
+def test_explicit_interruption_verdict_is_not_inferred_for_legacy_records():
+    old = {'status': 'interrupted', 'episode': {}}
+    assert evals.trial_verdict(old) == 'unknown'
+    new = {'status': 'running', 'episode': {'trial_outcome': {
+        'task_success': False, 'source': 'evaluation_finalizer'}}}
+    assert evals.trial_verdict(new) == 'failure'
+    new['episode']['trial_outcome']['task_success'] = True
+    assert evals.trial_verdict(new) == 'success'

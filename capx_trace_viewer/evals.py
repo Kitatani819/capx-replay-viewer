@@ -307,7 +307,11 @@ def _runner_attempt(episode: dict[str, Any], records: Sequence[Any]) -> tuple[di
 
 
 def _verdict_and_source(episode: dict[str, Any], records: Sequence[Any]) -> tuple[str, str]:
-    if episode.get("status") == "running":
+    raw = episode.get("episode")
+    explicit = raw.get("trial_outcome") if isinstance(raw, dict) else None
+    terminal = (isinstance(explicit, dict) and explicit.get("source") in ("recorder_terminal", "evaluation_finalizer")
+                and type(explicit.get("task_success")) is bool)
+    if episode.get("status") == "running" and not terminal:
         return "running", "unknown"
     record, attempt, final = _runner_attempt(episode, records)
 
@@ -319,6 +323,8 @@ def _verdict_and_source(episode: dict[str, Any], records: Sequence[Any]) -> tupl
     outcome = record.get("outcome") if record is not None else None
     if final and _js_truthy(outcome):
         return verdict(outcome.get("task_success") if isinstance(outcome, dict) else None), "runner_record"
+    if terminal:
+        return verdict(explicit["task_success"]), explicit["source"]
     raw = episode.get("episode")
     summary = raw.get("harness_summary") if isinstance(raw, dict) else None
     if isinstance(summary, dict) and (episode.get("end_reason") == "completed"

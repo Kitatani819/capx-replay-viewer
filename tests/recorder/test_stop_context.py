@@ -174,3 +174,15 @@ def test_cycle_limiter_metadata_overrides_simulator_horizon(monkeypatch):
     assert context['evaluation_elapsed_s'] == 123
     start = trial_context(SimpleNamespace(low_level_env=low), include_usage=False)
     assert not {'sticky_success', 'steps_used', 'evaluation_elapsed_s'} & start.keys()
+
+
+def test_new_terminal_closures_have_an_explicit_failed_outcome(tmp_path, monkeypatch):
+    rec = Recorder(tmp_path / 'traces', monkeypatch)
+    try:
+        ep = rec.open()
+        TRIAL.end_episode(ep, end_reason='timeout_alarm')
+        outcome = rec.summary(ep)['trial_outcome']
+        assert outcome == {'task_success': False, 'source': 'recorder_terminal',
+                           'reason': 'timeout_alarm', 'resumable': True}
+    finally:
+        rec.close()

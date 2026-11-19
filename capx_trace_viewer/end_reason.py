@@ -244,7 +244,8 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
             return module.replace(".", "/") + ".py:" + constant
         # Attribute names describe observation provenance, not a public rule's location.
         return source if isinstance(source, str) and ".py" in source else fallback
-    enriched = {**episode, "episode": {**raw, "harness_summary": harness}}
+    enriched = {**episode, "episode": {**raw, "harness_summary": harness,
+                 **({"trial_outcome": end_data["trial_outcome"]} if "trial_outcome" in end_data else {})}}
     end_reason = episode.get("end_reason") or end_data.get("end_reason")
     enriched["end_reason"] = end_reason
     if end is not None or end_reason:

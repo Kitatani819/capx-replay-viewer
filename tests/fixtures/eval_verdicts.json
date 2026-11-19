@@ -1259,5 +1259,33 @@
       }
     ],
     "expected": "success"
+  },
+  {
+    "name": "explicit finalized True",
+    "episode": {
+      "status": "running",
+      "episode": {
+        "trial_outcome": {
+          "source": "evaluation_finalizer",
+          "task_success": true
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "success"
+  },
+  {
+    "name": "explicit finalized False",
+    "episode": {
+      "status": "running",
+      "episode": {
+        "trial_outcome": {
+          "source": "evaluation_finalizer",
+          "task_success": false
+        }
+      }
+    },
+    "runner_records": [],
+    "expected": "failure"
   }
 ]
