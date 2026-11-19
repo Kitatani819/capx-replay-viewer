@@ -8,6 +8,7 @@ import { FailureBreakdown } from './FailureBreakdown';
 import { TrialConditions } from './TrialConditions';
 import { SuccessTrend } from './SuccessTrend';
 import { PairedSignificance } from './PairedSignificance';
+import { EvalCodeChanges } from './EvalCodeChanges';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
@@ -142,6 +143,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
       ? `○ ${END_LABELS.success}　× 失敗　– ${CATEGORY_CELL_WORDS.unjudged}＝${UNJUDGED_LABEL}　… ${CATEGORY_CELL_WORDS.running}　空欄＝記録なし（seed が多いため記号で表示しています）`
       : WORD_LEGEND}</p>
     {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
+    <EvalCodeChanges record={record} />
     <FailureBreakdown detail={detail} />
   </>;
 }

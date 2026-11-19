@@ -4,6 +4,24 @@ import type { TaskVerdict } from '../trace/outcome';
 import type { EndClassification } from '../trace/types';
 
 export interface EvalCounts { trials: number; success: number }
+export interface CodeChangeMetadata {
+  status: 'recorded' | 'no_baseline' | 'baseline_missing' | 'baseline_ambiguous' | 'baseline_git_missing' | 'baseline_dirty' | 'current_git_missing' | 'git_unavailable' | 'write_failed';
+  baseline_commit: string | null;
+  current_commit: string | null;
+  artifact: 'code_changes.json' | null;
+  sha256: string | null;
+  size_bytes: number | null;
+  files: number;
+  excluded_files: number;
+  untracked_files: number;
+  redacted: boolean;
+}
+export interface CodeChanges {
+  metadata: CodeChangeMetadata | null;
+  artifact: { schema: 'capx-code-changes/1'; baseline_commit: string; current_commit: string; files: { path: string; diff: string }[] } | null;
+  error: string | null;
+  location: 'local' | 'gmo' | null;
+}
 export interface EvalSummary extends EvalCounts {
   by_task?: Record<string, EvalCounts>;
   failure: number;
@@ -24,6 +42,7 @@ export interface EvalRecord {
   baseline_eval_id: string | null;
   eval_set: string | null;
   git: { commit: string; dirty: boolean | null; diff_sha256?: string | null } | null;
+  code_changes?: CodeChangeMetadata;
   started_at: string;
   heartbeat_at: string;
   ended_at: string | null;
@@ -66,4 +85,5 @@ export interface EvalList { evals: EvalListEntry[]; error?: string | null }
 export const evalApi = {
   list: (signal?: AbortSignal): Promise<EvalList> => getJson('/api/evals', signal),
   detail: (id: string, signal?: AbortSignal): Promise<EvalDetail> => getJson(`/api/evals/${encodeURIComponent(id)}`, signal),
+  codeChanges: (id: string, signal?: AbortSignal): Promise<CodeChanges> => getJson(`/api/evals/${encodeURIComponent(id)}/code-changes`, signal),
 };

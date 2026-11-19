@@ -390,6 +390,17 @@ class GmoService:
     def remote_listing(self, *, refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
         return self._remote_snapshot(refresh=refresh)[0]
 
+    def read_code_changes(self, eval_id: str) -> bytes:
+        listing, settings, generation = self._remote_snapshot()
+        rows = [row for row in listing["evals"] if row["run_id"] == eval_id]
+        if len(rows) != 1 or rows[0].get("conflict"):
+            raise gmo.FetchError("Evaluation is missing or ambiguous")
+        data = gmo.read_remote_code_changes(self.runner, settings, rows[0])
+        with self._lock:
+            if generation != self._generation or settings != gmo.load_settings():
+                raise gmo.FetchError("GMO settings changed; please retry")
+        return data
+
     def _remote_snapshot(self, *, refresh: bool = False) -> tuple[dict[str, list[dict[str, Any]]],
                                                                gmo.GmoSettings, int]:
         with self._refresh_lock:
