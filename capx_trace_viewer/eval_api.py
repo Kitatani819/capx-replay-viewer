@@ -8,7 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from capx_trace_viewer import evals, reader
+from capx_trace_viewer import evals, reader, repeat_reference
 from capx_trace_viewer.trace_api import (
     client_is_local, host_is_loopback, json_response, origin_is_loopback,
 )
@@ -159,6 +159,38 @@ class EvalService:
             })
         return trials
 
+    def _repeat_references(self, entries: dict[str, dict[str, Any]], remote: dict[str, Any],
+                           current: dict[str, Any], baseline: dict[str, Any] | None) -> list[dict[str, Any]]:
+        references = []
+        seen_pairs: set[frozenset[str]] = set()
+        candidates = sorted(entries.values(), key=lambda item: (
+            (item["eval"] or {}).get("started_at", ""), item["eval_id"]), reverse=True)
+        for side, entry in (("current", current), ("baseline", baseline)):
+            if not entry or entry["error"] or entry["_conflict"]:
+                continue
+            key = repeat_reference.record_key(entry["eval"])
+            if key is None:
+                continue
+            matching = [candidate for candidate in candidates if candidate["eval_id"] != entry["eval_id"]
+                        and frozenset((candidate["eval_id"], entry["eval_id"])) not in seen_pairs
+                        and not candidate["error"] and not candidate["_conflict"]
+                        and repeat_reference.record_key(candidate["eval"]) == key]
+            if not matching:
+                continue
+            episodes, _records = self._episodes(entry["eval_id"], remote)
+            settings = repeat_reference.episode_settings(episodes)
+            if settings is None or len(episodes) != entry["eval"]["summary"]["trials"]:
+                continue
+            for candidate in matching:
+                other, _records = self._episodes(candidate["eval_id"], remote)
+                if len(other) != candidate["eval"]["summary"]["trials"] or repeat_reference.episode_settings(other) != settings:
+                    continue
+                seen_pairs.add(frozenset((candidate["eval_id"], entry["eval_id"])))
+                references.append({"side": side, "eval": candidate["eval"],
+                                   "trials": self._trials(candidate["eval_id"], remote, evaluation=candidate["eval"])})
+                break
+        return references
+
     def detail(self, eval_id: str) -> dict[str, Any] | None:
         entries, remote, error = self._snapshot()
         entry = entries.get(eval_id)
@@ -184,6 +216,7 @@ class EvalService:
                 {**baseline_record, "summary": entry["baseline_summary"]},
             ) if record and baseline_record else [],
             "remote_error": error,
+            "repeat_references": self._repeat_references(entries, remote, entry, baseline),
         }
 
 
