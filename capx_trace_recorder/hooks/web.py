@@ -39,6 +39,7 @@ from capx_trace_recorder import context as C
 from capx_trace_recorder.hooks.common import guard, is_wrapper, mark, mark_only, rebind_aliases
 from capx_trace_recorder.ids import sanitize_id, utc_stamp
 from capx_trace_recorder.store import get_store
+from capx_trace_recorder.stop_context import trial_context
 from capx_trace_recorder.timeout import is_trial_alarm
 
 
@@ -106,6 +107,7 @@ def _web_start(args: tuple, kwargs: dict, slot: Any) -> Any:
             "config_flags": flags,
             "models": models_of(launch_args, flags),
             "env": None,
+            "stop_context": trial_context(None, include_usage=False, session=session),
             "env_pending": "the web UI creates the env inside the episode; see episode.json env",
             "tracer": tracer_info(store),
             "web_session_id": session_id,
@@ -383,11 +385,44 @@ def install_runner(module: Any) -> list[str]:
     return problems
 
 
+def _web_execution_timeout(session: Any, event: Any) -> None:
+    """Observe the web runner's explicit timeout result, without reading its logs."""
+    if type(event).__name__ != "CodeExecutionResultEvent":
+        return
+    data = getattr(event, "__dict__", {})
+    if (not isinstance(data, dict) or data.get("success") is not False
+            or not isinstance(data.get("stderr"), str)
+            or not data["stderr"].startswith("Execution timed out after ")):
+        return
+    ep = C.resolve_or_note("H13", owners=(getattr(session, "env", None),))
+    if ep is None:
+        return
+    context = trial_context(None, include_usage=False, session=session)
+    ep.emit("code_execution_timeout", status="error", data={
+        "code_timeout": True, "block_index": data.get("block_index"),
+        "code_time_limit_s": context.get("code_time_limit_s"),
+        "source": "capx/web/async_trial_runner.py:asyncio.wait_for",
+    })
+
+
+def make_session_emit_wrapper(original: Any) -> Any:
+    @functools.wraps(original)
+    async def emit(self: Any, event: Any, *args: Any, **kwargs: Any) -> Any:
+        guard(_web_execution_timeout, self, event)
+        return await original(self, event, *args, **kwargs)
+
+    return mark(emit, original)
+
+
 def install_session_manager(module: Any) -> list[str]:
     cls = getattr(module, "SessionManager", None)
     if not isinstance(cls, type):
         return ["SessionManager not found"]
     problems = []
+    session_cls = getattr(module, "Session", None)
+    emit = session_cls.__dict__.get("emit") if isinstance(session_cls, type) else None
+    if emit is not None and inspect.iscoroutinefunction(emit) and not is_wrapper(emit):
+        session_cls.emit = make_session_emit_wrapper(emit)
     for name, factory in (("inject_prompt", make_inject_wrapper), ("stop_session", make_stop_wrapper)):
         current = cls.__dict__.get(name)
         if current is None or not inspect.iscoroutinefunction(current):

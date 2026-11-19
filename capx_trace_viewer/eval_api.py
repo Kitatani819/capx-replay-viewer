@@ -129,12 +129,12 @@ class EvalService:
         ), reverse=True)
         return {"evals": [self._public(entry) for entry in ordered], "error": error}
 
-    def _trials(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False
-                ) -> list[dict[str, Any]]:
+    def _trials(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False,
+                evaluation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         episodes, records = self._episodes(run_id, remote, conflict=conflict)
         trials = []
         for episode in episodes:
-            classification = reader.trial_end_classification_at(None, episode, records)
+            classification = reader.trial_end_classification_at(None, episode, records, evaluation=evaluation)
             if episode["local_state"] == "local":
                 try:
                     directory = reader.Dir.open_below(self.trace_root, [run_id, episode["episode_id"]])
@@ -142,7 +142,7 @@ class EvalService:
                     pass
                 else:
                     with directory:
-                        classification = reader.trial_end_classification_at(directory, episode, records)
+                        classification = reader.trial_end_classification_at(directory, episode, records, evaluation=evaluation)
             trials.append({
                 "episode_id": episode["episode_id"],
                 "task": episode.get("task") if isinstance(episode.get("task"), str) else None,
@@ -151,7 +151,7 @@ class EvalService:
                 "attempt": episode.get("attempt_index") if type(episode.get("attempt_index")) is int else None,
                 "runner_invocation": episode.get("runner_invocation") if type(episode.get("runner_invocation")) is int else None,
                 "start_wall_time": episode.get("start_wall_time") if type(episode.get("start_wall_time")) in (int, float) else None,
-                "verdict": evals.trial_verdict(episode, records),
+                "verdict": classification["verdict"],
                 "end_classification": classification,
                 "status": episode["status"],
                 "trace_complete": episode.get("trace_complete") if type(episode.get("trace_complete")) is bool else None,
@@ -177,8 +177,8 @@ class EvalService:
         entry["baseline_summary"] = self._summary(baseline, remote) if baseline else None
         return {
             **self._public(entry), "baseline": baseline_record, "baseline_error": baseline_error,
-            "trials": self._trials(eval_id, remote, conflict=entry["_conflict"]),
-            "baseline_trials": self._trials(baseline_id, remote, conflict=baseline["_conflict"]) if baseline else [],
+            "trials": self._trials(eval_id, remote, conflict=entry["_conflict"], evaluation=record),
+            "baseline_trials": self._trials(baseline_id, remote, conflict=baseline["_conflict"], evaluation=baseline_record) if baseline else [],
             "differences": evals.condition_differences(
                 {**record, "summary": entry["summary"]},
                 {**baseline_record, "summary": entry["baseline_summary"]},

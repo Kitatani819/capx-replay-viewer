@@ -740,11 +740,39 @@ export interface RunListResponse {
 }
 
 export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'unknown';
+export type EndCauseCode = 'success' | 'step_limit' | 'env_horizon' | 'trial_time_limit' | 'code_time_limit' | 'turn_limit' |
+  'regeneration_limit' | 'finish_unmet' | 'parser_finish' | 'execution_error' | 'simulator_crash' | 'slurm_time_limit' |
+  'manual_stop' | 'replaced' | 'recording_incomplete' | 'unknown';
+export interface EndCause {
+  code: EndCauseCode;
+  label: string;
+  /** Team-facing cause line, including recorded counts. Absent on older servers. */
+  headline?: string;
+  explanation: string;
+  limit?: unknown;
+  used?: unknown;
+  source?: string | null;
+  evidence?: Record<string, unknown>;
+  missing_evidence?: string[];
+}
+export interface RuleDifference {
+  field: string;
+  recorded: unknown;
+  official: unknown;
+  source: string;
+  /** Plain Japanese sentence established by records and public rules. */
+  explanation?: string;
+}
 /** Inferred on the server from the recorded verdict and stopping evidence. */
 export interface EndClassification {
+  /** Canonical matched task verdict, including scheduler corrections to stale liveness. */
+  verdict?: 'success' | 'failure' | 'unknown' | 'running';
   reason: EndReason;
   label: string;
   evidence: { event_id?: string | null; [key: string]: unknown };
+  /** Absent from older viewer servers. The browser does not infer causes. */
+  cause?: EndCause | null;
+  rule_differences?: RuleDifference[];
 }
 
 /** Summary of one episode (episode.json plus the derived status, 9.2). */

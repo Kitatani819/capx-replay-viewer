@@ -929,8 +929,18 @@ def create_trace_router(
                 summary = reader.unscoped_summary_at(run_id, target.run, episode_id)
             else:
                 summary = reader.episode_summary_at(run_id, episode_id, target.episode)
+                from capx_trace_viewer import evals
+                evaluation, error, _ = evals._read_eval_at(target.run)
+                if error is None:
+                    try:
+                        evals.validate_eval_record(evaluation, eval_id=run_id)
+                    except evals.EvalValidationError:
+                        evaluation = None
+                else:
+                    evaluation = None
                 summary["end_classification"] = reader.trial_end_classification_at(
                     target.episode, summary, reader.runner_records_at(target.run)["records"],
+                    evaluation=evaluation,
                 )
         return json_response(summary)
 

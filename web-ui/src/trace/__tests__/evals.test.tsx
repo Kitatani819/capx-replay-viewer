@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EvalComparison, EvalListTable } from '../../evals/EvalPages';
 import { comparisonTable, delta, summaryDiffers } from '../../evals/model';
+import { CELL_LEGEND } from '../../evals/failureReasons';
 import type { EvalDetail, EvalRecord, EvalSummary, EvalTrial } from '../../evals/api';
 
-const wordLegend = '成功　エラー＝エラーで停止　時間切れ＝時間切れ・打ち切り　未達成＝「終わった」と答えたが未達成　上限＝書き直しの上限　不明＝失敗したが終わり方が分からない　未判定＝成否が記録から分からない　実行中　空欄＝記録なし';
+const wordLegend = `${Object.entries(CELL_LEGEND).map(([word, explanation]) => word === explanation ? word : `${word}＝${explanation}`).join('　')}　空欄＝記録なし`;
 
 const summary: EvalSummary = { trials: 2, success: 1, failure: 1, unknown: 0, incomplete: 0, tasks: ['cube'], seeds: [401, 402], models: {}, config_flags: {}, mixed: [] };
 function record(id: string, baseline: string | null = null): EvalRecord {
@@ -105,7 +106,7 @@ test('more seeds than fit as words fall back to symbols with their legend', () =
   assert.match(html, /<span aria-hidden="true">○<\/span>/);
   assert.match(html, /<span aria-hidden="true">×<\/span>/);
   assert.match(html, /seed が多いため記号で表示しています/);
-  for (const words of ['○ 成功', '× 失敗', '– 未判定', '… 実行中', 'エラー＝エラーで停止', '時間切れ＝時間切れ・打ち切り', '未達成＝「終わった」と答えたが未達成', '上限＝書き直しの上限', '不明＝失敗したが終わり方が分からない', '未判定＝成否が記録から分からない', '空欄＝記録なし']) assert.ok(html.includes(words), words);
+  for (const words of ['○ 成功', '× 失敗', '– 未判定', '… 実行中', '未判定＝成否が記録から分からない', '空欄＝記録なし']) assert.ok(html.includes(words), words);
 });
 test('every ending uses the canonical cell word and long accessible label', () => {
   const d = detail(); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;

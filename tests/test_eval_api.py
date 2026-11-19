@@ -70,8 +70,14 @@ def test_local_listing_and_comparison(tmp_path):
     assert detail["trials"][0] == {"episode_id": "trial", "task": "cube", "condition": "M1", "seed": 401,
                                     "attempt": 1, "verdict": "failure", "status": "ended",
                                     "runner_invocation": None, "start_wall_time": None,
-                                    "end_classification": {"reason": "unknown", "label": "終わり方が不明",
-                                                           "evidence": {"source": "missing_terminal_evidence", "event_id": None}},
+                                    "end_classification": {"reason": "unknown", "label": "終わり方が不明", "verdict": "failure",
+                                                           "evidence": {"source": "missing_terminal_evidence", "event_id": None},
+                                                           "cause": {"code": "unknown", "label": "終了原因を特定できない",
+                                                                     "headline": "終了原因を特定できない",
+                                                                     "explanation": "終了と失敗は記録されていますが、終了させた規則を特定できません。",
+                                                                     "limit": None, "used": None, "source": None, "evidence": {},
+                                                                     "missing_evidence": ["最終のモデル判断 / 適用されたターン・書き直し上限 / 終了した規則名"]},
+                                                           "rule_differences": []},
                                     "trace_complete": True, "local_state": "local"}
     assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401, 403]}]
 

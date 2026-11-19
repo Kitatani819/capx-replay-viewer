@@ -1202,7 +1202,8 @@ _end_classifications_lock = threading.Lock()
 
 
 def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
-                                runner_records: Sequence[Any] = ()) -> dict[str, Any]:
+                                runner_records: Sequence[Any] = (), *,
+                                evaluation: dict[str, Any] | None = None) -> dict[str, Any]:
     """Classify an episode, caching the small result by the reader's file identity.
 
     Reads complete event pages via an already-open, no-symlink descriptor. An append,
@@ -1213,10 +1214,12 @@ def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
     from capx_trace_viewer.end_reason import classify_trial_end
 
     if directory is None:
-        return classify_trial_end(summary, runner_records=runner_records)
+        return classify_trial_end(summary, runner_records=runner_records, evaluation=evaluation)
     record, attempt, final = evals._runner_attempt(summary, runner_records)
+    evaluation_key = ({key: evaluation.get(key) for key in ("end", "ended_at", "job")}
+                      if isinstance(evaluation, dict) else None)
     runner_key = hashlib.sha256(json.dumps(
-        [attempt, record.get("outcome") if record and final else None], sort_keys=True,
+        [attempt, record.get("outcome") if record and final else None, evaluation_key], sort_keys=True,
     ).encode()).digest()
     # The caller read the summary before this stat. If episode.json changed in
     # between, the old summary must not poison the cache for the newer file state.
@@ -1228,7 +1231,7 @@ def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
         fd, events_st = directory.open_file(EVENTS_FILE)
     except OSError:
         # I/O failures are never cached; a transient error may pass on the next read.
-        return classify_trial_end(summary, runner_records=runner_records)
+        return classify_trial_end(summary, runner_records=runner_records, evaluation=evaluation)
     try:
         key = (_stat_key(events_st), _stat_key(metadata_st) if metadata_st else None,
                summary_key, runner_key)
@@ -1248,9 +1251,9 @@ def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
                 offset = page.next_offset
 
         try:
-            classification = classify_trial_end(summary, events(), runner_records)
+            classification = classify_trial_end(summary, events(), runner_records, evaluation=evaluation)
         except OSError:
-            return classify_trial_end(summary, runner_records=runner_records)
+            return classify_trial_end(summary, runner_records=runner_records, evaluation=evaluation)
         if _stat_key(os.fstat(fd)) == _stat_key(events_st):
             with _end_classifications_lock:
                 _end_classifications[key] = classification

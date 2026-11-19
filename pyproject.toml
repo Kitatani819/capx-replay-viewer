@@ -29,3 +29,6 @@ include = ["capx_trace_viewer*", "capx_trace_recorder*"]
 
 [tool.pytest.ini_options]
 markers = ["requires_capx: requires an importable CaP-X checkout"]
+
+[tool.setuptools.package-data]
+capx_trace_viewer = ["official_rules.json"]

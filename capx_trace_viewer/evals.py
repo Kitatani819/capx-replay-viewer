@@ -88,7 +88,10 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
     _require(len(encoded) <= MAX_EVAL_BYTES, "file size (maximum 256 KiB)")
     fields = {"schema", "eval_id", "status", "end", "by", "changed", "baseline_eval_id",
               "eval_set", "git", "started_at", "heartbeat_at", "ended_at", "summary"}
-    _require(isinstance(value, dict) and set(value) == fields, "record fields")
+    _require(isinstance(value, dict) and fields.issubset(value)
+             and set(value).issubset(fields | {"job"}), "record fields")
+    if "job" in value:
+        validate_job_context(value["job"])
     _require(value["schema"] == SCHEMA, "schema")
     _require(reader.is_valid_id(value["eval_id"]), "eval_id")
     _require(eval_id is None or value["eval_id"] == eval_id, "eval_id (run mismatch)")
@@ -128,6 +131,27 @@ def validate_eval_record(value: Any, *, eval_id: str | None = None) -> dict[str,
     if summary is not None:
         _validate_summary(summary)
     return value
+
+
+def validate_job_context(job: Any) -> None:
+    """Allowlisted scheduler facts, including explicit post-run accounting imports."""
+    _require(isinstance(job, dict) and set(job).issubset(
+        {"scheduler", "job_id", "time_limit_s", "state", "ended_at", "reason"}), "job")
+    if "scheduler" in job:
+        _require(job["scheduler"] == "slurm", "job.scheduler")
+    if "job_id" in job:
+        _require(isinstance(job["job_id"], str)
+                 and re.fullmatch(r"[0-9][0-9_+.\-]{0,79}", job["job_id"]) is not None, "job.job_id")
+    if "time_limit_s" in job:
+        _count(job["time_limit_s"], "job.time_limit_s")
+    if "state" in job:
+        _require(isinstance(job["state"], str) and job["state"] in {"TIMEOUT", "CANCELLED", "COMPLETED", "FAILED", "OUT_OF_MEMORY",
+                                  "PREEMPTED", "NODE_FAIL"}, "job.state")
+    if "ended_at" in job:
+        _require(_time(job["ended_at"]) is not None, "job.ended_at")
+    if "reason" in job:
+        _require(isinstance(job["reason"], str) and job["reason"] in {"time_limit", "user_cancelled", "replaced", "preempted",
+                                   "infrastructure_error"}, "job.reason")
 
 
 def _validate_summary(summary: Any) -> None:

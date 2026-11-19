@@ -58,7 +58,7 @@ test('summary uses canonical long ending labels even when the API label is stale
       end_classification: { reason: reason as EndReason, label: '古い表示語', evidence: {} } };
     const html = renderToStaticMarkup(<TrialSummaryCard ep={ep} model={buildEpisodeModel([])} summary={summary}
       verdict={reason === 'success' ? 'success' : 'failure'} />);
-    assert.ok(html.includes(`<dt>終わり方</dt><dd>${label}</dd>`), reason);
+    assert.ok(html.includes(`<dt>終わり方</dt><dd><strong>${label}</strong></dd>`), reason);
     assert.doesNotMatch(html, /古い表示語/);
   }
 });

@@ -55,6 +55,7 @@ from capx_trace_recorder.payload import sanitize_url
 from capx_trace_recorder.segments import split_prompt_text
 from capx_trace_recorder.serialize import float_value, json_safe, text_value
 from capx_trace_recorder.store import EpisodeRecorder, get_store, process_info
+from capx_trace_recorder.stop_context import trial_context
 from capx_trace_recorder.timeout import is_trial_alarm
 
 # ---------------------------------------------------------------------------
@@ -438,6 +439,9 @@ def _episode_start(sig: inspect.Signature, args: tuple, kwargs: dict, slot: Any)
             "config_flags": flags,
             "models": models_of(launch_args, flags),
             "env": env_info(env),
+            # The original resets the env after this hook; an old counter here
+            # belongs to the previous trial and must not be presented as usage.
+            "stop_context": trial_context(env, include_usage=False),
             "frames": frames,
             "tracer": tracer_info(store),
             "output_dir": str(output_dir) if output_dir else None,
@@ -766,6 +770,9 @@ def end_episode(ep: Any, *, end_reason: str, summary: Any = None, exc: BaseExcep
         "n_http_attempts": ep.n_http_attempts,
         "tracer_overhead_s": round(ep.overhead_trial, 6),
         "tracer_overhead_all_threads_s": round(ep.overhead_all, 6),
+        "stop_context": trial_context(getattr(ep, "env", None), turns_used=ep.n_code_blocks,
+                                      model_turn_index=ep.turn_index,
+                                      session=getattr(ep, "web_session", None)),
     }
     if extra:
         data.update(extra)
