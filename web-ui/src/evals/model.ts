@@ -14,6 +14,14 @@ function later(trial: EvalTrial, previous: EvalTrial): boolean {
   if (typeof trial.runner_invocation === 'number' && typeof previous.runner_invocation === 'number' && trial.runner_invocation !== previous.runner_invocation) return trial.runner_invocation > previous.runner_invocation;
   return (trial.attempt ?? 0) >= (previous.attempt ?? 0);
 }
+/** Pair a known task/seed, preferring its condition and refusing ambiguous alternatives. */
+export function baselineTrialFor(trial: Pick<EvalTrial, 'task' | 'seed' | 'condition'>, baselineTrials: EvalTrial[]): EvalTrial | null {
+  if (!trial.task || typeof trial.seed !== 'number' || !Number.isInteger(trial.seed)) return null;
+  const candidates = baselineTrials.filter(candidate => candidate.task === trial.task && candidate.seed === trial.seed);
+  const exact = trial.condition !== null ? candidates.filter(candidate => candidate.condition === trial.condition) : [];
+  const matching = exact.length ? exact : new Set(candidates.map(candidate => candidate.condition)).size === 1 ? candidates : [];
+  return matching.reduce<EvalTrial | null>((latest, candidate) => !latest || later(candidate, latest) ? candidate : latest, null);
+}
 export function comparisonTable(current: EvalTrial[], baseline: EvalTrial[]) {
   const all = [...baseline, ...current];
   const showConditions = new Set(all.map(t => t.condition)).size > 1;
@@ -35,7 +43,10 @@ export function comparisonTable(current: EvalTrial[], baseline: EvalTrial[]) {
   }
   const sorted = [...rows.values()].sort((a, b) => (a.task ?? '').localeCompare(b.task ?? '') || (a.condition ?? '').localeCompare(b.condition ?? ''));
   const regressions = sorted.reduce((n, row) => n + seeds.filter(seed => isRegression(row, seed)).length, 0);
-  return { rows: sorted, seeds, showConditions, regressions };
+  const currentTrials = sorted.flatMap(row => [...row.current.values()].map(cell => cell.trial));
+  const baselineTrials = sorted.flatMap(row => [...row.baseline.values()].map(cell => cell.trial));
+  const omittedRetries = current.length + baseline.length - currentTrials.length - baselineTrials.length;
+  return { rows: sorted, seeds, showConditions, regressions, currentTrials, baselineTrials, omittedRetries };
 }
 export function isRegression(row: ComparisonRow, seed: number | null): boolean {
   return row.baseline.get(seed)?.trial.verdict === 'success' && row.current.get(seed)?.trial.verdict === 'failure';

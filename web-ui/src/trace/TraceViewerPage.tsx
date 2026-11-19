@@ -37,6 +37,8 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { evalApi } from '../evals/api';
+import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
 import './replay.css';
 import { ApiError, traceApi } from './api';
 import { applyDataAssets, dataAssetTargets, withTargetsLoading } from './dataAsset';
@@ -62,6 +64,9 @@ import { Picker, type PickerMode } from './components/Picker';
 import { SimplePicker, SimpleViewer } from './components/SimpleViewer';
 import { Splitter } from './components/Splitter';
 import { Timeline, type TimelineSelectionOptions } from './components/Timeline';
+import { TrialSummary } from './components/TrialSummary';
+import { baselineForEpisode, summaryAssetTargets } from './trialSummary';
+import { comparisonUrl } from './sideBySide';
 import { TopBar, UnusedHookNotice, type PollStatus } from './components/TopBar';
 import { Badge, ErrorText, SmallButton, Spinner } from './components/common';
 
@@ -105,6 +110,8 @@ export default function TraceViewerPage() {
   // liveness and polling below still use the latest summary read.
   const digest = summaryDigest(summary.data);
   const contentSummary = useMemo(() => summary.data, [epKey, digest]);
+  const evaluation = useAsync(runId ? s => evalApi.detail(runId, s) : null, [runId]);
+  useInterval(evaluation.poll, 30_000, evaluation.data?.eval?.status === 'running');
   const status = summary.data?.status ?? null;
   const running = status === 'running';
   const videoPending = summary.data?.episode?.video_copy_pending === true;
@@ -203,7 +210,7 @@ export default function TraceViewerPage() {
   const merged = useMemo(() => applyDataAssets(events.events, assets.states), [events.events, assets.states]);
   const model = useMemo(() => buildEpisodeModel(merged), [merged]);
   const selection = useMemo(() => resolveSelection(model, eventParam), [model, eventParam]);
-  const assetTargets = useMemo(() => dataAssetTargets(model, selection), [model, selection]);
+  const assetTargets = useMemo(() => [...new Set([...dataAssetTargets(model, selection), ...summaryAssetTargets(model)])], [model, selection]);
   const ensureAssets = assets.ensure;
   useEffect(() => ensureAssets(assetTargets), [assetTargets, ensureAssets]);
   // What the panes are told: the targets requested by the effect above count as loading from
@@ -393,7 +400,20 @@ export default function TraceViewerPage() {
     const details = layout.querySelector<HTMLElement>('.replay-details');
     let documentTop = 0;
     let detailsHeight = 0;
+    let fitTop = -1;
+    const updateFit = () => {
+      // A layout that starts near the top fits the first screen under the header. One pushed
+      // down by the trial summary (which loads after this effect first runs) is sized to a
+      // whole screen instead, so the page scrolls to it rather than squeezing it.
+      const top = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
+      const next = top <= window.innerHeight * 0.3 ? top : 16;
+      if (next !== fitTop) {
+        fitTop = next;
+        layout.style.setProperty('--replay-layout-top', `${fitTop}px`);
+      }
+    };
     const updateVisibleHeight = () => {
+      updateFit();
       const room = Math.min(window.innerHeight + window.scrollY - documentTop, detailsHeight);
       layout.style.setProperty('--replay-visible-column', `${Math.floor(room)}px`);
     };
@@ -402,7 +422,6 @@ export default function TraceViewerPage() {
       // additional space revealed by scrolling alongside the details column.
       documentTop = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
       detailsHeight = details?.offsetHeight ?? 0;
-      layout.style.setProperty('--replay-layout-top', `${documentTop}px`);
       updateVisibleHeight();
     };
     measure();
@@ -468,6 +487,21 @@ export default function TraceViewerPage() {
   const showLegacy = !ep && legacyRun && legacyTrial;
   const simple = !detailed && !showLegacy;
   const pageScroll = !simple && (ep || showLegacy);
+  const trial = evaluation.data?.trials.find(item => item.episode_id === episodeId);
+  const start = model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null;
+  const trialTask = summary.data?.task ?? start?.task ?? trial?.task;
+  const trialSeed = summary.data?.seed ?? start?.seed ?? trial?.seed;
+  const baseline = baselineForEpisode(evaluation.data, {
+    episode_id: episodeId ?? '', status: status ?? 'unknown',
+    task: trialTask, seed: trialSeed, condition: summary.data?.condition ?? start?.condition ?? trial?.condition,
+  });
+  const compareHref = runId && episodeId && baseline && evaluation.data?.baseline
+    ? comparisonUrl(runId, episodeId, evaluation.data.baseline.eval_id, baseline.episode_id) : undefined;
+  const breadcrumbs = showLegacy ? [
+    { label: '試行を選ぶ', href: '/traces' },
+    { label: legacyRun, href: `/traces?${new URLSearchParams({ legacy_run: legacyRun })}` },
+    { label: `${legacyTrial.task} · ${legacyTrial.trialDir}` },
+  ] : trialBreadcrumbs({ runId, episodeId, evaluation: evaluation.data?.eval, task: trialTask, seed: trialSeed });
   const simpleMatch = runnerRecordFor(runnerRecords ?? [], episodeKeyOf(model.episodeStart ? dataOf(model.episodeStart, 'episode_start') : null, summary.data, startWall));
   const simpleOutcome = headerVerdict(running, simpleMatch, summary.data,
     model.episodeStart ? dataOf(model.episodeStart, 'episode_start').source : null,
@@ -489,6 +523,7 @@ export default function TraceViewerPage() {
   // turn into an arrow, "!=" into "≠").
   return (
     <div className={`${!simple ? 'replay-workspace ' : ''}${pageScroll ? 'replay-page min-h-full' : 'h-full'} flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]`}>
+      <div className="trial-navigation"><Breadcrumb items={breadcrumbs} /></div>
       {simple && <header className="flex-shrink-0 flex flex-wrap items-center gap-3 px-5 py-3 border-b border-surface-border bg-surface-raised">
         <span className="font-semibold">{simple ? '実験を見る' : '実験の詳細'}</span>
         {simple && ep && <><span className="text-sm text-text-secondary">{summary.data?.task ?? ''} · {summary.data?.condition ?? ''}</span><span className="text-sm text-accent">試行全体の最終結果：{simpleOutcome}</span></>}
@@ -499,10 +534,10 @@ export default function TraceViewerPage() {
           <UnusedHookNotice count={simpleHookWarnings.count}/>
         </details>}
         {videoPending && <span className="text-sm text-amber-200">{videoCopyMessage(summary.data)}</span>}
-        <div className="ml-auto flex gap-2">
-          <a href="/evals" className="self-center text-sm text-text-tertiary hover:underline">評価一覧</a>
-          <SmallButton onClick={() => setPickerOpen(true)}>試行を選ぶ</SmallButton>
+        <div className="ml-auto flex flex-wrap justify-end gap-2">
           <SmallButton onClick={() => setParams({view: detailed ? 'simple' : 'details'})}>{detailed ? '実行回ごとの表示' : 'リプレイを見る'}</SmallButton>
+          {compareHref && <a href={compareHref} className="replay-compare-button">基準と並べて比べる</a>}
+          <button type="button" className="replay-trial-button" onClick={() => setPickerOpen(true)}>別の試行を選ぶ</button>
         </div>
       </header>}
       {!simple && <ErrorBoundary
@@ -515,6 +550,7 @@ export default function TraceViewerPage() {
           runLabel={showLegacy ? legacyRun : runId}
           episodeLabel={showLegacy ? `${legacyTrial.task}/${legacyTrial.condition}/${legacyTrial.trialDir}` : episodeId}
           episodeId={ep ? episodeId : null}
+          compareHref={compareHref}
           summary={summary.data}
           model={ep ? model : null}
           runnerRecords={runnerRecords ?? []}
@@ -531,6 +567,7 @@ export default function TraceViewerPage() {
             events.refresh();
             summary.reload();
             runDetail.reload();
+            evaluation.reload();
           }}
           legacy={showLegacy ? <Badge tone="amber">{LABELS.legacySection}</Badge> : undefined}
           assetStates={shownAssetStates}
@@ -544,6 +581,12 @@ export default function TraceViewerPage() {
           </div>
         </div>
       )}
+      {ep && contentSummary && status !== 'unscoped' && !missing && <ErrorBoundary label="試行の要約" resetKey={epKey}>
+        <TrialSummary ep={ep} model={model} summary={contentSummary} evaluation={evaluation.data} runnerRecords={runnerRecords ?? []} onJump={eventId => {
+          setPlaybackSelection(null); setReplaySeek(null); setLive(false); setFocus(null); setTab(0);
+          setParams({ event: eventId, view: 'details' }); setScrollToken(token => token + 1);
+        }} />
+      </ErrorBoundary>}
       {showLegacy ? (
         <LegacyTrialView key={JSON.stringify([legacyRun, legacyTrial.root, legacyTrial.task, legacyTrial.condition, legacyTrial.trialDir])} runId={legacyRun} trial={legacyTrial} />
       ) : !ep ? (

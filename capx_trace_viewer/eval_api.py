@@ -134,6 +134,15 @@ class EvalService:
         episodes, records = self._episodes(run_id, remote, conflict=conflict)
         trials = []
         for episode in episodes:
+            classification = reader.trial_end_classification_at(None, episode, records)
+            if episode["local_state"] == "local":
+                try:
+                    directory = reader.Dir.open_below(self.trace_root, [run_id, episode["episode_id"]])
+                except OSError:
+                    pass
+                else:
+                    with directory:
+                        classification = reader.trial_end_classification_at(directory, episode, records)
             trials.append({
                 "episode_id": episode["episode_id"],
                 "task": episode.get("task") if isinstance(episode.get("task"), str) else None,
@@ -143,6 +152,7 @@ class EvalService:
                 "runner_invocation": episode.get("runner_invocation") if type(episode.get("runner_invocation")) is int else None,
                 "start_wall_time": episode.get("start_wall_time") if type(episode.get("start_wall_time")) in (int, float) else None,
                 "verdict": evals.trial_verdict(episode, records),
+                "end_classification": classification,
                 "status": episode["status"],
                 "trace_complete": episode.get("trace_complete") if type(episode.get("trace_complete")) is bool else None,
                 "local_state": episode["local_state"],
