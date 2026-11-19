@@ -108,7 +108,7 @@ def machine_id() -> str:
         import subprocess
         try:
             boot = subprocess.check_output(["sysctl", "-n", "kern.boottime"], timeout=2, stderr=subprocess.DEVNULL)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError) as exc:  # timeout-ok: evaluation supervisor only, never a trial thread
             if is_trial_alarm(exc):
                 raise
             return ""
