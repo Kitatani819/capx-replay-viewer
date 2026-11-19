@@ -15,7 +15,7 @@ from capx_trace_viewer import gmo
 
 
 @pytest.mark.parametrize("shared_root", [
-    None, 1, [], "relative/traces", "~/traces", "/path/../traces", "/..", "/path/*",
+    None, 1, [], "relative/traces", "~user/traces", "/path/../traces", "/..", "/path/*",
     "/path/?", "/path/[users]", "/path/{users}", "/with space", "/path\ntraces",
     "/path\x00traces", "/path\ttraces", "/path;command",
 ])
@@ -24,7 +24,7 @@ def test_shared_root_validation(shared_root):
         gmo.GmoSettings.from_dict({"host": "alias", "shared_root": shared_root})
 
 
-@pytest.mark.parametrize("shared_root", ["", "/", "/path/to/shared/traces", "/path/traces/", "/path/v..2"])
+@pytest.mark.parametrize("shared_root", ["", "/", "~/traces", "/path/to/shared/traces", "/path/traces/", "/path/v..2"])
 def test_shared_root_round_trip_and_configuration(shared_root):
     settings = gmo.GmoSettings.from_dict({"host": "alias", "shared_root": shared_root})
     assert settings.shared_root == shared_root
@@ -38,12 +38,12 @@ def test_old_settings_file_without_shared_root_still_loads(tmp_path):
                 "mine": ["/path/to/mine"], "team": ["/path/to/team/*"], "interval_s": 300}
     path.write_text(json.dumps(original))
     settings = gmo.load_settings(path)
-    assert settings.shared_root == "" and settings.configured
+    assert settings.shared_root == "~/shared-storage/traces" and settings.configured
     assert settings == gmo.GmoSettings("alias", 2222, "~/.ssh/KEY",
                                        ("/path/to/mine",), ("/path/to/team/*",), 300)
     gmo.save_settings(settings, path)
     assert gmo.load_settings(path) == settings
-    assert json.loads(path.read_text()) == {**original, "shared_root": ""}
+    assert json.loads(path.read_text()) == {**original, "shared_root": "~/shared-storage/traces"}
 
 
 @pytest.mark.parametrize("host", ["a:b", "user@a:b", "::1"])

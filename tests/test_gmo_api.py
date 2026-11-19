@@ -89,15 +89,15 @@ def client(remote):
 
 def _configure(client: TestClient, remote: dict, **overrides):
     payload = {"host": "fakehost", "mine": [str(remote["mine"])],
-               "team": [str(remote["team"])], "interval_s": 120}
+               "team": [str(remote["team"])], "interval_s": 120, "shared_root": ""}
     payload.update(overrides)
     return client.put("/api/gmo/config", json=payload, headers=WRITE)
 
 
 def test_config_validation_permissions_and_defaults(client, remote):
     initial = client.get("/api/gmo/config").json()
-    assert initial["enabled"] is True and initial["configured"] is False
-    assert initial["settings"]["interval_s"] == 120
+    assert initial["enabled"] is True and initial["configured"] is True
+    assert initial["settings"] == gmo.GmoSettings().as_dict()
     assert initial["dest"] == str(remote["dest"])
     assert initial["config_path"] == str(remote["config"])
     for host in ("-oProxyCommand=evil", "some host", "host;cmd", "host\nother", "a:b", "user@host:22"):
@@ -198,17 +198,23 @@ def test_shared_root_config_listing_adds_patterns_and_uses_directory_owner(clien
     assert not any(row["conflict"] for row in rows.values())
 
 
-@pytest.mark.parametrize("shared_root", [None, "relative", "/path/../traces", "/path/*", "/path\ntraces"])
+@pytest.mark.parametrize("shared_root", [
+    None, "relative", "/path/../traces", "/path/*", "/path\ntraces",
+    "~", "~other/traces", "~/../traces", "~/path/*", "~/with space", "~/path\x00traces",
+])
 def test_shared_root_api_rejects_invalid_input(client, remote, shared_root):
     response = _configure(client, remote, shared_root=shared_root)
     assert response.status_code == 400 and "shared_root" in response.json()["detail"]
 
 
-def test_check_without_configuration_reports_error(client):
+def test_check_connection_failure_reports_actionable_error(client, monkeypatch):
+    def failed(command, *, timeout):
+        return subprocess.CompletedProcess(command, 255, "", "unresolvable alias")
+    monkeypatch.setattr(client.app.state.gmo_service.runner, "run", failed)
     response = client.post("/api/gmo/check", json={}, headers=WRITE)
     assert response.status_code == 200
     assert response.json()["ok"] is False
-    assert response.json()["error"]
+    assert "Host gmo" in response.json()["error"] and "接続設定" in response.json()["error"]
 
 
 def test_local_state_and_symlinks(client, remote):
@@ -372,7 +378,8 @@ def test_shutdown_closes_process_runner(remote):
     assert app.state.gmo_service.runner._closed
 
 
-def test_prefetch_only_mine_and_missing_config(remote, capsys):
+def test_prefetch_only_mine_and_explicitly_disabled_config(remote, capsys):
+    gmo.save_settings(gmo.GmoSettings(shared_root=""))
     assert gmo.prefetch_mine(remote["dest"]) == 0
     assert "missing" in capsys.readouterr().err
     assert not remote["dest"].exists()

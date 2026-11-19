@@ -1179,19 +1179,30 @@ GMO settings. `PUT /api/gmo/config` takes the settings object directly as its JS
 body. Both config endpoints return that object in `settings`, including `shared_root`;
 `configured` means a nonempty host and at least one of `shared_root`, `mine` or `team`.
 The same fields are stored in `gmo.json` (see [GMO setup](gmo.md#gmoの記録を手元へ取ってくる)).
+Without a settings file, built-in defaults apply: the tutorial's `Host gmo` SSH alias
+is enough to discover recordings under `~/shared-storage/traces`. In this case only,
+`CAPX_GMO_HOST` overrides `host` and `CAPX_GMO_TRACES` supplies colon-separated `mine`
+patterns; the default shared directory stays enabled. When a file exists, its values
+take precedence over those environment variables, and missing fields take their
+built-in defaults. Saving through the API writes the file with mode 600 in a mode
+700 directory.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `host` | `""` | Plain SSH alias or `user@host` |
+| `host` | `"gmo"` | Plain SSH alias or `user@host` |
 | `port` | `null` | Optional integer from 1 to 65535 |
 | `identity_file` | `null` | Optional nonempty SSH key path |
-| `shared_root` | `""` | One absolute shared recording directory, such as `/path/to/shared/traces`; empty disables this source |
+| `shared_root` | `"~/shared-storage/traces"` | One absolute or `~/`-prefixed shared recording directory; explicit empty string disables this source |
 | `mine` | `[]` | Additional trace-root glob patterns for the current user's recordings |
 | `team` | `[]` | Additional trace-root glob patterns for team recordings |
 | `interval_s` | `120` | Automatic import interval in seconds, integer from 0 to 86400; 0 disables it |
 
-A nonempty `shared_root` must be a plain absolute path using ASCII letters, digits
-and `._/+@-`: no `..` path segments, control characters, whitespace or glob characters. It selects
+A nonempty `shared_root` must be a plain absolute path or start with `~/`, using ASCII
+letters, digits and `._/+@-` after that prefix: no `..` path segments, control characters,
+whitespace or glob characters. No other tilde form is allowed, including bare `~` or
+`~user/`. The remote listing resolves `~/` against the GMO account's home in the same
+SSH session, then uses the resolved absolute path for fetching, owner detection and
+display. It selects
 `<shared_root>/<username>` for mine and the other immediate directories matching
 `<shared_root>/*` for team. For `user@host`, `username` is `user`; an SSH alias without
 an explicit user resolves the remote account name inside the existing listing SSH
@@ -1205,15 +1216,16 @@ automatic imports and startup prefetch.
 The generated sources and explicit `mine`/`team` patterns are additive. A physical run
 found through multiple patterns appears once; mine takes precedence when both scopes
 match. Different remote locations with the same run id remain a conflict. Omitting
-`shared_root` is equivalent to `""`, so older settings files retain their behavior.
-For example, a complete `PUT /api/gmo/config` body can be:
+`shared_root` uses `~/shared-storage/traces`; set `"shared_root": ""` explicitly to use
+only the individual patterns. For example, a complete `PUT /api/gmo/config` body with
+the built-in defaults is:
 
 ```json
 {
-  "host": "gmo-alias",
+  "host": "gmo",
   "port": null,
   "identity_file": null,
-  "shared_root": "/path/to/shared/traces",
+  "shared_root": "~/shared-storage/traces",
   "mine": [],
   "team": [],
   "interval_s": 120
@@ -1230,6 +1242,12 @@ For example, a complete `PUT /api/gmo/config` body can be:
 | `GET /api/gmo/jobs` | Last 50 `{job_id, run_id, episode_id, state, bytes, error, started_at, finished_at}` records |
 | `GET /api/gmo/auto` | `{enabled, paused, interval_s, running, last_run_at, next_run_at, last_error, queued_in_last_run, skipped_large}` |
 | `PUT /api/gmo/auto` | Set the in-memory pause flag with `{paused: bool}`; same response as GET |
+
+The server CLI's `--gmo` also imports the current user's recordings once before
+startup; `Start-Replay.sh --from-gmo` enables the same path. Both startup import and
+automatic imports work without a settings file. An SSH failure prints a short message
+to check the tutorial's `Host gmo` entry or the connection settings; startup continues
+and local recordings remain available.
 
 With `--gmo`, automatic imports list mine episodes (the current user's shared-root
 directory plus `mine` patterns) in one SSH call per cycle and also check team run names

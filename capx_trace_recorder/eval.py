@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import copy
 import datetime as dt
+import getpass
 import hashlib
 import json
 import os
@@ -138,6 +139,18 @@ def _warn_group_access(path: Path) -> None:
               file=sys.stderr)
 
 
+def _create_shared_root(path: Path) -> None:
+    """Make a new team root writable by the group, independent of the umask."""
+    try:
+        path.mkdir(mode=0o2770, parents=True)
+    except FileExistsError:
+        if not path.is_dir():
+            raise
+    else:
+        # mkdir's mode is filtered by the umask. Only change a root we created.
+        path.chmod(0o2770)
+
+
 def _wait_for_workers(pgid: int, timeout: float) -> bool:
     """Return whether the process group emptied before the deadline."""
     deadline = time.monotonic() + timeout
@@ -155,6 +168,7 @@ def _wait_for_workers(pgid: int, timeout: float) -> bool:
 def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              baseline: str | None = None, eval_set: str | None = None, by: str = "",
              repo: Path | None = None, trust_repo: bool = False,
+             shared_root: Path | None = None,
              heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
              worker_wait_timeout: float = WORKER_WAIT_TIMEOUT_S,
              sinks: Sequence[Any] | None = None) -> int:
@@ -176,6 +190,8 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
     }
     # Validate options before creating a directory or starting a command.
     evals.validate_eval_record(record, eval_id=eval_id)
+    if shared_root is not None:
+        _create_shared_root(Path(os.path.abspath(os.path.expanduser(shared_root))))
     trace_root.mkdir(parents=True, exist_ok=True)
     run = trace_root / eval_id
     run.mkdir()  # Do not reuse an evaluation ID if another writer won the race.
@@ -273,16 +289,26 @@ def main(words: Sequence[str] | None = None) -> int:
     if not command:
         parser.error("provide the child command after --")
     trace_dir = os.environ.get("CAPX_TRACE_DIR", "").strip()
-    if not trace_dir:
-        parser.error("CAPX_TRACE_DIR must be set")
     if "CAPX_TRACE_RUN_ID" in os.environ:
         parser.error("CAPX_TRACE_RUN_ID is already set")
+    shared_root = None
+    if not trace_dir:
+        hype_root = os.environ.get("HYPE_TRACE_ROOT", "")
+        if hype_root:
+            shared_root = Path(hype_root).expanduser()
+        elif (Path.home() / "shared-storage").is_dir():
+            shared_root = Path.home() / "shared-storage" / "traces"
+        else:
+            parser.error("set CAPX_TRACE_DIR or HYPE_TRACE_ROOT, or provide ~/shared-storage")
+        trace_dir = str(shared_root / (os.environ.get("USER") or getpass.getuser()))
     if args.baseline is not None and not reader.is_valid_id(args.baseline):
         parser.error("--baseline must be a valid trace ID")
     if args.baseline is not None and not args.changed.strip():
         parser.error("--changed is required with --baseline")
     try:
-        result = run_eval(command, trace_root=Path(trace_dir), changed=args.changed,
+        trace_root = Path(os.path.abspath(os.path.expanduser(trace_dir)))
+        print(f"eval: records will be saved to {trace_root}", flush=True)
+        result = run_eval(command, trace_root=trace_root, shared_root=shared_root, changed=args.changed,
                           baseline=args.baseline, eval_set=args.eval_set, by=args.by, repo=args.repo,
                           trust_repo=args.trust_repo)
     except (OSError, ValueError) as exc:
