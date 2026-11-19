@@ -51,3 +51,46 @@ test('a hidden list waits for a visible viewport, then brings the selected row i
   assert.ok(top>=0 && top+80<=200,'the selected row is visible after showing the detailed log');
   page.unmount();
 });
+
+test('disclosure changes discard offscreen cached heights and selection scrolling uses the new offsets', async () => {
+  resetBrowser();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  let measure: ResizeObserverCallback;
+  class Observer {
+    constructor(callback: ResizeObserverCallback) { measure = callback; }
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: Observer });
+  try {
+    const closed: Parameters<typeof VirtualList<string>>[0] = { ...props, scrollToKey: null, measurementKey: () => 'closed' };
+    const page = mount(VirtualList<string>, closed);
+    // Row zero was tall when last measured, but is now outside the viewport.
+    const row = { dataset: { vkey: 'row-0', vmeasurement: 'closed' },
+      getBoundingClientRect: () => ({ height: 1000 }) };
+    measure!([{ target: row } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(16);
+    const container = { scrollTop: 0, clientHeight: 100, scrollHeight: 10000,
+      getBoundingClientRect: () => ({ top: 0, bottom: 100, height: 100 }), querySelector: () => null };
+    (findAll(page.output, 'div')[0].props.ref as { current: unknown }).current = container;
+    page.update({ ...closed, scrollToKey: 'row-50', scrollToken: 1 });
+    await advance(16);
+    assert.equal(container.scrollTop, 5870, 'the old measurement contributes to the selected offset');
+    // A global switch changes even offscreen rows; their old heights must not
+    // contribute while waiting for those rows to mount and be measured again.
+    page.update({ ...closed, measurementKey: () => 'open', scrollToKey: 'row-50', scrollToken: 2 });
+    await advance(16);
+    assert.equal(container.scrollTop, 4970, 'new disclosure uses estimates instead of stale cached heights');
+    // Measured changes after a thumbnail/details load refine the pending seek.
+    row.dataset.vmeasurement = 'open';
+    row.getBoundingClientRect = () => ({ height: 200 });
+    measure!([{ target: row } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    await advance(32);
+    assert.equal(container.scrollTop, 5070, 'ResizeObserver corrections use the new row geometry');
+    page.unmount();
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+    else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+  }
+});

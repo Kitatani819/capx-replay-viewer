@@ -267,7 +267,8 @@ test('an undone episode start in the unscoped log names the episode and what hap
     },
     { status: 'warning' },
   );
-  const tl = text(<Timeline model={buildEpisodeModel(r.events)} ep={EP} running={false} selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  const model = buildEpisodeModel(r.events);
+  const tl = text(<Timeline model={model} ep={EP} running={false} selectedKey={model.allNodes[0].key} selectedEventId={r.events[0].event_id} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
   assert.match(tl, /対象のエピソード: cube_lift__S1__s3__i1__a1/);
   assert.match(tl, /the trial ran untraced/);
 });

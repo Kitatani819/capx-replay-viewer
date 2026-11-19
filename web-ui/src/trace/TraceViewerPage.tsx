@@ -315,6 +315,13 @@ export default function TraceViewerPage() {
     setParams({event: null});
     setFocus(null);
   }, [setParams]);
+  const onTimelineClear = useCallback(() => {
+    setPlaybackSelection(null);
+    setReplaySeek(null);
+    setLive(false);
+    setParams({event: null});
+    setFocus(null);
+  }, [setParams]);
   const onReplayInteract = useCallback(() => {
     setReplaySeek(null);
     setLive(false);
@@ -555,6 +562,7 @@ export default function TraceViewerPage() {
                   assetStates={shownAssetStates} onRetryAsset={assets.retry}
                   selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
+                key={epKey}
                 model={model}
                 summary={summary.data}
                 ep={ep}
@@ -562,6 +570,7 @@ export default function TraceViewerPage() {
                 selectedKey={selection?.node.key ?? null}
                 selectedEventId={selection?.eventId ?? null}
                 onSelect={onSelect}
+                onClearSelection={onTimelineClear}
                 scrollToken={scrollToken}
                 showTaskText={status !== 'unscoped'}
                 />} />

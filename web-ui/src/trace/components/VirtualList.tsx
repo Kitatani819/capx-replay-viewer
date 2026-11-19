@@ -15,6 +15,8 @@ interface VirtualListProps<T> {
   items: T[];
   itemKey: (item: T) => string;
   estimateHeight: (item: T) => number;
+  /** Changes when disclosure/content invalidates a row's cached height. */
+  measurementKey?: (item: T) => string;
   renderItem: (item: T) => ReactNode;
   /** Key of the row to bring into view; changing `scrollToken` repeats the request. */
   scrollToKey: string | null;
@@ -43,6 +45,7 @@ export function VirtualList<T>({
   items,
   itemKey,
   estimateHeight,
+  measurementKey,
   renderItem,
   scrollToKey,
   scrollToken,
@@ -52,21 +55,23 @@ export function VirtualList<T>({
 }: VirtualListProps<T>) {
   const windowed = items.length > MAX_STATIC_ROWS;
   const containerRef = useRef<HTMLDivElement>(null);
-  const heights = useRef(new Map<string, number>());
+  const heights = useRef(new Map<string, { height: number; measurement: string | undefined }>());
   const [version, setVersion] = useState(0);
   const [view, setView] = useState({ top: 0, height: 800, scrollable: false });
   const rafRef = useRef<number | null>(null);
   const bumpRef = useRef<number | null>(null);
 
   const keys = useMemo(() => items.map(itemKey), [items, itemKey]);
+  const measurements = useMemo(() => items.map(item => measurementKey?.(item)), [items, measurementKey]);
   const offsets = useMemo(() => {
     const arr = new Float64Array(items.length + 1);
     for (let i = 0; i < items.length; i += 1) {
-      arr[i + 1] = arr[i] + (heights.current.get(keys[i]) ?? estimateHeight(items[i]));
+      const cached = heights.current.get(keys[i]);
+      arr[i + 1] = arr[i] + (cached && cached.measurement === measurements[i] ? cached.height : estimateHeight(items[i]));
     }
     return arr;
     // `version` changes when measured heights change.
-  }, [items, keys, estimateHeight, version]);
+  }, [items, keys, measurements, estimateHeight, version]);
 
   const observer = useMemo(() => {
     if (typeof ResizeObserver === 'undefined') return null;
@@ -76,8 +81,10 @@ export function VirtualList<T>({
         const key = (e.target as HTMLElement).dataset.vkey;
         if (!key) continue;
         const h = Math.round((e.target as HTMLElement).getBoundingClientRect().height);
-        if (h > 0 && heights.current.get(key) !== h) {
-          heights.current.set(key, h);
+        const measurement = (e.target as HTMLElement).dataset.vmeasurement;
+        const cached = heights.current.get(key);
+        if (h > 0 && (cached?.height !== h || cached.measurement !== measurement)) {
+          heights.current.set(key, { height: h, measurement });
           changed = true;
         }
       }
@@ -203,7 +210,7 @@ export function VirtualList<T>({
       {items.slice(start, end).map((item, i) => {
         const key = keys[start + i];
         return (
-          <MeasuredRow key={key} vkey={key} observer={observer}>
+          <MeasuredRow key={key} vkey={key} measurement={measurements[start + i]} observer={observer}>
             {renderItem(item)}
           </MeasuredRow>
         );
@@ -213,16 +220,16 @@ export function VirtualList<T>({
   );
 }
 
-function MeasuredRow({ vkey, observer, children }: { vkey: string; observer: ResizeObserver | null; children: ReactNode }) {
+function MeasuredRow({ vkey, measurement, observer, children }: { vkey: string; measurement: string | undefined; observer: ResizeObserver | null; children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el || !observer) return;
     observer.observe(el);
     return () => observer.unobserve(el);
-  }, [observer]);
+  }, [observer, measurement]);
   return (
-    <div ref={ref} data-vkey={vkey}>
+    <div ref={ref} data-vkey={vkey} data-vmeasurement={measurement}>
       {children}
     </div>
   );

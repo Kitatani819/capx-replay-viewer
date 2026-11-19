@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advance, findAll, popState, propsOf, resetBrowser, setLocation } from './harness/browser';
+import { advance, currentParams, findAll, popState, propsOf, resetBrowser, setLocation } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import { buildEpisodeModel } from '../model';
 import { VideoPlayback } from '../components/VideoPlayback';
@@ -9,6 +9,7 @@ import { MediaPane } from '../components/MediaPane';
 import { TopBar } from '../components/TopBar';
 import { DetailTabs } from '../components/DetailTabs';
 import { Picker } from '../components/Picker';
+import { Timeline } from '../components/Timeline';
 import TraceViewerPage from '../TraceViewerPage';
 import { Rec } from './fixtures';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
@@ -17,6 +18,7 @@ type PlayerProps=Parameters<typeof VideoPlayback>[0];
 type MediaProps=Parameters<typeof MediaPane>[0];
 type BarProps=Parameters<typeof TopBar>[0];
 type DetailsProps=Parameters<typeof DetailTabs>[0];
+type TimelineProps=Parameters<typeof Timeline>[0];
 
 function recording() {
   const r=new Rec();r.episodeStart();
@@ -305,6 +307,58 @@ test('running page keeps Live tail ownership until replay interaction, and can r
   assert.equal(propsOf<DetailsProps>(page.output,DetailTabs).selection?.eventId,'e1_3');
   assert.equal(propsOf<MediaProps>(page.output,MediaPane).replayLive,true);
   page.unmount();
+});
+
+test('collapsing the selected log row clears the URL and stops Live and playback following', async () => {
+  for (const source of ['live', 'playback']) {
+    resetBrowser();
+    const rec = recording();
+    const run = makeRun();
+    const episode = addEpisode(run, 'e1', { status: 'running' }, rec.model.events);
+    serve(run);
+    setLocation('/traces?view=details&run=r1&episode=e1');
+    const page = mount(TraceViewerPage, {});
+    let replay: ReturnType<typeof player> | undefined;
+    try {
+      await advance(1000);
+      assert.equal(propsOf<BarProps>(page.output, TopBar).live, true);
+      if (source === 'playback') {
+        propsOf<MediaProps>(page.output, MediaPane).onPlaybackSelect!(rec.code);
+        await advance(0);
+        const media = propsOf<MediaProps>(page.output, MediaPane);
+        assert.equal(media.selectionFromPlayback, true);
+        replay = player({ model: media.model, videos: [{ name: 'video_combined.mp4', url: '/video' }],
+          initialKey: media.selection!.node.key, selectionFromPlayback: media.selectionFromPlayback,
+          onSelect: media.onPlaybackSelect! });
+        await replay.metadata();
+        (replay.video().props.onPlay as Function)();
+        await advance(0);
+      }
+      assert.ok(currentParams().get('event'));
+      const pauses = replay?.media.pauses ?? 0;
+      propsOf<TimelineProps>(page.output, Timeline).onClearSelection!();
+      await advance(0);
+      assert.equal(currentParams().get('event'), null);
+      assert.equal(propsOf<BarProps>(page.output, TopBar).live, false);
+      const media = propsOf<MediaProps>(page.output, MediaPane);
+      assert.equal(media.selection, null);
+      assert.equal(media.selectionFromPlayback, false, 'a manual collapse is not an acknowledgement of a playback selection');
+      if (replay) {
+        replay.page.update({ ...replay.page.props, initialKey: null, selectionFromPlayback: media.selectionFromPlayback });
+        await advance(0);
+        assert.ok(replay.media.pauses > pauses, 'clearing the selected log row pauses the following player');
+        replay.media.currentTime = 0;
+        (replay.video().props.onTimeUpdate as Function)({ currentTarget: replay.media });
+      }
+      episode.events.push(ev('e1', rec.model.lastSeq + 1, 'trace_warning', { message: 'new tail' }));
+      await advance(1500);
+      assert.equal(currentParams().get('event'), null, 'neither a late timeupdate nor a Live tail update reselects the collapsed row');
+      assert.equal(propsOf<MediaProps>(page.output, MediaPane).selection, null);
+    } finally {
+      replay?.page.unmount();
+      page.unmount();
+    }
+  }
 });
 
 test('picking another trial opens its default API/Python view and clears the previous selection and seek',async()=>{
