@@ -75,8 +75,12 @@ jobs:
         run: python -m playwright install chromium
       - name: Generate synthetic recording and trace
         run: python scripts/make_replay_demo.py --out outputs/ci-demo
+      - name: Generate three-camera synthetic recording
+        run: python scripts/make_replay_demo.py --out outputs/ci-multi-camera --cameras 3
       - name: Run browser replay acceptance
         run: python scripts/demo/check_replay_platform.py --fixture outputs/ci-demo --out outputs/ci-checks
+      - name: Run multi-camera browser acceptance
+        run: python scripts/demo/check_replay_platform.py --fixture outputs/ci-multi-camera --out outputs/ci-checks/multi-camera --multi-camera
       - name: Preserve synthetic verification results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

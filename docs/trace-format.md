@@ -1387,8 +1387,15 @@ the two per-execution panels.
 
 The media pane opens the video when an MP4 is available. A play/pause button
 and labelled seek slider control the existing HTML video; the default speed is 0.5×.
-`再生設定` contains speed, camera, rewind and follow options. `表示` switches to
-recorded frames. The major-process filter shows the first candidate per turn/time;
+`再生設定` contains speed, rewind and follow options. `表示` switches to
+recorded frames. With two or more camera videos, `全カメラ｜1台` selects simultaneous
+playback or one camera; the preference is saved as `capx.replay.cameraLayout` in
+localStorage, with storage failures ignored. In simultaneous playback, secondary
+videos are muted, inline thumbnails below the main video. They mirror its
+play/pause, position and playback rate, correcting drift above about 0.1 seconds.
+Clicking a thumbnail changes the main camera while preserving position and the
+selected API row. One-camera trials retain the existing layout without a switch
+or thumbnails. The one-camera display has a camera select. The major-process filter shows the first candidate per turn/time;
 `すべての処理` exposes every recorded event, including each parallel candidate.
 Entering replay preserves the selected execution/event at its recorded position.
 Playing or manually seeking enables `再生位置に追従`: it selects the current process,
@@ -1401,7 +1408,9 @@ the video; manual selection remains until playback or a native seek resumes foll
 
 Video lookup uses the time-verified final attempt's recorded artifact paths and
 an exact match to a registered runner root. Earlier retry attempts never inherit
-the final attempt's video. Existing endpoints retain their path and symlink checks;
+the final attempt's video. Runner lookup accepts `video_combined.mp4` and
+`video_combined_<suffix>.mp4`, using the same `[\w-]+` suffix rule as copied
+episode videos; turn-video discovery is unchanged. Existing endpoints retain their path and symlink checks;
 the viewer neither opens arbitrary recorded absolute paths nor changes trace files.
 
 Synchronization uses recorded simulator-step/buffer-index pairs and the existing
@@ -1409,9 +1418,22 @@ encoder's 30 fps, with linear interpolation between frame anchors. It is not a
 wall-clock replay: model waits are absent from the MP4, and multiple requests can
 share a video position. All such cues remain individually selectable; automatic
 following selects the last cue at that position in event order. Automatic mapping
-requires one recorded camera, epoch zero, an initial buffer index of zero, monotonic
-step anchors, and a last-frame index consistent with video duration within about
-one frame. Resets, other camera files and incomplete mappings disable following
+uses the camera mapped from each combined video: `video_combined.mp4` maps to
+the main buffer camera recorded in `episode_start.data.frames.cameras[0]`,
+`video_combined_wrist.mp4` maps to the wrist buffer camera (the next buffer),
+and `video_combined_<key>.mp4` maps to `sanitize_id(key)` when that camera has
+recorded frames. Older traces without buffer metadata use the first recorded
+camera for the main video and the recorded `robot0_eye_in_hand` or `wrist` camera
+for the wrist video. Dictionary buffers retain the first recorded camera order;
+no R1Pro camera keys are assumed.
+
+Mapping uses that camera's own frame anchors. Only when it has no usable anchors
+may another camera supply them, and only when every camera with usable frames
+has identical buffer-index-to-simulator-step anchors. Partial selected-camera
+anchors are never patched with another camera's records. Epoch zero, an initial
+buffer index of zero, monotonic step anchors, and a last-frame index consistent
+with video duration within about one frame are still required. Resets, unknown
+video-to-camera mappings and incomplete or conflicting anchors disable following
 with an explanation while retaining video playback. No new recording is required.
 The explanation is headed 「同期情報なし」, also in MP4-only legacy trials.
 Worker-thread ensemble members without simulator coordinates may reference the
@@ -1426,8 +1448,15 @@ For upstream episodes, the simple view matches `video_turn_NN` to the recorded
 play at 0.5× speed. If a turn video is absent, it uses a combined video. When the frame
 records cannot identify the turn's clip, it labels the playback as the whole-trial video.
 When several cameras have combined videos, it chooses `video_combined.mp4` first, then the
-camera whose name comes first alphabetically. The detailed camera list shows combined
-videos only. For `source: envs.runner` episodes, once run details have loaded with zero
+camera whose name comes first alphabetically. The detailed player shows combined
+videos only. Camera labels are `正面` (`agentview`), `ロボット視点`
+(`robot0_robotview`), `手先` (`robot0_eye_in_hand`), `頭` (`ego`/`head`),
+`左手首` (`left_wrist`) and `右手首` (`right_wrist`); unknown names are displayed
+unchanged. The raw name remains available in a tooltip. The page shares its chosen
+main camera with recorded frames and the trial summary's final image. The
+side-by-side comparison carries the same choice and offers a camera select;
+baselines use the same camera when present, otherwise their main camera with a note.
+For `source: envs.runner` episodes, once run details have loaded with zero
 runner records, the simple header uses the episode's `task_completed` value. Web UI and
 fork runner episodes keep an unknown verdict until a matching runner record is available.
 

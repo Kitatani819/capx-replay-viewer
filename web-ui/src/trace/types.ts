@@ -457,6 +457,8 @@ export interface CodeBlockStartData {
   code_sha256?: string | null;
   direct_access?: string[] | Record<string, unknown> | null;
   frame_ref?: FrameRef | FrameRef[] | null;
+  /** All camera references; frame_ref repeats the first camera for older readers. */
+  frame_refs?: FrameRef[] | null;
   state_ref?: StateRef;
 }
 
@@ -480,6 +482,8 @@ export interface CodeBlockEndData {
   task_completed?: boolean | null;
   result_summary?: unknown;
   frame_ref?: FrameRef | FrameRef[] | null;
+  /** All camera references; frame_ref repeats the first camera for older readers. */
+  frame_refs?: FrameRef[] | null;
   state_ref?: StateRef;
   sim_step_range?: (number | null)[] | null;
   tracer_frame_visible?: boolean | null;
@@ -510,6 +514,8 @@ export interface ApiCallStartData {
   stdout_offset?: number | null;
   stderr_offset?: number | null;
   frame_ref?: FrameRef | FrameRef[] | null;
+  /** All camera references; frame_ref repeats the first camera for older readers. */
+  frame_refs?: FrameRef[] | null;
   state_ref?: StateRef;
   units?: unknown;
   array_budget_exceeded?: number | null;
@@ -544,6 +550,8 @@ export interface ApiCallEndData {
   stdout_slice?: OutputSlice | null;
   stderr_slice?: OutputSlice | null;
   frame_ref?: FrameRef | FrameRef[] | null;
+  /** All camera references; frame_ref repeats the first camera for older readers. */
+  frame_refs?: FrameRef[] | null;
   state_ref?: StateRef;
   sim_step_delta?: number | null;
   buffer_frames?: (number | null)[] | null;

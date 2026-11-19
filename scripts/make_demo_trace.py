@@ -398,6 +398,10 @@ def _project(camera: str, p: np.ndarray, size: int) -> tuple[float, float, float
 
 
 def render(scene: Scene, camera: str, size: int) -> np.ndarray:
+    # Synthetic R1Pro-style viewpoints for the multi-camera replay fixture.
+    mirror = camera == "right_wrist"
+    if camera in ("left_wrist", "right_wrist"):
+        camera = "robot0_eye_in_hand"
     img = Image.new("RGB", (size, size), (70, 76, 86))
     draw = ImageDraw.Draw(img)
     if camera == "robot0_eye_in_hand":
@@ -412,7 +416,8 @@ def render(scene: Scene, camera: str, size: int) -> np.ndarray:
         gap = size * (0.32 if scene.gripper_open else 0.16)
         draw.rectangle([size / 2 - gap - 6, size - 34, size / 2 - gap + 6, size], fill=(35, 35, 40))
         draw.rectangle([size / 2 + gap - 6, size - 34, size / 2 + gap + 6, size], fill=(35, 35, 40))
-        return np.asarray(img, dtype=np.uint8)
+        pixels = np.asarray(img, dtype=np.uint8)
+        return np.ascontiguousarray(pixels[:, ::-1]) if mirror else pixels
 
     draw.polygon(
         [(0, size * 0.45), (size, size * 0.45), (size, size), (0, size)], fill=(150, 118, 88)

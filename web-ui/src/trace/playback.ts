@@ -1,5 +1,6 @@
 /** Video lookup and frame-based playback mapping; docs/trace-format.md §9.3. */
 import { episodeFileUrl, traceApi, type EpisodeRef } from './api';
+import { cameraForVideo } from './cameras';
 import type { EpisodeModel, FrameRec, TNode } from './model';
 import { dataOf } from './types';
 import type { RunnerMatch } from './runner';
@@ -23,7 +24,7 @@ export function trialVideos(run: string, match: RunnerMatch, roots: string[]): T
   return a.videos.flatMap((p: unknown) => {
     if (typeof p !== 'string' || !p.startsWith(`${dir}/`)) return [];
     const name = p.slice(dir.length + 1);
-    if (name !== 'video_combined.mp4') return [];
+    if (!/^video_combined(?:_[\w-]+)?\.mp4$/.test(name)) return [];
     return [{ name, url: traceApi.legacyFileUrl(run, r.task!, r.condition!, trial, name, root), source: 'runner' as const }];
   });
 }
@@ -114,13 +115,24 @@ export function primaryPlaybackCues(cues: PlaybackCue[]): PlaybackCue[] {
 export function playbackMap(model: EpisodeModel, name: string, duration: number): PlaybackMap {
   const nodes = model.allNodes.filter(node => replayKinds.has(node.kind));
   const fail = (reason: string, pending = false): PlaybackMap => ({reason, pending, prompts: [], actions: [], all: [], unsynced: nodes});
-  if (name !== 'video_combined.mp4') return fail('このカメラの動画とイベントの対応は未記録です。');
+  if (!/^video_combined(?:_[\w-]+)?\.mp4$/.test(name)) return fail('このカメラの動画とイベントの対応は未記録です。');
   if (!(duration > 0)) return fail('動画を読み込み中です。', true);
   if (!Number.isFinite(duration)) return fail('動画の長さを取得できないため、自動同期はできません。');
   if (model.events.some(e => e.event_type === 'env_reset')) return fail('環境リセットを含むため、自動同期はできません。');
-  const cameras = [...model.framesByCamera.values()].filter(fs => fs.length > 0);
-  if (cameras.length !== 1) return fail('動画と記録カメラを一意に対応付けられません。');
-  const frames = cameras[0].filter(f => f.simStep !== null && Number.isFinite(f.simStep) && Number.isInteger(f.bufferIndex) && f.bufferIndex >= 0);
+  const camera = cameraForVideo(model, name);
+  if (!camera) return fail('動画と記録カメラを一意に対応付けられません。');
+  const usable = (frames: FrameRec[]) => frames.filter(f => f.simStep !== null && Number.isFinite(f.simStep) && Number.isInteger(f.bufferIndex) && f.bufferIndex >= 0);
+  let frames = usable(model.framesByCamera.get(camera) ?? []);
+  if (frames.length === 0) {
+    const cameras = [...model.framesByCamera.values()].map(usable).filter(fs => fs.length > 0);
+    // All recorded cameras share buffer indices. Borrow anchors only when the
+    // surviving camera records prove exactly the same index-to-step mapping.
+    const signature = (fs: FrameRec[]) => JSON.stringify([...new Set(fs.map(f => `${f.epoch}:${f.bufferIndex}:${f.simStep}`))].sort());
+    if (!cameras.length || cameras.some(fs => signature(fs) !== signature(cameras[0]))) {
+      return fail('動画と記録カメラを一意に対応付けられません。');
+    }
+    frames = cameras[0];
+  }
   if (frames.length < 2 || frames.some(f => f.epoch !== 0)) return fail('動画との対応に必要なフレーム記録が不足しています。');
   const unique = new Map<number, FrameRec>();
   for (const f of frames) {

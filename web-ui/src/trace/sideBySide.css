@@ -58,3 +58,12 @@
   .comparison-side-label { position: static; width: auto; height: auto; overflow: visible; clip-path: none; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #586e5f; }
   .comparison-gap .comparison-side-label { margin-bottom: 4px; }
 }
+
+.comparison-camera { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.comparison-camera select { max-width: 180px; border: 1px solid #cbd8c8; border-radius: 5px; padding: 3px 6px; background: white; }
+.comparison-frames { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 12px 0; }
+.comparison-frames figure { margin: 0; min-width: 0; font-size: 12px; }
+.comparison-frames img { width: 100%; height: 160px; object-fit: contain; background: #e0e5de; border-radius: 6px; }
+.comparison-frames figcaption { margin-top: 4px; }
+.comparison-frames small { display: block; color: #667769; margin-top: 4px; }
+@media (max-width: 600px) { .comparison-frames { grid-template-columns: minmax(0, 1fr); } }

@@ -18,7 +18,13 @@ import numpy as np
 import make_demo_trace as d
 
 
-def build(root: Path, *, evals: bool = False) -> dict:
+def build(root: Path, *, evals: bool = False, camera_count: int = 1) -> dict:
+    if camera_count not in (1, 2, 3):
+        raise ValueError("camera_count must be 1, 2 or 3")
+    cameras = {1: ("agentview",), 2: ("agentview", "robot0_eye_in_hand"),
+               3: ("ego", "left_wrist", "right_wrist")}[camera_count]
+    video_names = (["video_combined.mp4", "video_combined_wrist.mp4"][:camera_count]
+                   if camera_count < 3 else [f"video_combined_{camera}.mp4" for camera in cameras])
     root = root.resolve()
     if root.exists():
         raise SystemExit(f"Refusing to overwrite {root}; choose a fresh --out directory")
@@ -27,11 +33,14 @@ def build(root: Path, *, evals: bool = False) -> dict:
     run_dir.mkdir(parents=True)
     now = time.time()
     ep = d.EpisodeBuilder(run_dir, "cube_lifting__demo__s307__i1__a1", pid=430307,
-                          t0=now-120, mono0=100, cameras=("agentview",), record_state=False)
+                          t0=now-120, mono0=100, cameras=cameras, record_state=False)
     scene = d.Scene(np.array([.5, -.1, 1.1]), np.array([.5, -.1, .84]), np.array([.6, .13, .84]))
     start = ep.emit("episode_start", "info", {"source":"envs.runner", "task":"cube_lifting (合成デモ)",
         "condition":"DEMO", "seed":307, "attempt_index":1, "runner_invocation":1,
-        "config_flags":{"use_parallel_ensemble":True,"record_video":True}, "host":"synthetic-demo", "synthetic":True})
+        "config_flags":{"use_parallel_ensemble":True,"record_video":True,"use_wrist_camera":camera_count==2},
+        "frames":{"installed":True,"buffers":["_frame_buffer", "_wrist_frame_buffer"] if camera_count==2 else ["_frame_buffer"],
+                  "cameras":list(cameras) if camera_count<3 else ["main"],"backfilled":0},
+        "host":"synthetic-demo", "synthetic":True})
     ep.emit("task_text", "info", {"text":"合成デモ: 赤いキューブを持ち上げる。実際のGENIAC試行ではありません。"})
     ep.buffer.append((0,scene.copy()))
     ep.save_frame(0,reason="periodic")
@@ -124,9 +133,15 @@ def build(root: Path, *, evals: bool = False) -> dict:
     ep.parsed(finished,parser="_parse_multi_turn_decision",code_blocks=[],decision="finish",model_said_finish=True)
     end=ep.emit("episode_end","info",{"end_reason":"completed","trace_complete":True,"gaps":[],
         "harness_summary":{"task_completed":True,"reward":1.,"success":True,"sandbox_rc":0}})
-    video=d.mp4_bytes([d.render(s,"agentview",256) for _,s in ep.buffer],fps=30)
-    ep.write_file("videos/video_combined.mp4",video)
-    ep.emit("trial_videos","ok",{},artifacts=[{"path":"videos/video_combined.mp4","mime":"video/mp4","written":True,"turn_index":None}])
+    videos = {}
+    for camera, name in zip(cameras, video_names):
+        # Distinct synthetic viewpoints make a camera swap visible without
+        # claiming to reproduce a particular simulator's rendering.
+        frames = [d.render(s, camera, 256) for _,s in ep.buffer]
+        videos[name] = d.mp4_bytes(frames, fps=30)
+        ep.write_file(f"videos/{name}", videos[name])
+    ep.emit("trial_videos","ok",{},artifacts=[{"path":f"videos/{name}","mime":"video/mp4","written":True,"turn_index":None}
+                                               for name in video_names])
     # Write final event objects, including intentionally modified token-limit replies.
     ep.write_file("events.jsonl",b"".join(d.event_line(e) for e in ep.events))
     ep.write_episode_json(d.episode_summary(ep,start,end=end,gaps=[],late_events=0,n_warnings=0,last_event=ep.events[-1]))
@@ -135,9 +150,13 @@ def build(root: Path, *, evals: bool = False) -> dict:
     trial=legacy/"cube_lifting"/"DEMO"/"trial_307"
     trial.mkdir(parents=True)
     (legacy/"run.json").write_text('{"run_id":"video_only","synthetic":true}',encoding="utf-8")
-    (trial/"video_combined.mp4").write_bytes(video)
+    for name, video in videos.items():
+        (trial/name).write_bytes(video)
     manifest={"run":d.RUN_ID,"episode":ep.episode_id,"events":ids,"video_frames":len(ep.buffer),
         "legacy":{"run":"video_only","task":"cube_lifting","condition":"DEMO","trial":"trial_307"}}
+    if camera_count > 1:
+        manifest["cameras"] = list(cameras)
+        manifest["videos"] = video_names
     if evals:
         manifest["evals"] = build_evals(root, manifest, now)
     (root/"manifest.json").write_text(json.dumps(manifest,indent=2),encoding="utf-8")
@@ -219,5 +238,7 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out",default="outputs/geniac_demo")
     parser.add_argument("--evals", action="store_true", help="基準・改良の合成評価と悪化・再試行の例を追加する")
+    parser.add_argument("--cameras", type=int, choices=(1, 2, 3), default=1,
+                        help="録画カメラ数（2: 正面と手先、3: 頭と左右の手首）")
     args=parser.parse_args()
-    print(json.dumps(build(Path(args.out), evals=args.evals),indent=2))
+    print(json.dumps(build(Path(args.out), evals=args.evals, camera_count=args.cameras),indent=2))

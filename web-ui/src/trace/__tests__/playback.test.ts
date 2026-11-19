@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEpisodeModel } from '../model';
+import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
 import { cameraVideos, canPlayExecutionVideo, chooseExecutionVideo, cueAt, episodeVideos, groupCues, playbackMap, trialVideos, validClip, videosForEpisode } from '../playback';
 import { turnOf } from '../replay';
 import type { RunnerMatch } from '../runner';
@@ -95,11 +96,21 @@ test('video lookup preserves registered root identity, never guesses from seed',
  assert.deepEqual(trialVideos('run',m,['/different']),[]);
  assert.deepEqual(trialVideos('other-run',m,['/tmp/runs']),[]);
 });
-test('runner artifact lookup uses only the original combined MP4',()=>{
+test('runner artifact lookup accepts safe combined camera MP4s, including trials without a bare combined video',()=>{
  const m=match();m.record!.artifacts={trial_dir:'/tmp/runs/run/task/C/trial_1',videos:[
-  '/tmp/runs/run/task/C/trial_1/video_combined_main.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_ego.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_left_wrist.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_right-wrist.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_turn_01.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_../secret.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_ego.extra.mp4',
+  '/tmp/runs/run/task/C/trial_1/video_combined_頭.mp4',
   '/tmp/runs/run/task/C/trial_1/video_combined.mp4']};
- assert.deepEqual(trialVideos('run',m,['/tmp/runs']).map(v=>v.name),['video_combined.mp4']);
+ const names=['video_combined_ego.mp4','video_combined_left_wrist.mp4','video_combined_right-wrist.mp4','video_combined.mp4'];
+ assert.deepEqual(trialVideos('run',m,['/tmp/runs']).map(v=>v.name),names);
+ (m.record!.artifacts as {videos:string[]}).videos.pop();
+ assert.deepEqual(trialVideos('run',m,['/tmp/runs']).map(v=>v.name),names.slice(0,-1));
 });
 test('earlier and unverified attempts never receive the final attempt video',()=>{
  assert.deepEqual(trialVideos('run',{...match(),isFinal:false},['/tmp/runs']),[]);
@@ -158,4 +169,88 @@ test('a stale turn falls back to the copied combined video',()=>{
   {path:'videos/video_combined.mp4',mime:'video/mp4',written:true,turn_index:null}]});
  const model=buildEpisodeModel(r.events);
  assert.equal(chooseExecutionVideo(model.blocks[0],episodeVideos({runId:'r',episodeId:'e'},model)).video?.name,'video_combined.mp4');
+});
+
+function cameraRecording(cameras: string[], buffers?: string[]) {
+ const r=new Rec();r.episodeStart(buffers ? {frames:{cameras:buffers}} : {});
+ for(const camera of cameras)r.add('frame',{camera,epoch:0,buffer_index:0,sim_step:0});
+ const request=r.request('code_generator','shared');request.sim_step=30;request.sim_epoch=0;
+ for(const camera of cameras)r.add('frame',{camera,epoch:0,buffer_index:59,sim_step:59});
+ return r;
+}
+
+test('combined videos map to recorded main/wrist buffers, single cameras and arbitrary dictionary keys',()=>{
+ const libero=buildEpisodeModel(cameraRecording(['robot0_eye_in_hand','agentview'],['agentview','robot0_eye_in_hand']).events);
+ assert.equal(mainCameraOf(libero),'agentview','recorded buffer order takes precedence over frame order');
+ assert.equal(cameraForVideo(libero,'video_combined.mp4'),'agentview');
+ assert.equal(cameraForVideo(libero,'video_combined_wrist.mp4'),'robot0_eye_in_hand');
+ const custom=buildEpisodeModel(cameraRecording(['front_custom','hand_custom'],['front_custom','hand_custom']).events);
+ assert.equal(cameraForVideo(custom,'video_combined_wrist.mp4'),'hand_custom');
+ const dictionary=buildEpisodeModel(cameraRecording(['ego','left_wrist','sensor-7','xhead'],['main']).events);
+ assert.equal(mainCameraOf(dictionary),'ego','dictionary cameras use first recorded frame order, never a fixed key');
+ for(const camera of ['ego','left_wrist','sensor-7'])assert.equal(cameraForVideo(dictionary,`video_combined_${camera}.mp4`),camera);
+ assert.equal(cameraForVideo(dictionary,'video_combined_-head.mp4'),'xhead','dictionary keys use recorder sanitization');
+ const single=buildEpisodeModel(cameraRecording(['robot0_robotview']).events);
+ assert.equal(cameraForVideo(single,'video_combined.mp4'),'robot0_robotview');
+ const legacyWrist=buildEpisodeModel(cameraRecording(['agentview','robot0_eye_in_hand']).events);
+ assert.equal(cameraForVideo(legacyWrist,'video_combined_wrist.mp4'),'robot0_eye_in_hand');
+ for(const name of ['video_combined_unknown.mp4','video_turn_00.mp4','video_combined_../ego.mp4'])assert.equal(cameraForVideo(dictionary,name),null);
+ assert.equal(cameraForVideo(buildEpisodeModel([]),'video_combined.mp4'),null);
+});
+
+test('camera labels are Japanese with unknown raw names preserved',()=>{
+ assert.deepEqual(['agentview','robot0_robotview','robot0_eye_in_hand','ego','head','left_wrist','right_wrist','sensor-7'].map(cameraLabel),
+  ['正面','ロボット視点','手先','頭','頭','左手首','右手首','sensor-7']);
+});
+
+test('two and three camera videos synchronize from their own camera anchors',()=>{
+ for(const cameras of [['agentview','robot0_eye_in_hand'],['ego','left_wrist','right_wrist']]){
+  const r=cameraRecording(cameras,cameras.length===2?cameras:['main']);
+  const model=buildEpisodeModel(r.events);
+  const names=cameras.length===2?['video_combined.mp4','video_combined_wrist.mp4']:cameras.map(camera=>`video_combined_${camera}.mp4`);
+  for(const name of names){
+   const map=playbackMap(model,name,2);
+   assert.equal(map.reason,null,name);assert.equal(map.prompts[0].time,1,name);
+  }
+  // Another camera's different mapping does not invalidate an explicit match.
+  const last=r.events.find(e=>e.event_type==='frame' && dataOf(e,'frame').camera===cameras.at(-1) && dataOf(e,'frame').buffer_index===59)!;
+  dataOf(last,'frame').sim_step=118;
+  assert.equal(playbackMap(buildEpisodeModel(r.events),names[0],2).prompts[0].time,1);
+  assert.equal(playbackMap(buildEpisodeModel(r.events),names.at(-1)!,2).prompts[0].time,.5);
+ }
+});
+
+test('missing or unusable mapped camera frames may borrow only identical anchors across the remaining cameras',()=>{
+ for(const cameras of [['left_wrist','right_wrist'],['ego','left_wrist','right_wrist']]){
+  const r=cameraRecording(cameras,['missing_main']);
+  let model=buildEpisodeModel(r.events);
+  assert.equal(cameraForVideo(model,'video_combined.mp4'),'missing_main');
+  assert.equal(playbackMap(model,'video_combined.mp4',2).prompts[0].time,1);
+  r.add('frame',{camera:'missing_main',epoch:0,buffer_index:0,sim_step:null});
+  assert.equal(playbackMap(buildEpisodeModel(r.events),'video_combined.mp4',2).reason,null);
+  const last=r.events.find(e=>e.event_type==='frame' && dataOf(e,'frame').camera===cameras.at(-1) && dataOf(e,'frame').buffer_index===59)!;
+  dataOf(last,'frame').sim_step=58;
+  model=buildEpisodeModel(r.events);
+  assert.match(playbackMap(model,'video_combined.mp4',2).reason??'',/一意に対応/);
+ }
+ const wrist=cameraRecording(['agentview'],['agentview','hand_custom']);
+ assert.equal(playbackMap(buildEpisodeModel(wrist.events),'video_combined_wrist.mp4',2).reason,null);
+});
+
+test('multiple cameras retain epoch, reset, duplicate, monotonicity, duration and partial-anchor safeguards',()=>{
+ const cameras=['ego','left_wrist','right_wrist'];
+ for(const failure of ['epoch','reset','duplicate','monotonic','duration','partial']){
+  const r=cameraRecording(cameras,['main']);
+  const frames=r.events.filter(e=>e.event_type==='frame' && dataOf(e,'frame').camera==='ego');
+  if(failure==='epoch')dataOf(frames[0],'frame').epoch=1;
+  if(failure==='reset')r.add('env_reset',{});
+  if(failure==='duplicate')r.add('frame',{camera:'ego',epoch:0,buffer_index:0,sim_step:3});
+  if(failure==='monotonic')dataOf(frames[1],'frame').sim_step=-1;
+  if(failure==='partial')dataOf(frames[0],'frame').buffer_index=3;
+  assert.ok(playbackMap(buildEpisodeModel(r.events),'video_combined_ego.mp4',failure==='duration'?4:2).reason,failure);
+ }
+ // A partially recorded selected camera is never replaced by a better one.
+ const partial=cameraRecording(['agentview','robot0_eye_in_hand'],['agentview','robot0_eye_in_hand']);
+ partial.events=partial.events.filter(e=>!(e.event_type==='frame' && dataOf(e,'frame').camera==='robot0_eye_in_hand' && dataOf(e,'frame').buffer_index===59));
+ assert.match(playbackMap(buildEpisodeModel(partial.events),'video_combined_wrist.mp4',2).reason??'',/フレーム記録が不足/);
 });

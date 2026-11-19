@@ -3,12 +3,15 @@ import { evalApi } from '../evals/api';
 import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
 import { ApiError, episodeFileUrl, fetchJsonFile, traceApi, type EpisodeRef } from './api';
 import { TaskOutcomeBadge } from './components/TaskOutcomeBadge';
+import { cameraForVideo, cameraLabel, mainCameraOf } from './cameras';
+import { episodeVideos } from './playback';
+import { lastRecordedFrame } from './trialSummary';
 import { ValueView } from './components/ValueView';
 import { applyDataAssets, pendingAsset } from './dataAsset';
 import { fmtDuration } from './format';
 import { useAsync, useDataAssets, useEpisodeEvents, useFullText, useInterval, useUrlParams } from './hooks';
 import { useMissingEpisodeImport } from './importEpisode';
-import { buildEpisodeModel, type EpisodeModel } from './model';
+import { buildEpisodeModel, camerasOf, type EpisodeModel } from './model';
 import { episodeVerdict } from './outcome';
 import { recordedTurns } from './replay';
 import { alignComparisonCalls, comparisonCalls, comparisonTurnLabel, firstDifferenceDetails, trialEventUrl,
@@ -31,14 +34,14 @@ function durationOf(trial: TrialComparisonData): number | null {
   const start = trial.summary.start_wall_time, end = trial.summary.end_wall_time;
   return typeof start === 'number' && typeof end === 'number' && end >= start ? end - start : null;
 }
-function TrialHeading({ trial, label }: { trial: TrialComparisonData; label: string }) {
+function TrialHeading({ trial, label, camera }: { trial: TrialComparisonData; label: string; camera?: string | null }) {
   const turns = recordedTurns(trial.model);
   const duration = durationOf(trial);
   return <div className="comparison-trial-heading">
     <strong>{label}</strong><TaskOutcomeBadge verdict={episodeVerdict(trial.summary, trial.records)} />
     {turns.length > 0 && <span>{turns.length}ターン</span>}
     {duration !== null && <span>{fmtDuration(duration)}</span>}
-    <a href={trialEventUrl(trial.ref.runId, trial.ref.episodeId)}>試行を開く</a>
+    <a href={trialEventUrl(trial.ref.runId, trial.ref.episodeId, undefined, camera)}>試行を開く</a>
   </div>;
 }
 const KIND_LABELS = { model: 'モデル', api: 'API', service: 'サービス', decision: '判断', code: 'コード' };
@@ -67,16 +70,30 @@ function detailValue(trial: TrialComparisonData, call: ComparisonCall, raw: unkn
   if (call.kind === 'model' || call.kind === 'code') return <pre>{fallback || '未記録'}</pre>;
   return <div className="comparison-call-value"><ValueView value={raw} ep={trial.ref} /></div>;
 }
-function callDetails(trial: TrialComparisonData, call: ComparisonCall | null, side: string) {
+function callDetails(trial: TrialComparisonData, call: ComparisonCall | null, side: string, camera?: string | null) {
   if (!call) return <div className="comparison-gap">{side}：対応する呼び出しなし</div>;
   return <div className="comparison-call-details">
-    <a href={trialEventUrl(trial.ref.runId, trial.ref.episodeId, call.eventId)} aria-label={`${side} ${call.name} のログを見る`}>{side}の詳細ログを開く</a>
+    <a href={trialEventUrl(trial.ref.runId, trial.ref.episodeId, call.eventId, camera)} aria-label={`${side} ${call.name} のログを見る`}>{side}の詳細ログを開く</a>
     <dl><dt>引数</dt><dd>{detailValue(trial, call, call.argumentsValue, call.arguments)}</dd>
       <dt>返った内容</dt><dd>{detailValue(trial, call, call.resultValue, call.returned)}</dd></dl>
   </div>;
 }
 
-export function SideBySideComparison({ baseline, current }: { baseline: TrialComparisonData; current: TrialComparisonData }) {
+export function SideBySideComparison({ baseline, current, camera: sharedCamera, onCameraChange }: {
+  baseline: TrialComparisonData; current: TrialComparisonData;
+  camera?: string | null; onCameraChange?: (camera: string) => void;
+}) {
+  const [localCamera, setLocalCamera] = useState<string | null>(null);
+  const cameras = [...new Set([...camerasOf(current.model),
+    ...episodeVideos(current.ref, current.model).map(video => cameraForVideo(current.model, video.name)).filter((name): name is string => name !== null)])];
+  const baselineCameras = [...new Set([...camerasOf(baseline.model),
+    ...episodeVideos(baseline.ref, baseline.model).map(video => cameraForVideo(baseline.model, video.name)).filter((name): name is string => name !== null)])];
+  const requestedCamera = sharedCamera ?? localCamera;
+  const camera = requestedCamera && cameras.includes(requestedCamera) ? requestedCamera : mainCameraOf(current.model);
+  const baselineCamera = camera && baselineCameras.includes(camera) ? camera : mainCameraOf(baseline.model);
+  const currentFrame = lastRecordedFrame(current.model, camera);
+  const baselineFrame = lastRecordedFrame(baseline.model, baselineCamera);
+  const baselineFallback = !!(camera && baselineCamera && camera !== baselineCamera);
   const [onlyDifferent, setOnlyDifferent] = useState(false);
   const [includeModelText, setIncludeModelText] = useState(false);
   const [expandedRows, setExpandedRows] = useState<ReadonlySet<string>>(() => new Set());
@@ -90,6 +107,10 @@ export function SideBySideComparison({ baseline, current }: { baseline: TrialCom
     <div className="comparison-toolbar">
       <h1>同じseedで比べる {current.summary.task && <code>{current.summary.task}</code>}
         {typeof current.summary.seed === 'number' && <span> · seed {current.summary.seed}</span>}</h1>
+      {cameras.length > 1 && <label className="comparison-camera">カメラ <select aria-label="比較のカメラ" title={camera ?? undefined} value={camera ?? ''}
+        onChange={event => { setLocalCamera(event.target.value); onCameraChange?.(event.target.value); }}>
+        {cameras.map(name => <option key={name} value={name} title={name}>{cameraLabel(name)}</option>)}
+      </select></label>}
       <div className="comparison-switches">
         <button type="button" role="switch" aria-checked={onlyDifferent} onClick={() => setOnlyDifferent(value => !value)}>
           <span className="comparison-switch-track" aria-hidden="true"><span /></span>違う行だけ表示
@@ -105,7 +126,15 @@ export function SideBySideComparison({ baseline, current }: { baseline: TrialCom
     </div> : <p className="comparison-note" role="status">{rows.length
       ? hasModelTextDifferences ? 'API の呼び出しと判断は同じです（モデルの文章だけが違います）' : 'API の呼び出しと判断は同じです'
       : '比較できる呼び出しが記録されていません。'}</p>}
-    <div className="comparison-headings"><TrialHeading trial={baseline} label="基準" /><TrialHeading trial={current} label="今回" /></div>
+    <div className="comparison-headings"><TrialHeading trial={baseline} label="基準" camera={baselineCamera} /><TrialHeading trial={current} label="今回" camera={camera} /></div>
+    {(baselineFrame || currentFrame || cameras.length > 0 || baselineCameras.length > 0) && <div className="comparison-frames" aria-label="最後の画像の比較">
+      {[{ trial: baseline, frame: baselineFrame, label: '基準', camera: baselineCamera }, { trial: current, frame: currentFrame, label: '今回', camera }].map(side => <figure key={side.label}>
+        {side.frame ? <img src={episodeFileUrl(side.trial.ref, side.frame.path)} alt={`最後の画像（${side.label}）`} loading="lazy" /> : <p>画像は記録されていません。</p>}
+        <figcaption>{side.label}{side.camera && <> · <span title={side.camera}>{cameraLabel(side.camera)}</span></>}
+          {side.frame && <> · <a href={trialEventUrl(side.trial.ref.runId, side.trial.ref.episodeId, side.frame.event.event_id, side.camera)}>ログで見る</a></>}</figcaption>
+        {side.label === '基準' && baselineFallback && <small>基準に同じカメラがないため、<span title={baselineCamera!}>{cameraLabel(baselineCamera!)}</span>を表示しています。</small>}
+      </figure>)}
+    </div>}
     <div className="comparison-rows" aria-label="ターンごとの呼び出しの比較">
       {visibleRows.map(({ row, index }) => {
         const key = `${row.baseline?.eventId ?? '-'}:${row.current?.eventId ?? '-'}`;
@@ -128,7 +157,7 @@ export function SideBySideComparison({ baseline, current }: { baseline: TrialCom
             <span className="comparison-expand-icon" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
           </button>
           <div className="comparison-row-details" id={detailsId} hidden={!expanded}>
-            {expanded && <>{callDetails(baseline, row.baseline, '基準')}{callDetails(current, row.current, '今回')}</>}
+            {expanded && <>{callDetails(baseline, row.baseline, '基準', baselineCamera)}{callDetails(current, row.current, '今回', camera)}</>}
           </div>
         </section>;
       })}
@@ -186,7 +215,7 @@ function useComparisonTrial(runId: string | null, episodeId: string | null) {
 }
 
 export default function SideBySidePage() {
-  const [params] = useUrlParams();
+  const [params, setParams] = useUrlParams();
   const runId = params.get('run'), episodeId = params.get('episode');
   const baselineRunId = params.get('baseline_run'), baselineEpisodeId = params.get('baseline_episode');
   const current = useComparisonTrial(runId, episodeId);
@@ -204,7 +233,7 @@ export default function SideBySidePage() {
       {!current.data && <div className="comparison-loading" role="status">今回：{current.message}
         {!current.importing?.busy && <button type="button" onClick={current.retry}>再読み込み</button>}</div>}
       {(baseline.partial || current.partial) && <p className="comparison-first-banner">一部の記録が欠けているため、読み込めた要約で比較しています。</p>}
-      {baseline.data && current.data && <SideBySideComparison baseline={baseline.data} current={current.data} />}
+      {baseline.data && current.data && <SideBySideComparison baseline={baseline.data} current={current.data} camera={params.get('camera')} onCameraChange={camera => setParams({ camera })} />}
     </>}
   </main>;
 }

@@ -7,7 +7,7 @@ import { recordedTurns, turnOf } from './replay';
 import { dataOf, type EpisodeSummary, type TextValue, type TraceEvent } from './types';
 
 export interface SummaryFact { event: TraceEvent; text: string; turn: number | null; value?: TextValue | null }
-export interface SummaryFrame { event: TraceEvent; path: string }
+export interface SummaryFrame { event: TraceEvent; path: string; camera?: string | null }
 export interface TurnFlow { turn: number; labels: string[]; event: TraceEvent }
 
 function object(value: unknown): Record<string, unknown> {
@@ -38,13 +38,15 @@ export function isRecordedError(event: TraceEvent): boolean {
   const data = object(event.data);
   return event.status === 'error' || ['api_call_error', 'service_call_error', 'model_error'].includes(event.event_type) || !!data.exception;
 }
-export function lastRecordedFrame(model: EpisodeModel): SummaryFrame | null {
+export function lastRecordedFrame(model: EpisodeModel, camera?: string | null): SummaryFrame | null {
   // Snapshots are harness renders too. Exclude model-input and perception artifacts.
   for (const event of [...model.events].sort((a, b) => b.seq - a.seq)) {
     if (event.event_type !== 'frame' && event.event_type !== 'observation_snapshot') continue;
+    const recordedCamera = object(event.data).camera;
+    if (camera && recordedCamera !== camera) continue;
     const image = event.artifacts?.find(a => a.path && a.written !== false &&
       (a.mime?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(a.path)));
-    if (image?.path) return { event, path: image.path };
+    if (image?.path) return { event, path: image.path, camera: typeof recordedCamera === 'string' ? recordedCamera : null };
   }
   // Older or partial records can retain a written frame reference without its
   // separate frame event. Keep that reference anchored to the call that saved it.
@@ -53,7 +55,9 @@ export function lastRecordedFrame(model: EpisodeModel): SummaryFrame | null {
     for (const value of [data.frame_ref, data.frame_refs]) {
       for (const ref of Array.isArray(value) ? value : [value]) {
         const image = object(ref);
-        if (typeof image.path === 'string' && image.written === true) return { event, path: image.path };
+        if ((!camera || image.camera === camera) && typeof image.path === 'string' && image.written === true) {
+          return { event, path: image.path, camera: typeof image.camera === 'string' ? image.camera : null };
+        }
       }
     }
   }
