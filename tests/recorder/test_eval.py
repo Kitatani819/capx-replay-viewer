@@ -250,7 +250,8 @@ def test_automatic_destination_keeps_user_permissions_and_group_warning(tmp_path
     shared_root = tmp_path / "traces"
     user_root = shared_root / "test-user"
     assert stat.S_IMODE(shared_root.stat().st_mode) == 0o2770
-    assert stat.S_IMODE(user_root.stat().st_mode) == 0o2700
+    # Linux copies the parent's setgid bit to new subdirectories; macOS does not.
+    assert stat.S_IMODE(user_root.stat().st_mode) & 0o777 == 0o700
     assert "teammates will not see this evaluation" in capsys.readouterr().err
     assert read_record(user_root)["status"] == "completed"
 
