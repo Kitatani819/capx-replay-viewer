@@ -6,6 +6,7 @@ import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type Ev
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
 import { TrialConditions } from './TrialConditions';
+import { SuccessTrend } from './SuccessTrend';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
@@ -74,7 +75,7 @@ export function EvalListPage() {
     {listing.loading && !listing.data && <p role="status">評価を読み込み中…</p>}
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
-    {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
+    {listing.data && (listing.data.evals.length ? <><SuccessTrend entries={listing.data.evals} /><EvalListTable entries={listing.data.evals} /></> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
 const WORD_LEGEND = `${Object.entries(CELL_LEGEND).map(([word, explanation]) => word === explanation ? word : `${word}＝${explanation}`).join('　')}　空欄＝記録なし`;
