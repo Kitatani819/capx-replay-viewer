@@ -240,3 +240,10 @@ def test_missing_completed_episode_cannot_be_rerun_as_if_unfinished(tmp_path, cl
     shutil.rmtree(root / value["eval_id"] / "trial-1-1")
     with pytest.raises(ValueError, match="completed trial records are missing"):
         wrapper.run_eval([sys.executable, "-c", "pass"], trace_root=root, repo=clean_repo, resume=value["eval_id"])
+
+
+def test_resumed_segment_supersedes_legacy_missing_segment_after_clock_rollback():
+    old = {"task": "cube", "condition": None, "seed": 401, "start_wall_time": 1000}
+    new = {"task": "cube", "condition": None, "seed": 401, "eval_segment": 2, "start_wall_time": 900}
+    for episodes in ([old, new], [new, old]):
+        assert evals.latest_logical_episodes(episodes) == [new]

@@ -526,6 +526,9 @@ def latest_logical_episodes(episodes: Sequence[dict[str, Any]]) -> list[dict[str
         if previous is not None:
             for field in ("eval_segment", "start_wall_time", "runner_invocation", "attempt_index"):
                 left, right = episode.get(field), previous.get(field)
+                if field == "eval_segment":
+                    left = left if type(left) is int and 0 <= left <= 1000 else 0
+                    right = right if type(right) is int and 0 <= right <= 1000 else 0
                 if _number(left) and _number(right) and left != right:
                     later = left > right
                     break

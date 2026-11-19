@@ -36,3 +36,10 @@ test('a newer segment wins even when the wall clock moved backwards', () => {
   const now = { ...common, episode_id: 'new', eval_segment: 2, start_wall_time: 900, verdict: 'success' as const };
   assert.equal(comparisonTable([now, old], []).currentTrials[0].episode_id, 'new');
 });
+
+test('a resumed segment supersedes a legacy attempt with no segment number', () => {
+  const common = { task: 'cube', condition: null, seed: 1, verdict: 'failure', status: 'ended', trace_complete: true, local_state: 'local', attempt: 1 } as const;
+  const old = { ...common, episode_id: 'old', start_wall_time: 1000 };
+  const now = { ...common, episode_id: 'new', eval_segment: 2, start_wall_time: 900, verdict: 'success' as const };
+  for (const trials of [[now, old], [old, now]]) assert.equal(comparisonTable(trials, []).currentTrials[0].episode_id, 'new');
+});
