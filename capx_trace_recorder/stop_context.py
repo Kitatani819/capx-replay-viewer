@@ -10,6 +10,7 @@ import datetime as dt
 import os
 import re
 import sys
+import time
 from typing import Any, Mapping
 
 
@@ -91,8 +92,15 @@ def trial_context(env: Any, *, turns_used: int | None = None, include_usage: boo
     low = _fields(env).get("low_level_env")
     fields = _fields(low)
     add("step_limit", fields.get("max_steps"), "low_level_env.max_steps")
+    add("step_limit", fields.get("_capx_trial_steplimit"), "low_level_env._capx_trial_steplimit")
     if include_usage:
         add("steps_used", fields.get("_sim_step_count"), "low_level_env._sim_step_count")
+        add("steps_used", fields.get("_capx_steps_used"), "low_level_env._capx_steps_used")
+        if type(fields.get("_capx_success")) is bool:
+            context["sticky_success"] = fields["_capx_success"]
+    policy = fields.get("_capx_success_policy")
+    if policy in ("per_cycle_sticky", "block_end"):
+        context["success_policy"] = policy
     simulator = _fields(fields.get("robosuite_env"))
     add("env_horizon", simulator.get("horizon"), "low_level_env.robosuite_env.horizon")
     if include_usage:
@@ -104,6 +112,11 @@ def trial_context(env: Any, *, turns_used: int | None = None, include_usage: boo
     ):
         module = sys.modules.get(module_name)
         add(field, _fields(module).get(constant), f"{module_name}.{constant}")
+    runner = _fields(sys.modules.get("capx.envs.runner"))
+    add("evaluation_budget_s", runner.get("EVAL_BUDGET_SECONDS"), "capx.envs.runner.EVAL_BUDGET_SECONDS")
+    started = _number(runner.get("EVAL_BUDGET_STARTED_AT"))
+    if include_usage and started is not None and started > 0:
+        add("evaluation_elapsed_s", max(0, time.time() - started), "capx.envs.runner.EVAL_BUDGET_STARTED_AT")
     if session is not None:
         # Web trials have a different loop bound and a per-code-block timeout.
         context.pop("trial_time_limit_s", None)

@@ -742,7 +742,7 @@ export interface RunListResponse {
 export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'unknown';
 export type EndCauseCode = 'success' | 'step_limit' | 'env_horizon' | 'trial_time_limit' | 'code_time_limit' | 'turn_limit' |
   'regeneration_limit' | 'finish_unmet' | 'parser_finish' | 'execution_error' | 'simulator_crash' | 'slurm_time_limit' |
-  'manual_stop' | 'replaced' | 'recording_incomplete' | 'unknown';
+  'manual_stop' | 'replaced' | 'recording_incomplete' | 'evaluation_budget' | 'unknown';
 export interface EndCause {
   code: EndCauseCode;
   label: string;
@@ -773,6 +773,13 @@ export interface EndClassification {
   /** Absent from older viewer servers. The browser does not infer causes. */
   cause?: EndCause | null;
   rule_differences?: RuleDifference[];
+  conditions?: {
+    step_limit?: number;
+    steps_used?: number;
+    evaluation_budget_s?: number;
+    evaluation_elapsed_s?: number;
+    success_policy?: 'per_cycle_sticky' | 'block_end';
+  };
 }
 
 /** Summary of one episode (episode.json plus the derived status, 9.2). */

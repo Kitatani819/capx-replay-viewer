@@ -4,6 +4,7 @@ import type { MouseEvent, ReactNode } from 'react';
 import { evalApi } from '../../evals/api';
 import type { EvalDetail, EvalTrial } from '../../evals/api';
 import { causeEvidence, causeHeadline, ruleSourceHref } from '../../evals/failureReasons';
+import { TrialConditions } from '../../evals/TrialConditions';
 import { ApiError, episodeFileUrl, traceApi, type EpisodeRef } from '../api';
 import { fmtDuration } from '../format';
 import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
@@ -101,6 +102,7 @@ export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOption
             {!!cause?.missing_evidence?.length && <p>不足している記録：{cause.missing_evidence.join('、')}</p>}
           </details>}
         </dd></div>}
+        {ending?.conditions && Object.keys(ending.conditions).length > 0 && <div><dt>評価条件</dt><dd><TrialConditions ending={ending} /></dd></div>}
         {facts.turnCount !== null && <div><dt>ターン</dt><dd>{facts.turnCount}（書き直し {facts.regenerationCount}回）</dd></div>}
         {facts.durationSeconds !== null && <div><dt>かかった時間</dt><dd>{fmtDuration(facts.durationSeconds)}</dd></div>}
       </dl>}

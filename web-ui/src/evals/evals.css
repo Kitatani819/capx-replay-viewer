@@ -45,3 +45,6 @@
 .eval-legend { margin: 16px 0; color: #55675a; font-size: 13px; }
 .eval-empty { margin: 30px 0; }
 @media (max-width: 700px) { .eval-page { padding: 24px 16px; } .eval-page th, .eval-page td { padding: 12px; } .eval-score { font-size: 16px; } }
+
+.trial-conditions { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: normal; line-height: 1.5; color: #526158; }
+.eval-cell .trial-conditions { max-width: 190px; padding: 4px; font-size: 11px; }

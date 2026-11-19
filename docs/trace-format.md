@@ -148,8 +148,8 @@ module constants only: it calls no simulator API and imports no CaP-X module.
 
 | Field | Recorded fact |
 |---|---|
-| `step_limit` | `low_level_env.max_steps` |
-| `steps_used` | Final `low_level_env._sim_step_count`; absent at start, before reset |
+| `step_limit` | `low_level_env._capx_trial_steplimit` when explicitly provided by a cycle limiter, otherwise `low_level_env.max_steps` |
+| `steps_used` | Final `low_level_env._capx_steps_used` when provided, otherwise `_sim_step_count`; absent at start, before reset |
 | `env_horizon` | `low_level_env.robosuite_env.horizon`, when directly available |
 | `horizon_steps_used` | Final underlying `low_level_env.robosuite_env.timestep`, allowing an early horizon to be distinguished from the wrapper's step limit |
 | `trial_time_limit_s` | Loaded `capx.envs.runner.TRIAL_TIMEOUT_SECONDS` |
@@ -158,6 +158,10 @@ module constants only: it calls no simulator API and imports no CaP-X module.
 | `turns_used` | Number of code blocks actually started (`n_code_blocks`) |
 | `model_turn_index` | Recorder's final multi-turn decision index |
 | `code_time_limit_s` | Web session's actual `execution_timeout` (independent per-code-block timeout) |
+| `success_policy` | Explicit `low_level_env._capx_success_policy`: `per_cycle_sticky` or `block_end`; only the former removes the local block-end success warning |
+| `sticky_success` | Final boolean `low_level_env._capx_success`, when recorded; this metadata alone does not replace an authoritative trial verdict |
+| `evaluation_budget_s` | Loaded `capx.envs.runner.EVAL_BUDGET_SECONDS`, a shared evaluation budget, not a per-trial alarm |
+| `evaluation_elapsed_s` | End time minus loaded epoch `capx.envs.runner.EVAL_BUDGET_STARTED_AT`, clamped at zero |
 | `sources` | Map from numeric field name to the actual attribute/constant read |
 | `job` | Optional scheduler provenance described below |
 

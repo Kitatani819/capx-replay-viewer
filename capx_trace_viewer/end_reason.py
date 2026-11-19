@@ -37,6 +37,7 @@ END_CAUSE_LABELS = {
     "recording_incomplete": "記録が途中で終わった", "unknown": "終了原因を特定できない",
     "parser_finish": "終了と解釈されたが未達成",
     "env_horizon": "環境のステップ期限に到達",
+    "evaluation_budget": "評価全体の時間制限に到達",
 }
 # One vocabulary for cell words and their explanations, mirrored in TypeScript.
 END_CAUSE_WORDS = {
@@ -56,6 +57,7 @@ END_CAUSE_WORDS = {
     "unknown": ("不明", "終了原因を特定する記録が足りない"),
     "parser_finish": ("終了扱い", "続行の指示がなく終了と扱われたが課題は未達成"),
     "env_horizon": ("環境期限", "シミュレーター自身のステップ数の期限に到達"),
+    "evaluation_budget": ("評価時間", "評価全体の時間制限に到達"),
 }
 END_CAUSE_CELL_WORDS = {code: words[0] for code, words in END_CAUSE_WORDS.items()}
 # Include compatibility words used when an older server has no detailed cause.
@@ -108,7 +110,7 @@ def _rule_differences(task: Any, context: dict[str, Any], *,
         differences.append({"field": "trial_time_limit_s", "recorded": trial,
                             "official": None, "source": _public_source("docs/taskpacks.md:13"),
                             "explanation": f"この評価は1試行を {_fmt(trial)} 秒で打ち切りますが、公式には1試行ごとの時間制限はありません（評価全体の時間制限があります）。"})
-    if local_block_checks:
+    if local_block_checks and context.get("success_policy") != "per_cycle_sticky":
         differences.append({"field": "success_timing", "recorded": None, "official": None,
                             "source": _public_source("capx/gateway/gateway.py:234"),
                             "explanation": "公式はロボットを動かす途中で一度でも成功すれば達成としますが、この評価はコードの実行が終わった時点でのみ判定するため、途中の成功が取り消されると失敗になります。"})
@@ -280,7 +282,13 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
                  "limit": limit, "used": used, "source": rule_source,
                  "evidence": fields or {}, "missing_evidence": list(missing)}
         effective_verdict = "unknown" if verdict == "running" and source == "scheduler" else verdict
+        conditions = {key: value for key, value in context.items()
+                      if key in {"step_limit", "steps_used", "evaluation_budget_s", "evaluation_elapsed_s"}
+                      and _number(value)}
+        if context.get("success_policy") in ("per_cycle_sticky", "block_end"):
+            conditions["success_policy"] = context["success_policy"]
         return {"reason": reason, "label": END_LABELS[reason], "evidence": evidence, "verdict": effective_verdict,
+                **({"conditions": conditions} if conditions else {}),
                 "cause": cause, "rule_differences": differences}
 
     crash_flag = (context.get("env_crashed") is True or harness.get("env_crashed") is True
@@ -310,6 +318,12 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     if verdict == "success":
         return result("success", verdict_source, evaluator or end, task_success=True,
                       fields={f"{verdict_source}.task_success": True})
+    if harness.get("budget_exhausted") is True or outcome.get("budget_exhausted") is True:
+        return result("timeout", "trace", end, code="evaluation_budget",
+                      explanation="評価全体の時間制限に達したため終了しました。残りの試行も失敗として数えます。",
+                      limit=context.get("evaluation_budget_s"), used=context.get("evaluation_elapsed_s"),
+                      rule_source="docs/taskpacks.md:13",
+                      fields={"budget_exhausted": True})
     if end_reason in ("stopped_by_user", "cancelled_replaced"):
         return result("timeout", "trace", end,
                       code="manual_stop" if end_reason == "stopped_by_user" else "replaced",

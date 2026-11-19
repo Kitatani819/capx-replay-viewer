@@ -614,3 +614,27 @@ def test_historical_retry_note_does_not_invent_effective_attempt_limit():
     assert "この評価は時間切れの試行を" not in retry["explanation"]
     raw["attempt_index"] = 1
     assert "trial_attempt_limit" not in {row["field"] for row in classify_trial_end(summary(raw))["rule_differences"]}
+
+
+def test_explicit_cycle_policy_removes_only_obsolete_success_warning():
+    raw = metadata(task='libero_10_0', source='envs.runner',
+                   stop_context={'step_limit': 8000, 'steps_used': 12, 'trial_time_limit_s': 0,
+                                 'trial_attempt_limit': 1, 'success_policy': 'per_cycle_sticky',
+                                 'evaluation_budget_s': 600, 'evaluation_elapsed_s': 123})
+    result = classify_trial_end(summary(raw), [event('evaluator_result', 1, source='CodeExecutionEnvBase.step')])
+    assert result['rule_differences'] == []
+    assert result['conditions'] == {'step_limit': 8000, 'steps_used': 12, 'success_policy': 'per_cycle_sticky',
+                                     'evaluation_budget_s': 600, 'evaluation_elapsed_s': 123}
+    raw['stop_context']['step_limit'] = 4000
+    assert [d['field'] for d in classify_trial_end(summary(raw))['rule_differences']] == ['step_limit']
+
+
+def test_explicit_budget_cut_is_distinct_from_per_trial_timeout_and_preserves_success():
+    raw = metadata(harness_summary={'task_completed': False, 'budget_exhausted': True},
+                   stop_context={'evaluation_budget_s': 600, 'evaluation_elapsed_s': 601})
+    result = classify_trial_end(summary(raw))
+    assert result['verdict'] == 'failure'
+    assert result['cause']['code'] == 'evaluation_budget'
+    assert result['cause']['limit'] == 600
+    raw['harness_summary']['task_completed'] = True
+    assert classify_trial_end(summary(raw))['cause']['code'] == 'success'
