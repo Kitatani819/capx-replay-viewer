@@ -373,6 +373,7 @@ def test_summary_waits_for_workers_after_leader_exits(tmp_path, monkeypatch):
             raise ProcessLookupError
 
     monkeypatch.setattr(wrapper, "git_revision", lambda _repo, **_kwargs: None)
+    monkeypatch.setattr(wrapper.eval_resume, "machine_id", lambda: "synthetic-supervisor-test")
     monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
     monkeypatch.setattr(wrapper.os, "killpg", killpg)
     assert wrapper.run_eval(["evaluation"], trace_root=tmp_path, worker_wait_timeout=1) == -signal.SIGTERM
@@ -399,6 +400,7 @@ def test_worker_wait_timeout_is_bounded_and_recorded(tmp_path, monkeypatch):
         clock[0] += duration
 
     monkeypatch.setattr(wrapper, "git_revision", lambda _repo, **_kwargs: None)
+    monkeypatch.setattr(wrapper.eval_resume, "machine_id", lambda: "synthetic-supervisor-test")
     monkeypatch.setattr(wrapper.subprocess, "Popen", lambda *_args, **_kwargs: Child())
     monkeypatch.setattr(wrapper.os, "killpg", lambda *args: checks.append(args))
     monkeypatch.setattr(wrapper.time, "monotonic", lambda: clock[0])
