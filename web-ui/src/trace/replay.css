@@ -57,6 +57,8 @@
 .replay-warning, .replay-sync-warning { color: #875a12; font-size: 14px; }
 .replay-sync-warning { padding: 8px 12px; margin-bottom: 12px; background: #f8f0df; border-radius: 5px; }
 .replay-workspace > .replay-layout { margin: 26px 42px 20px; align-items: flex-start; }
+/* Room to scroll past the end, so the bottom of the log and details can be read at eye level. */
+.replay-workspace::after { content: ''; display: block; flex-shrink: 0; height: 30dvh; }
 .replay-workspace .replay-layout > [role="separator"] { width: 32px; align-self: stretch; background: transparent; overflow: hidden; }
 .replay-workspace .replay-layout > [role="separator"]:hover { background: linear-gradient(90deg, transparent 47%, #c2d1bf 47%, #c2d1bf 53%, transparent 53%); }
 .replay-workspace .replay-layout > .replay-left { max-width: calc(100% - 452px); }

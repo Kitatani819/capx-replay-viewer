@@ -379,7 +379,20 @@ export default function TraceViewerPage() {
     const details = layout.querySelector<HTMLElement>('.replay-details');
     let documentTop = 0;
     let detailsHeight = 0;
+    let fitTop = -1;
+    const updateFit = () => {
+      // A layout that starts near the top fits the first screen under the header. One pushed
+      // down by the trial summary (which loads after this effect first runs) is sized to a
+      // whole screen instead, so the page scrolls to it rather than squeezing it.
+      const top = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
+      const next = top <= window.innerHeight * 0.3 ? top : 16;
+      if (next !== fitTop) {
+        fitTop = next;
+        layout.style.setProperty('--replay-layout-top', `${fitTop}px`);
+      }
+    };
     const updateVisibleHeight = () => {
+      updateFit();
       const room = Math.min(window.innerHeight + window.scrollY - documentTop, detailsHeight);
       layout.style.setProperty('--replay-visible-column', `${Math.floor(room)}px`);
     };
@@ -388,7 +401,6 @@ export default function TraceViewerPage() {
       // additional space revealed by scrolling alongside the details column.
       documentTop = Math.ceil(layout.getBoundingClientRect().top + window.scrollY);
       detailsHeight = details?.offsetHeight ?? 0;
-      layout.style.setProperty('--replay-layout-top', `${documentTop}px`);
       updateVisibleHeight();
     };
     measure();
