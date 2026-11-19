@@ -65,6 +65,7 @@ def auto_source(tmp_path, monkeypatch):
     ssh = tmp_path / "fake_ssh"
     ssh.write_text(
         '#!/bin/sh\n'
+        'if [ -n "$CAPX_GMO_TEST_HOME" ]; then export HOME="$CAPX_GMO_TEST_HOME"; fi\n'
         'if [ "$1" = "-l" ]; then shift 2; fi\n'
         'shift\n'
         'case "$*" in\n'
@@ -79,7 +80,7 @@ def auto_source(tmp_path, monkeypatch):
     monkeypatch.setenv("CAPX_GMO_CONFIG", str(tmp_path / "config" / "gmo.json"))
     monkeypatch.setenv("CAPX_GMO_SSH_COMMAND", str(ssh))
     monkeypatch.setenv("CAPX_GMO_TEST_SSH_LOG", str(log))
-    settings = gmo.GmoSettings(host="fakehost", mine=(str(mine),), team=(str(team),))
+    settings = gmo.GmoSettings(host="fakehost", mine=(str(mine),), team=(str(team),), shared_root="")
     gmo.save_settings(settings)
     service = GmoService(tmp_path / "dest")
     try:
@@ -108,6 +109,44 @@ def test_auto_only_remote_and_stale_mine_one_listing(auto_source):
     assert log.read_text().splitlines().count("list") == 1
     assert log.read_text().splitlines().count("rsync") == 2
     assert service.run_auto_once()["queued_in_last_run"] == 0
+
+
+@pytest.mark.parametrize("importer", ["startup", "auto"])
+def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monkeypatch, importer):
+    if shutil.which("rsync") is None:
+        pytest.skip("rsync is not installed")
+    service, mine, _, log, _, _ = auto_source
+    gmo.config_path().unlink()
+    monkeypatch.delenv("CAPX_GMO_HOST", raising=False)
+    monkeypatch.delenv("CAPX_GMO_TRACES", raising=False)
+    remote_home = mine.parent / "remote_home"
+    remote_home.mkdir()
+    shared_storage = mine.parent / "storage"
+    shared_storage.mkdir()
+    (remote_home / "shared-storage").symlink_to(shared_storage, target_is_directory=True)
+    monkeypatch.setenv("CAPX_GMO_TEST_HOME", str(remote_home))
+    username = pwd.getpwuid(os.geteuid()).pw_name
+    own = _episode(shared_storage / "traces" / username, "ep_own")
+    _episode(shared_storage / "traces" / "team_user", "ep_team", run="team_run")
+    assert gmo.load_settings() == gmo.GmoSettings()
+    if importer == "auto":
+        state = service.run_auto_once()
+        assert state["enabled"] is True and state["interval_s"] == 120
+        assert state["queued_in_last_run"] == 1
+        _done(service)
+        assert log.read_text().splitlines() == ["list", "rsync"]
+    else:
+        assert gmo.prefetch_mine(service.dest) == 0
+        assert log.read_text().splitlines() == ["list", "list", "rsync"]
+    assert (service.dest / "run_a" / "ep_own" / "events.jsonl").read_bytes() == (own / "events.jsonl").read_bytes()
+    assert not (service.dest / "team_run").exists()
+    rows = {row["run_id"]: row for row in service.remote_rows()}
+    assert rows["run_a"]["path"] == str(own.parent.resolve())
+    assert rows["run_a"]["owner"] == username and rows["run_a"]["mine"] is True
+    assert rows["team_run"]["owner"] == "team_user" and rows["team_run"]["mine"] is False
+    service.enqueue("team_run", "ep_team")
+    _done(service)
+    assert (service.dest / "team_run" / "ep_team" / "events.jsonl").is_file()
 
 
 @pytest.mark.parametrize("username, teammate", [("trace_user", "team_user"), ("alice@domain", "alice")])

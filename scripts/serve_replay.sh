@@ -89,10 +89,7 @@ else
 fi
 # Check the real filesystem capabilities before copying files or starting HTTP.
 "$python_bin" -c 'from capx_trace_viewer.platform_support import require_supported_backend; require_supported_backend()'
-if [[ -n "$from_gmo" ]]; then
-    # Prefetch only mine; a missing configuration is a warning, not a launch failure.
-    "$python_bin" -c 'import sys; from pathlib import Path; from capx_trace_viewer.gmo import prefetch_mine; sys.exit(prefetch_mine(Path(sys.argv[1])))' "$trace_root"
-fi
+# --gmo imports mine before serving; a failed connection does not stop startup.
 if [[ -n "$uds" ]]; then
     # The server checks the directory (yours, mode 700) and prints how to forward the socket.
     server_args=(--viewer-only --uds "$uds" --trace-root "$trace_root" --runner-root "$runner_root")

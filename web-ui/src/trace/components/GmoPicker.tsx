@@ -28,8 +28,8 @@ interface SettingsDraft {
 
 function settingsDraft(settings?: GmoSettings): SettingsDraft {
   return {
-    sharedRoot: settings?.shared_root ?? '',
-    host: settings?.host ?? '', port: settings?.port?.toString() ?? '',
+    sharedRoot: settings?.shared_root ?? '~/shared-storage/traces',
+    host: settings?.host ?? 'gmo', port: settings?.port?.toString() ?? '',
     identityFile: settings?.identity_file ?? '', mine: settings?.mine.join('\n') ?? '',
     team: settings?.team.join('\n') ?? '',
     interval: String(settings?.interval_s ?? 120),
@@ -278,6 +278,9 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const secondsUntilNext = autoStatus?.next_run_at ? Math.max(0, Math.ceil((Date.parse(autoStatus.next_run_at) - now) / 1000)) : null;
   const autoError = autoActionError || auto.error || autoStatus?.last_error;
   const skippedLarge = new Set(autoStatus?.skipped_large.map(rowKey));
+  const usingDefaults = config?.settings.host === 'gmo' && config.settings.port === null
+    && config.settings.identity_file === null && config.settings.shared_root === '~/shared-storage/traces'
+    && !config.settings.mine.length && !config.settings.team.length && config.settings.interval_s === 120;
 
   return (
     <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-y-auto">
@@ -306,13 +309,14 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
       {settingsOpen && (
         <section aria-label="GMO の接続設定" className="flex-shrink-0 px-3 py-3 border-b border-surface-border bg-surface-raised">
           <h3 className="text-xs font-bold text-text-primary mb-2">GMO の接続設定</h3>
+          <p className="mb-2 text-xs text-text-secondary">{usingDefaults ? '既定の設定を使っています。Host gmo が設定済みなら入力は不要です。' : 'Host gmo が設定済みなら、接続先 gmo と共有フォルダー ~/shared-storage/traces で使えます。'}</p>
           {initialConfigError && <div role="alert" className="mb-2"><ErrorText>{initialConfigError}</ErrorText><SmallButton onClick={onRetryConfig}>設定を読み直す</SmallButton></div>}
           <form onSubmit={event => { event.preventDefault(); void saveAndCheck(); }}>
             <fieldset disabled={saving} className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-text-secondary">
               <div className="sm:col-span-2 space-y-1">
                 <label htmlFor="gmo-shared-root">共有の記録フォルダー</label>
-                <input id="gmo-shared-root" name="gmo-shared-root" aria-label="共有の記録フォルダー" aria-describedby="gmo-shared-root-help" value={draft.sharedRoot} onChange={event => updateDraft('sharedRoot', event.target.value)} placeholder="/path/to/shared/traces" className={`${INPUT_CLASS} font-mono`} />
-                <p id="gmo-shared-root-help" className="text-text-tertiary">記録の場所はここだけで設定できます。この下の GMO のユーザー名フォルダーから、自分とチームの記録を探します。絶対パスを 1 つ指定してください（省略可）。</p>
+                <input id="gmo-shared-root" name="gmo-shared-root" aria-label="共有の記録フォルダー" aria-describedby="gmo-shared-root-help" value={draft.sharedRoot} onChange={event => updateDraft('sharedRoot', event.target.value)} placeholder="~/shared-storage/traces" className={`${INPUT_CLASS} font-mono`} />
+                <p id="gmo-shared-root-help" className="text-text-tertiary">記録の場所はここだけで設定できます。この下の GMO のユーザー名フォルダーから、自分とチームの記録を探します。絶対パスか ~/ で始まるパスを 1 つ指定してください。~/ は GMO 側のホームです。空欄にすると共有フォルダーを使いません。</p>
               </div>
               <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="host-alias または user@host" className={INPUT_CLASS} /></label>
               <label className="space-y-1">ポート<input aria-label="ポート" name="gmo-port" type="number" min="1" max="65535" step="1" value={draft.port} onChange={event => updateDraft('port', event.target.value)} placeholder="SSH の設定を使う" className={INPUT_CLASS} /></label>
@@ -340,7 +344,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           {checkError && <div role="alert" className="mt-2"><ErrorText>{checkError}</ErrorText></div>}
           <p className="mt-3 text-[11px] text-text-secondary">自動取り込みは自分の記録だけが対象です。チームの試行は「取り込む」「更新を取り込む」で取り込めます。</p>
           <p className="mt-3 text-[11px] text-text-secondary">鍵は ssh-agent に読み込ませておく必要があります。この画面ではパスフレーズは聞けません。</p>
-          <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host host-alias\n  HostName host.example\n  User your-user\n  Port 22\n  IdentityFile /path/to/private_key'}</pre></details>
+          <details className="mt-2 text-[11px] text-text-tertiary"><summary className="cursor-pointer">~/.ssh/config の例</summary><pre className="mt-1 p-2 rounded bg-surface-sunken overflow-x-auto">{'Host gmo\n  HostName <host>\n  User <user>\n  Port <port>\n  IdentityFile ~/.ssh/id_ed25519_gmo\n  IdentitiesOnly yes'}</pre></details>
         </section>
       )}
       {listing.error && <div role="alert" className="px-3 py-2"><ErrorText>一覧を取得できませんでした：{listing.error}</ErrorText></div>}

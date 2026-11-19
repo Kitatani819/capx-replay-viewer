@@ -19,7 +19,7 @@ Usage: bash Start-Replay.sh [options]
   --trace-root PATH    Parent of recorded runs/episodes
   --runner-root PATH   Parent of legacy recorded runs
   --python PATH        Use a prepared Python 3.10-3.12 environment
-  --from-gmo           Prefetch configured mine recordings, show outputs/gmo/traces,
+  --from-gmo           Prefetch mine via gmo SSH alias, show outputs/gmo/traces,
                        and enable the GMO API (config file or CAPX_GMO_HOST/TRACES)
   --help               Show this help
 

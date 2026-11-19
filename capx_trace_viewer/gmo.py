@@ -36,6 +36,10 @@ SAFE_HOST = re.compile(r"[A-Za-z0-9._@-]+")
 MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
 MAX_INTERVAL_S = 24 * 60 * 60
+CONNECTION_ERROR = (
+    "GMOに接続できません。公式GENIACチュートリアルの Host gmo をSSH設定に追加するか、"
+    "接続設定で接続先を指定してください。"
+)
 
 # Runs on GMO with its python3: lists the runs under each trace root matching the
 # patterns, with the size and modification time of every regular file.
@@ -224,13 +228,13 @@ def main(argv: list[str] | None = None) -> int:
 # for scripts, but a browser cannot supply arbitrary ssh options to the server.
 @dataclass(frozen=True)
 class GmoSettings:
-    host: str = ""
+    host: str = "gmo"
     port: int | None = None
     identity_file: str | None = None
     mine: tuple[str, ...] = ()
     team: tuple[str, ...] = ()
     interval_s: int = 120
-    shared_root: str = ""
+    shared_root: str = "~/shared-storage/traces"
 
     @property
     def configured(self) -> bool:
@@ -251,7 +255,7 @@ class GmoSettings:
         unknown = set(value) - allowed
         if unknown:
             raise FetchError(f"Unknown setting: {sorted(unknown)[0]}")
-        host = value.get("host", "")
+        host = value.get("host", cls.host)
         if not isinstance(host, str) or (host and (host.startswith("-") or not SAFE_HOST.fullmatch(host))):
             raise FetchError("Invalid host: use a plain ssh alias or user@host")
         port = value.get("port")
@@ -260,11 +264,16 @@ class GmoSettings:
         identity = value.get("identity_file")
         if identity is not None and (not isinstance(identity, str) or not identity or "\x00" in identity):
             raise FetchError("identity_file must be a nonempty path")
-        shared_root = value.get("shared_root", "")
+        shared_root = value.get("shared_root", cls.shared_root)
+        # Only ~/ is allowed: ~other would select another account's home, and
+        # expansion must happen on GMO rather than on the viewer's computer.
+        shared_path = shared_root
+        if isinstance(shared_root, str) and shared_root.startswith("~/"):
+            shared_path = shared_root[1:]
         if not isinstance(shared_root, str) or (shared_root and (
-            not SAFE_REMOTE_PATH.fullmatch(shared_root) or ".." in shared_root.split("/")
+            not SAFE_REMOTE_PATH.fullmatch(shared_path) or ".." in shared_root.split("/")
         )):
-            raise FetchError("shared_root must be an absolute plain path without '..' or glob characters")
+            raise FetchError("shared_root must be an absolute or ~/ plain path without '..' or glob characters")
         patterns = {}
         for key in ("mine", "team"):
             items = value.get(key, [])
@@ -291,12 +300,17 @@ def config_path() -> Path:
 
 
 def load_settings(path: Path | None = None) -> GmoSettings:
+    """File values > built-ins; only without a file, legacy env values > built-ins."""
     path = config_path() if path is None else path
     try:
         content = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        patterns = [p for p in os.environ.get("CAPX_GMO_TRACES", "").split(":") if p]
-        return GmoSettings.from_dict({"host": os.environ.get("CAPX_GMO_HOST", ""), "mine": patterns})
+        fallback: dict[str, Any] = {}
+        if "CAPX_GMO_HOST" in os.environ:
+            fallback["host"] = os.environ["CAPX_GMO_HOST"]
+        if "CAPX_GMO_TRACES" in os.environ:
+            fallback["mine"] = [p for p in os.environ["CAPX_GMO_TRACES"].split(":") if p]
+        return GmoSettings.from_dict(fallback)
     except OSError as exc:
         raise FetchError(f"Cannot read GMO settings: {exc.strerror or exc}") from exc
     try:
@@ -487,8 +501,8 @@ def stats(directory):
 
 config = json.loads(sys.argv[1])
 mine, team = config['mine'], config['team']
-shared_root = config['shared_root']
-shared_real = os.path.realpath(shared_root) if shared_root else None
+shared_root = os.path.realpath(os.path.expanduser(config['shared_root'])) if config['shared_root'] else None
+shared_real = shared_root
 if shared_root:
     # Resolve ssh aliases' User on the remote host during this same listing.
     username = config['username'] or pwd.getpwuid(os.geteuid()).pw_name
@@ -623,8 +637,17 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
     if not settings.host or settings.host.startswith("-") or not SAFE_HOST.fullmatch(settings.host):
         raise FetchError("GMO host is not configured")
     remote = "python3 -c " + shlex.quote(code) + " " + " ".join(shlex.quote(arg) for arg in args)
-    proc = runner.run([*api_ssh_argv(settings), settings.host, remote], timeout=timeout)
+    try:
+        proc = runner.run([*api_ssh_argv(settings), settings.host, remote], timeout=timeout)
+    except OSError as exc:
+        raise FetchError(CONNECTION_ERROR) from exc
+    except FetchError as exc:
+        if "timed out" in str(exc):
+            raise FetchError(CONNECTION_ERROR) from exc
+        raise
     if proc.returncode != 0:
+        if proc.returncode == 255:
+            raise FetchError(CONNECTION_ERROR)
         raise FetchError(f"GMO listing failed (exit {proc.returncode}): {proc.stderr.strip()[-300:]}")
     try:
         return json.loads(proc.stdout.strip().splitlines()[-1])

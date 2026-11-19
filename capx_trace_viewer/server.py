@@ -257,6 +257,11 @@ def main(argv: Sequence[str] | None = None) -> None:
                              gmo=args.gmo, unix_socket=sock is not None)
         except UnsupportedBackendPlatform as exc:
             parser.error(str(exc))
+        if args.gmo:
+            from capx_trace_viewer.gmo import prefetch_mine
+            # Connection problems are reported in one line; local records stay
+            # available even when GMO cannot be reached at startup.
+            prefetch_mine(app.state.trace_root)
         if not (dist / 'index.html').is_file():
             print(f'Frontend dist is missing or has no index.html: {dist}', file=sys.stderr)
         if sock is not None:

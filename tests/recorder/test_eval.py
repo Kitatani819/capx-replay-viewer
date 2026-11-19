@@ -75,12 +75,184 @@ def test_cli_refuses_conflicting_environment(tmp_path, case):
     env = environment(trace_root)
     if case == "unset_dir":
         env.pop("CAPX_TRACE_DIR")
+        env.pop("HYPE_TRACE_ROOT", None)
+        env["HOME"] = str(tmp_path)
     else:
         env["CAPX_TRACE_RUN_ID"] = "existing" if case == "set_run_id" else ""
     result = run_cli(trace_root, "raise AssertionError('must not run')", env=env)
     assert result.returncode == 2
     assert ("CAPX_TRACE_DIR" if case == "unset_dir" else "CAPX_TRACE_RUN_ID") in result.stderr
     assert not trace_root.exists()
+
+
+@pytest.mark.parametrize("trace_dir", [None, ""])
+def test_cli_defaults_to_hype_root_before_shared_storage(tmp_path, trace_dir):
+    home = tmp_path / "home"
+    (home / "shared-storage").mkdir(parents=True)
+    trace_root = home / "custom-traces" / "test-user"
+    env = environment(trace_root)
+    env["HOME"] = str(home)
+    env["USER"] = "test-user"
+    env["HYPE_TRACE_ROOT"] = "~/custom-traces"
+    if trace_dir is None:
+        env.pop("CAPX_TRACE_DIR")
+    else:
+        env["CAPX_TRACE_DIR"] = trace_dir
+    code = (
+        "import os; from pathlib import Path; "
+        f"assert os.environ['CAPX_TRACE_DIR'] == {str(trace_root)!r}; "
+        "assert (Path(os.environ['CAPX_TRACE_DIR']) / os.environ['CAPX_TRACE_RUN_ID'] / 'eval.json').is_file()"
+    )
+    result = run_cli(trace_root, code, env=env)
+    assert result.returncode == 0, result.stderr
+    assert read_record(trace_root)["status"] == "completed"
+    assert result.stdout.count(f"eval: records will be saved to {trace_root}\n") == 1
+    assert not (home / "shared-storage" / "traces").exists()
+
+
+@pytest.mark.parametrize("hype_root", [None, ""])
+def test_cli_defaults_to_shared_storage_directory_or_symlink(tmp_path, hype_root):
+    home = tmp_path / "home"
+    home.mkdir()
+    storage = tmp_path / "team-storage"
+    storage.mkdir()
+    (home / "shared-storage").symlink_to(storage, target_is_directory=True)
+    trace_root = home / "shared-storage" / "traces" / "test-user"
+    env = environment(trace_root)
+    env.pop("CAPX_TRACE_DIR")
+    env["HOME"] = str(home)
+    env["USER"] = "test-user"
+    if hype_root is None:
+        env.pop("HYPE_TRACE_ROOT", None)
+    else:
+        env["HYPE_TRACE_ROOT"] = hype_root
+    result = run_cli(trace_root, "pass", env=env)
+    assert result.returncode == 0, result.stderr
+    assert read_record(trace_root)["status"] == "completed"
+    assert f"eval: records will be saved to {trace_root}\n" in result.stdout
+
+
+def test_cli_explicit_trace_dir_takes_precedence_over_automatic_destinations(tmp_path):
+    trace_root = tmp_path / "explicit"
+    env = environment(trace_root)
+    env["HYPE_TRACE_ROOT"] = str(tmp_path / "automatic")
+    env["HOME"] = str(tmp_path)
+    result = run_cli(trace_root, "pass", env=env)
+    assert result.returncode == 0, result.stderr
+    assert read_record(trace_root)["status"] == "completed"
+    assert not (tmp_path / "automatic").exists()
+    assert f"eval: records will be saved to {trace_root}\n" in result.stdout
+
+
+@pytest.mark.parametrize("run_id", ["existing", ""])
+def test_cli_refuses_existing_run_id_before_creating_automatic_destination(tmp_path, run_id):
+    shared_root = tmp_path / "traces"
+    env = environment(tmp_path / "unused")
+    env.pop("CAPX_TRACE_DIR")
+    env["CAPX_TRACE_RUN_ID"] = run_id
+    env["HYPE_TRACE_ROOT"] = str(shared_root)
+    result = run_cli(tmp_path / "unused", "raise AssertionError('must not run')", env=env)
+    assert result.returncode == 2
+    assert "CAPX_TRACE_RUN_ID is already set" in result.stderr
+    assert not shared_root.exists()
+
+
+def test_cli_automatic_destination_finds_baseline_in_sibling_user_folder(tmp_path):
+    shared_root = tmp_path / "traces"
+    baseline = shared_root / "other-user" / "baseline" / "eval.json"
+    baseline.parent.mkdir(parents=True)
+    baseline.write_text("{}")
+    trace_root = shared_root / "test-user"
+    env = environment(trace_root)
+    env.pop("CAPX_TRACE_DIR")
+    env["HYPE_TRACE_ROOT"] = str(shared_root)
+    env["USER"] = "test-user"
+    result = run_cli(trace_root, "pass", "--baseline", "baseline", "--changed", "修正", env=env)
+    assert result.returncode == 0, result.stderr
+    assert "was not found" not in result.stderr
+    assert read_record(trace_root)["baseline_eval_id"] == "baseline"
+
+
+@pytest.mark.parametrize("user", [None, ""])
+def test_cli_default_destination_falls_back_to_getpass(tmp_path, monkeypatch, capsys, user):
+    monkeypatch.delenv("CAPX_TRACE_DIR", raising=False)
+    monkeypatch.delenv("CAPX_TRACE_RUN_ID", raising=False)
+    monkeypatch.setenv("HYPE_TRACE_ROOT", str(tmp_path / "traces"))
+    if user is None:
+        monkeypatch.delenv("USER", raising=False)
+    else:
+        monkeypatch.setenv("USER", user)
+    monkeypatch.setattr(wrapper.getpass, "getuser", lambda: "fallback-user")
+    calls = []
+    monkeypatch.setattr(wrapper, "run_eval", lambda command, **kwargs: calls.append(kwargs) or 0)
+    assert wrapper.main(["--", "evaluation"]) == 0
+    assert calls[0]["trace_root"] == tmp_path / "traces" / "fallback-user"
+    assert calls[0]["shared_root"] == tmp_path / "traces"
+    assert str(calls[0]["trace_root"]) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("trace_dir", [None, ""])
+@pytest.mark.parametrize("storage_file", [False, True])
+def test_cli_without_destination_names_both_configuration_options(tmp_path, trace_dir, storage_file):
+    if storage_file:
+        (tmp_path / "shared-storage").write_text("not a directory")
+    env = environment(tmp_path / "unused")
+    env["HOME"] = str(tmp_path)
+    env.pop("HYPE_TRACE_ROOT", None)
+    if trace_dir is None:
+        env.pop("CAPX_TRACE_DIR")
+    else:
+        env["CAPX_TRACE_DIR"] = trace_dir
+    result = run_cli(tmp_path / "unused", "raise AssertionError('must not run')", env=env)
+    assert result.returncode == 2
+    assert "CAPX_TRACE_DIR" in result.stderr and "HYPE_TRACE_ROOT" in result.stderr
+    assert "~/shared-storage" in result.stderr
+    assert not (tmp_path / "unused").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file permissions require POSIX")
+@pytest.mark.parametrize("umask", [0o027, 0o077, 0o777])
+def test_new_shared_root_has_setgid_and_group_write_independent_of_umask(tmp_path, umask):
+    shared_root = tmp_path / "traces"
+    previous_umask = os.umask(umask)
+    try:
+        wrapper._create_shared_root(shared_root)
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(shared_root.stat().st_mode) == 0o2770
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file permissions require POSIX")
+def test_existing_shared_root_is_never_chmodded(tmp_path, monkeypatch):
+    shared_root = tmp_path / "traces"
+    shared_root.mkdir(mode=0o750)
+    mode = stat.S_IMODE(shared_root.stat().st_mode)
+
+    def refuse_chmod(*_args, **_kwargs):
+        raise AssertionError("an existing shared root must never be chmodded")
+
+    monkeypatch.setattr(Path, "chmod", refuse_chmod)
+    wrapper._create_shared_root(shared_root)
+    assert stat.S_IMODE(shared_root.stat().st_mode) == mode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file permissions require POSIX")
+def test_automatic_destination_keeps_user_permissions_and_group_warning(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("CAPX_TRACE_DIR", raising=False)
+    monkeypatch.delenv("CAPX_TRACE_RUN_ID", raising=False)
+    monkeypatch.setenv("HYPE_TRACE_ROOT", str(tmp_path / "traces"))
+    monkeypatch.setenv("USER", "test-user")
+    previous_umask = os.umask(0o077)
+    try:
+        assert wrapper.main(["--", sys.executable, "-c", "pass"]) == 0
+    finally:
+        os.umask(previous_umask)
+    shared_root = tmp_path / "traces"
+    user_root = shared_root / "test-user"
+    assert stat.S_IMODE(shared_root.stat().st_mode) == 0o2770
+    assert stat.S_IMODE(user_root.stat().st_mode) == 0o2700
+    assert "teammates will not see this evaluation" in capsys.readouterr().err
+    assert read_record(user_root)["status"] == "completed"
 
 
 @pytest.mark.parametrize("options", [[], ["--baseline", "baseline"],

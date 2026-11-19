@@ -667,6 +667,28 @@ async function togglePatterns(output: unknown, open: boolean): Promise<void> {
   await advance(0);
 }
 
+test('GMO prefills effective defaults and explains that the SSH alias needs no settings', async () => {
+  const state = setup();
+  state.config.settings = settings({ shared_root: '~/shared-storage/traces', mine: [], team: [] });
+  const page = mountGmo(state.config); await advance(100);
+  click(page.output, '接続設定'); await advance(0);
+  const fields = findAll(page.output, 'input');
+  const valueOf = (label: string) => fields.find(el => el.props['aria-label'] === label)?.props.value;
+  assert.equal(valueOf('共有の記録フォルダー'), '~/shared-storage/traces');
+  assert.equal(valueOf('接続先'), 'gmo');
+  assert.equal(valueOf('ポート'), '');
+  assert.equal(valueOf('鍵ファイル'), '');
+  assert.equal(intervalSelect(page.output).props.value, '120');
+  assert.deepEqual(findAll(patternDetails(page.output), 'textarea').map(el => el.props.value), ['', '']);
+  assert.equal(patternDetails(page.output).props.open, false);
+  assert.match(text(page.output), /既定の設定を使っています。Host gmo が設定済みなら入力は不要/);
+  assert.match(text(page.output), /~\/ は GMO 側のホーム/);
+  assert.match(text(page.output), /Host gmo\n.*HostName <host>\n.*User <user>\n.*Port <port>\n.*IdentityFile ~\/\.ssh\/id_ed25519_gmo\n.*IdentitiesOnly yes/);
+  await saveForm(page.output);
+  assert.deepEqual(state.sent.find(req => req.method === 'PUT')?.body, state.config.settings);
+  page.unmount();
+});
+
 test('GMO puts the shared folder first and collapses optional individual patterns', async () => {
   const state = setup([], false);
   const page = mountGmo(state.config); await advance(100);
@@ -674,11 +696,13 @@ test('GMO puts the shared folder first and collapses optional individual pattern
   const shared = findAll(fieldset, 'input')[0];
   assert.equal(shared.props['aria-label'], '共有の記録フォルダー');
   assert.equal(shared.props.value, '');
-  assert.equal(shared.props.placeholder, '/path/to/shared/traces');
+  assert.equal(shared.props.placeholder, '~/shared-storage/traces');
   const label = findAll(fieldset, 'label').find(el => el.props.htmlFor === shared.props.id);
   assert.equal(text(label), '共有の記録フォルダー');
   const description = findAll(fieldset, 'p').find(el => el.props.id === shared.props['aria-describedby']);
   assert.match(text(description), /ここだけで設定.*ユーザー名フォルダー.*自分とチーム.*絶対パス/);
+  assert.match(text(description), /空欄にすると共有フォルダーを使いません/);
+  assert.doesNotMatch(text(page.output), /既定の設定を使っています/);
   assert.equal(patternDetails(page.output).props.open, false);
   await togglePatterns(page.output, true);
   assert.equal(patternDetails(page.output).props.open, true);
@@ -710,6 +734,7 @@ test('GMO initializes shared settings with collapsed patterns and preserves edit
   const page = mountGmo(state.config); await advance(100);
   click(page.output, '接続設定'); await advance(0);
   assert.equal(findAll(page.output, 'input').find(el => el.props.name === 'gmo-shared-root')?.props.value, '/path/to/shared/traces');
+  assert.doesNotMatch(text(page.output), /既定の設定を使っています/);
   assert.equal(patternDetails(page.output).props.open, false);
   await togglePatterns(page.output, true);
   change(page.output, '自分の記録の場所', '/path/to/extra/traces'); await advance(0);
@@ -843,6 +868,8 @@ test('GMO can repair an unreadable configuration by saving editable connection s
   const page = mountGmo(null, () => {}, 'Invalid JSON in GMO settings'); await advance(100);
   assert.match(text(page.output), /Invalid JSON in GMO settings/);
   assert.equal(intervalSelect(page.output).props.value, '120', 'missing settings default to two minutes');
+  assert.equal(findAll(page.output, 'input').find(el => el.props.name === 'gmo-host')?.props.value, 'gmo');
+  assert.equal(findAll(page.output, 'input').find(el => el.props.name === 'gmo-shared-root')?.props.value, '~/shared-storage/traces');
   assert.notEqual(findAll(page.output, 'fieldset')[0].props.disabled, true, 'failed GET /config does not prevent repair');
   change(page.output, '接続先', 'gmo'); await advance(0);
   await togglePatterns(page.output, true);
