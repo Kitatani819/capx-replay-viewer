@@ -149,7 +149,7 @@ test('every ending uses the canonical cell word and long accessible label', () =
   }
   assert.doesNotMatch(html, /古い表示名/);
 });
-test('paired current cells offer a separate small compare button beside the trial button', () => {
+test('paired current cells offer a separate small compare button under the trial button', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);
   assert.equal((html.match(/class="eval-compare-link"/g) || []).length, 1);
   assert.match(html, /<div class="eval-cell-actions"><a[^>]+episode=c1-retry[^>]+>[\s\S]*?<\/a><a class="eval-compare-link" href="\/traces\/compare\?run=improved&amp;episode=c1-retry&amp;baseline_run=baseline&amp;baseline_episode=b1" aria-label="cube seed 401を基準と並べて見る">並べて見る<\/a><\/div>/);
