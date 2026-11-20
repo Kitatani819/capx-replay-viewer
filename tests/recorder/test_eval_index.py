@@ -605,3 +605,19 @@ def test_cli_is_usable_without_viewer_or_site_packages(tmp_path, stored):
     html = out.read_text(encoding="utf-8")
     assert "http://127.0.0.1:9001/evals/ev-retried" in html
     assert eval_index._score(value["summary"]) in html
+
+
+@pytest.mark.skipif(not hasattr(os, "O_PATH") or os.geteuid() == 0,
+                    reason="needs O_PATH (Linux) and a non-root user for permission checks")
+def test_search_only_parent_directories_are_allowed(tmp_path):
+    # GMO's /home is drwx--x--x: it can be passed through but not listed.
+    parent = tmp_path / "home"
+    root = parent / "group" / "traces"
+    save(root, record())
+    parent.chmod(0o111)
+    try:
+        html = page(root)
+        assert any(link.endswith("/ev-older") for link in Markup(html).links)
+        assert (root / "index.html").is_file()
+    finally:
+        parent.chmod(0o755)
