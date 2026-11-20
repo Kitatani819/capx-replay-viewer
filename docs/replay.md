@@ -37,7 +37,7 @@
 
 ## 実行中の試行をリアルタイムで見る
 
-GMO B300では、いつもどおり `bash Start-Replay.sh --from-gmo` で起動します。RTX PRO 6000 VMでは、接続先と記録フォルダーを指定した既存の設定ファイルを使い、`CAPX_GMO_CONFIG=/path/to/rtx.json bash Start-Replay.sh --from-gmo` で起動します。[接続設定](gmo.md)も参照してください。
+GMO B300では、いつもどおり `bash Start-Replay.sh --from-gmo` で起動します。RTX PRO 6000 VMでは、RTX用の接続設定ファイルを使い、`CAPX_GMO_CONFIG=/path/to/rtx.json bash Start-Replay.sh --from-gmo` で起動します。VMにチームで記録を共有するフォルダーがあれば、設定の `shared_root` にそのフォルダー（例：`~/shared-storage/traces`）を指定します。GMOと同じく、自分の記録とチームの記録が一覧に出ます。[接続設定](gmo.md)も参照してください。
 
 「GMO」の「一覧を更新」で実行中の試行を探し、「取り込む」→「開く」を押します。「新しい記録に追従」が有効な間、その試行の変更分を約2秒ごとに取り込み、モデルへの入力と回答、生成されたPython、API呼び出し、出力を自動更新します。通信とコピーの時間に応じて表示は遅れます。リモート側へのインストールやファイルの書き込みは不要です。
 
