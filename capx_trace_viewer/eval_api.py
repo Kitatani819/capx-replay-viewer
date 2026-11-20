@@ -107,10 +107,15 @@ class EvalService:
         record = entry["eval"]
         if record is None:
             return None
+        episodes, records = self._episodes(entry["eval_id"], remote, conflict=entry["_conflict"])
+        local = [episode for episode in episodes if episode["local_state"] == "local"]
+        # Older records count retries as trials. Rebuild from the same episodes
+        # shown in the table when the local metadata is available and readable.
+        if local and all(not episode.get("episode_json_error") for episode in local):
+            return evals.aggregate_episodes(episodes, records, logical=True)
         if record["summary"] is not None:
             return record["summary"]
-        episodes, records = self._episodes(entry["eval_id"], remote, conflict=entry["_conflict"])
-        return evals.aggregate_episodes(evals.latest_logical_episodes(episodes) if record.get("segments") else episodes, records)
+        return evals.aggregate_episodes(episodes, records, logical=bool(record.get("segments")))
 
     @staticmethod
     def _public(entry: dict[str, Any]) -> dict[str, Any]:

@@ -1,10 +1,10 @@
 # 評価の記録と比較：設計
 
-2026-11-18 更新：Notionへの送信案は取りやめ、チーム全員が手元のviewerで評価結果を見る方針にしました。
+2026-11-20 更新：E06で共有ストレージに静的HTML一覧を追加しました。以下には初期設計も含みます。現在の実行方法は [evals.md](evals.md) を参照してください。
 
 ## 目的
 
-同じ評価条件で、基準版と改良版の成功率をチーム全員がviewerで比べられるようにします。失敗した試行は、そのまま録画とログを開いて原因を調べられるようにします。
+同じ評価条件で、基準版と改良版の成功率をチーム全員が比べられるようにします。共有のHTML一覧をViewerなしで開き、失敗した試行はViewerで録画とログを開いて原因を調べられるようにします。
 
 ## 方針
 
@@ -19,10 +19,14 @@
 ```
 GMO（評価ジョブ）
   python -m capx_trace_recorder eval --changed … --baseline … -- <いつもの評価コマンド>
-    ├ 開始時：<trace root>/<評価ID>/eval.json を「実行中」で作る
+    ├ 開始時：<trace root>/<評価ID>/eval.json を「実行中」で作り、共有ルートのindex.htmlを更新
     ├ 子プロセスに CAPX_TRACE_RUN_ID=<評価ID> を渡して評価を実行
     │   （試行ごとの録画とログは、今までどおり <評価ID>/<episode>/ に記録される）
-    └ 終了時：試行の成否を集計し、eval.json を「完了」または「中断」に更新
+    └ 終了時：試行の成否を集計し、eval.json と共有ルートのindex.htmlを更新
+
+共有ルートのindex.html
+  ブラウザで直接開く（PCへコピーしてもよい） ─→ 全員の評価一覧・タスク別集計
+  「開く」 ─→ 手元のviewerの /evals/<評価ID>
 
 手元のviewer
   GMOの一覧取得で eval.json も読む ─→ /evals（評価一覧）
@@ -92,8 +96,8 @@ SIGKILLで強制終了された場合は、`running` のまま残ります。vie
   "heartbeat_at": "2026-11-18T09:58:00Z",
   "ended_at": "2026-11-18T09:58:12Z",
   "summary": {
-    "trials": 20, "success": 14, "failure": 5, "unknown": 1, "incomplete": 0,
-    "by_task": {"cube_lifting": {"trials": 4, "success": 3}},
+    "trials": 20, "attempts": 23, "success": 14, "failure": 5, "unknown": 1, "incomplete": 0,
+    "by_task": {"cube_lifting": {"trials": 4, "attempts": 5, "success": 3}},
     "tasks": ["cube_lifting", "cube_restack", "nut_assembly", "spill_wipe", "two_arm_lift"],
     "seeds": [401, 402, 403, 404],
     "models": {"code_generator": "Qwen/Qwen3.8-27B"},
@@ -105,6 +109,7 @@ SIGKILLで強制終了された場合は、`running` のまま残ります。vie
 ```
 
 - `summary` は終了時に書きます。実行中は `null` で、viewerがエピソードから途中経過を数えます。
+- 論理集計の `trials` はタスク・条件・seedごとの最後の試行数、`attempts` はやり直しを含む全試行数です。`by_task` も同じ区別を持ちます。`attempts` のない旧記録も受け付けます。
 - 子の終了後60秒を過ぎてもワーカーが残っていれば、`end.workers_left_running: true` を記録して集計を終えます。
 - `incomplete` は、トレースが不完全（`trace_complete` が false）か、終了していない試行の数です。
 - `models` はモデル名だけを記録し、接続先は含めません。`config_flags` が試行によって違う場合は、そのキーを `mixed` に入れます。
@@ -147,6 +152,7 @@ SIGKILLで強制終了された場合は、`running` のまま残ります。vie
   - `baseline_trials`：基準の評価の、同じ形の一覧
   - `differences`：評価と基準で違う条件の一覧
 - `trials` は、手元のrunのエピソード（runnerの記録付き）と、GMOの一覧の行（`reader.episode_summary_from_metadata`）を `episode_id` で合わせて作ります。両方にある場合は手元を優先します。
+- 手元のエピソードを読める評価では、表示用の `summary` を論理集計し直します。手元にない場合や読めない場合は保存済みの集計を使い、`eval.json` 自体は変更しません。
 - `differences` では、`tasks`・`seeds`・`models`・`config_flags`・`eval_set` を比べ、違う項目を返します。
 - 他のメンバーが書いた `eval.json` は信用できない入力として扱います。スキーマ・型・文字列の長さ・IDの形式を検証し、不正なものは理由付きで一覧に出し、画面全体を壊さないようにします。
 
@@ -207,7 +213,17 @@ cube_lifting   基準        ×    ●    ●    ×
 
 ラッパーの `publish(eval_record)` sink hookは未使用の拡張点として残します。既定のsinkは空で、評価結果の閲覧には使いません。
 
-## 4. 作らないもの
+## 4. 共有HTML一覧（E06）
+
+`capx_trace_recorder.eval_index` は標準ライブラリだけで `<shared_root>/*/ev-*/eval.json` と `<shared_root>/ev-*/eval.json` を読み、1つのHTMLを生成します。Viewerのインストールは不要です。ラッパーは実行中の記録を書いた後と終了後に呼び出し、失敗は警告に留めます。`CAPX_EVAL_INDEX=0` または `eval --no-index` で自動更新を止められます。
+
+Viewerの集計モジュールがあり、評価フォルダーのエピソードを読める場合は論理集計し直します。それ以外は保存済みの集計を使います。全体とタスク別の試行数にやり直しがあれば、`36 / 70（やり直しを含めると 93 回）` のように表示します。
+
+生成は出力先の隣のファイルで `fcntl.flock` を取り、同じディレクトリの一時ファイルから置き換えます。ファイルはディレクトリのグループに合わせて `0664` にし、ディレクトリは変更しません。自由入力はHTMLエスケープし、評価IDを検証してからViewerへのリンクに使います。ルート外へのシンボリックリンクは辿りません。読めない記録や不正な記録は、ほかの結果と分けてページ内に示します。
+
+開き方と手動再生成のコマンドは [HTML一覧の使い方](evals.md#viewerを起動せず一覧を見る) を参照してください。
+
+## 5. 作らないもの（初期設計）
 
 - 一覧の絞り込み、検索、成功率の推移グラフ
 - 任意の2つの評価を選んで比べる機能（比較相手は実行時の `--baseline` で決まります）
@@ -215,7 +231,7 @@ cube_lifting   基準        ×    ●    ●    ×
 - 1回の評価を複数のSlurmジョブに分けて実行すること（第1段階では、1ジョブを1評価とします）
 - 録画の保存期間の管理（決まったら別途。消す場合も、表を作れるように `episode.json` は残します）
 
-## 5. 他チームと確認すること
+## 6. 他チームと確認すること
 
 - **評価を実行する担当（E04・E05）**
   - 評価はCaP-Xのrunnerを通して動かしますか？ ASPIREなどCaP-X以外にすると、recorderが試行を記録できません。
@@ -224,7 +240,7 @@ cube_lifting   基準        ×    ●    ●    ×
   - 評価セット（タスク・seed・試行数）と、`--eval-set` に使う名前
   - 成功の定義（1.5）
 
-## 6. 実装の順番と完了の条件
+## 7. 実装の順番と完了の条件
 
 1. `capx_trace_viewer/evals.py`：`eval.json` の検証、成功の判定、集計。TypeScript版と判定が一致するかのテストを含みます。
 2. `python -m capx_trace_recorder eval`：テストでは次の場合を確かめます。

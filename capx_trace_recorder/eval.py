@@ -42,6 +42,18 @@ def _publish(record: dict[str, Any], sinks: Sequence[Any]) -> None:
             print(f"eval: sink failed ({type(exc).__name__})", file=sys.stderr)
 
 
+def _rebuild_index(trace_root: Path, *, enabled: bool) -> None:
+    """Publish the shared list without changing the evaluation's outcome."""
+    if not enabled or os.environ.get("CAPX_EVAL_INDEX", "").strip() == "0":
+        return
+    try:
+        from capx_trace_recorder.eval_index import build_index
+
+        build_index(trace_root.parent)
+    except Exception as exc:
+        print(f"eval: warning: index rebuild failed ({type(exc).__name__})", file=sys.stderr)
+
+
 def _git_commit(repo: Path) -> str | None:
     """Read Git files directly; importing store would register its fork handler."""
     try:
@@ -273,7 +285,7 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
              shared_root: Path | None = None, resume: str | None = None,
              heartbeat_interval: float = HEARTBEAT_INTERVAL_S,
              worker_wait_timeout: float = WORKER_WAIT_TIMEOUT_S,
-             sinks: Sequence[Any] | None = None) -> int:
+             sinks: Sequence[Any] | None = None, index_enabled: bool = True) -> int:
     """Run one sequential segment; a resumed evaluation retains its original identity."""
     if heartbeat_interval <= 0:
         raise ValueError("heartbeat interval must be positive")
@@ -361,9 +373,13 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
         evals.validate_eval_record(record, eval_id=eval_id)
         eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed)
         _write_record(path, record, initial=not bool(resume), directory=directory)
-        return _run_segment(command, trace_root=trace_root, eval_id=eval_id, record=record, path=path,
-                            directory=directory, baseline=record["baseline_eval_id"],
-                            heartbeat_interval=heartbeat_interval, worker_wait_timeout=worker_wait_timeout, sinks=sinks)
+        _rebuild_index(trace_root, enabled=index_enabled)
+        try:
+            return _run_segment(command, trace_root=trace_root, eval_id=eval_id, record=record, path=path,
+                                directory=directory, baseline=record["baseline_eval_id"],
+                                heartbeat_interval=heartbeat_interval, worker_wait_timeout=worker_wait_timeout, sinks=sinks)
+        finally:
+            _rebuild_index(trace_root, enabled=index_enabled)
 
 
 def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, record: dict[str, Any],
@@ -490,6 +506,7 @@ def main(words: Sequence[str] | None = None) -> int:
     parser.add_argument("--by")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--trust-repo", action="store_true")
+    parser.add_argument("--no-index", action="store_true", help="disable shared HTML index updates")
     if words in (["-h"], ["--help"]):
         parser.parse_args(words)
     if "--" not in words:
@@ -522,7 +539,7 @@ def main(words: Sequence[str] | None = None) -> int:
         result = run_eval(command, trace_root=trace_root, shared_root=shared_root, changed=args.changed,
                           baseline=args.baseline, eval_set=args.eval_set,
                           by=args.by if args.by is not None else "" if args.resume else os.environ.get("CAPX_EVAL_BY") or os.environ.get("USER", ""), repo=args.repo,
-                          trust_repo=args.trust_repo, resume=args.resume)
+                          trust_repo=args.trust_repo, resume=args.resume, index_enabled=not args.no_index)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot start evaluation: {exc}")
     return 128 - result if result < 0 else result

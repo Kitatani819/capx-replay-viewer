@@ -104,7 +104,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
   if (!record) return <p role="alert" className="eval-error">評価の記録を読み取れません：{detail.error || '記録が不正です'}</p>;
   const table = comparisonTable(detail.trials, detail.baseline_trials);
-  const mismatch = summaryDiffers(detail.summary, record.segments ? table.currentTrials : detail.trials) || (baseline && summaryDiffers(detail.baseline_summary, baseline.segments ? table.baselineTrials : detail.baseline_trials));
+  const mismatch = summaryDiffers(detail.summary, table.currentTrials) || (baseline && summaryDiffers(detail.baseline_summary, table.baselineTrials));
   const differences = detail.differences.flatMap(differenceItems);
   const ruleDifferences = new Map<string, { text: string; source: string; sides: string[] }>();
   for (const [side, trials] of [['今回', detail.trials], ['基準', detail.baseline_trials]] as const) {

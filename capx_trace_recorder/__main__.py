@@ -41,6 +41,10 @@ def _read_hook_for_change(path: Path, parser: argparse.ArgumentParser) -> str | 
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "index":
+        from capx_trace_recorder.eval_index import main as index_main
+
+        raise SystemExit(index_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "job-end":
         from capx_trace_recorder.eval import job_end_main
 
@@ -92,6 +96,7 @@ def main() -> None:
     sub.add_parser("run")
     sub.add_parser("eval")
     sub.add_parser("job-end")
+    sub.add_parser("index")
     args = parser.parse_args()
     path = pth_path()
     detail = f"python={sys.executable} CAPX_TRACE_DIR={'set' if os.environ.get('CAPX_TRACE_DIR', '').strip() else 'unset'}"
