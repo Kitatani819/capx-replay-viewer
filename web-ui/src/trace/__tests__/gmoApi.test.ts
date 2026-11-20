@@ -5,6 +5,7 @@ import { ApiError, GmoDisabledError, gmoApi, type GmoSettings } from '../api';
 const settings: GmoSettings = {
   host: 'gmo', port: 8822, identity_file: '~/.ssh/gmo',
   shared_root: '/path/to/shared/traces',
+  submission_root: '~/shared-storage/submission_evals/_viewer',
   mine: ['/mine/*/traces'], team: ['/team/traces'], interval_s: 120,
 };
 

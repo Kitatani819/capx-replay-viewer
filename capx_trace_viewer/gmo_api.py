@@ -260,7 +260,8 @@ class GmoService:
 
     @staticmethod
     def _auto_enabled(settings: gmo.GmoSettings) -> bool:
-        return bool(settings.host and (settings.shared_root or settings.mine) and settings.interval_s > 0)
+        return bool(settings.configured and (settings.shared_root or settings.submission_root or settings.mine)
+                    and settings.interval_s > 0)
 
     def _schedule_auto_locked(self, settings: gmo.GmoSettings) -> None:
         if self._closed or self._auto_paused or not self._auto_enabled(settings):

@@ -112,7 +112,8 @@ def test_auto_only_remote_and_stale_mine_one_listing(auto_source):
 
 
 @pytest.mark.parametrize("importer", ["startup", "auto"])
-def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monkeypatch, importer):
+@pytest.mark.parametrize("folder", ["traces", "submission_evals/_viewer"])
+def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monkeypatch, importer, folder):
     if shutil.which("rsync") is None:
         pytest.skip("rsync is not installed")
     service, mine, _, log, _, _ = auto_source
@@ -126,8 +127,8 @@ def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monke
     (remote_home / "shared-storage").symlink_to(shared_storage, target_is_directory=True)
     monkeypatch.setenv("CAPX_GMO_TEST_HOME", str(remote_home))
     username = pwd.getpwuid(os.geteuid()).pw_name
-    own = _episode(shared_storage / "traces" / username, "ep_own")
-    _episode(shared_storage / "traces" / "team_user", "ep_team", run="team_run")
+    own = _episode(shared_storage / folder / username, "ep_own")
+    _episode(shared_storage / folder / "team_user", "ep_team", run="team_run")
     assert gmo.load_settings() == gmo.GmoSettings()
     if importer == "auto":
         state = service.run_auto_once()

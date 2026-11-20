@@ -163,6 +163,22 @@ test('list preserves invalid records as errors and completed evaluations have no
   assert.match(html, /schema が不正です/);
   assert.doesNotMatch(html, /完了/);
 });
+test('list shows each evaluation set below the changed description and omits absent sets', () => {
+  const entries = ['routeB:behavior:bringing_water', 'routeB:robosuite:cube_lifting'].map((evalSet, index) => {
+    const entry = detail();
+    entry.eval = { ...entry.eval!, eval_id: `route-${index}`, eval_set: evalSet };
+    return entry;
+  });
+  const html = renderToStaticMarkup(<EvalListTable entries={entries} />);
+  for (const [index, entry] of entries.entries()) {
+    assert.ok(html.includes(`<a href="/evals/route-${index}">把持位置の修正</a><small class="eval-set">${entry.eval!.eval_set}</small>`));
+  }
+  for (const evalSet of [null, '']) {
+    const entry = detail();
+    entry.eval!.eval_set = evalSet;
+    assert.doesNotMatch(renderToStaticMarkup(<EvalListTable entries={[entry]} />), /class="eval-set"/);
+  }
+});
 test('list and comparison show short commits and distinguish unknown uncommitted changes', () => {
   for (const dirty of [true, false, null]) {
     const d = detail();

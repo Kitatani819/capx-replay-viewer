@@ -76,7 +76,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
       const href = siteHref(`/evals/${encodeURIComponent(record.eval_id)}`);
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
-        <td><a href={href}>{evaluationTitle(record)}</a>{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
+        <td><a href={href}>{evaluationTitle(record)}</a>{record.eval_set && <small className="eval-set">{record.eval_set}</small>}{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
         <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status && <span title={failureTooltip(entry.evaluation_failure)} className={entry.evaluation_failure ? 'eval-error' : undefined}>{entry.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[entry.display_status]}</span>}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
