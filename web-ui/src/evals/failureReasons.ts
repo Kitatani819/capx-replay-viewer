@@ -177,6 +177,11 @@ export function changeTag(baseline: EvalTrial | undefined, current: EvalTrial): 
     baseline.end_classification.cause.code !== current.end_classification.cause.code)) return '別の失敗へ';
   return previous === next ? '変わらず' : '比較なし';
 }
+/** Baseline trials in a category, so they can be opened even when this run has none. */
+export function baselineBreakdownTrials(baseline: EvalTrial[], category: BreakdownCategory) {
+  return baseline.filter(trial => trialCategory(trial) === category);
+}
+
 export function breakdownTrials(current: EvalTrial[], baseline: EvalTrial[], category: BreakdownCategory) {
   return current.filter(trial => trialCategory(trial) === category).map(trial => {
     const paired = baselineTrialFor(trial, baseline) ?? undefined;
