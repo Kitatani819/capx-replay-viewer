@@ -295,12 +295,16 @@ def test_invalid_and_unreadable_records_are_reported(tmp_path, monkeypatch):
     original_open = os.open
 
     def deny_record(path, flags, *args, **kwargs):
-        # Descriptor-relative traversal can identify the directory using /proc on Linux.
+        # Descriptor-relative opens are matched by the directory's device and inode,
+        # which works on Linux and macOS alike (no /proc).
         directory = kwargs.get("dir_fd")
-        absolute = Path(path)
         if directory is not None:
-            absolute = Path(os.readlink(f"/proc/self/fd/{directory}")) / absolute
-        if absolute == unreadable:
+            st, target = os.fstat(directory), unreadable.parent.stat()
+            same_dir = (st.st_dev, st.st_ino) == (target.st_dev, target.st_ino)
+            hit = same_dir and os.fsdecode(path) == unreadable.name
+        else:
+            hit = Path(path) == unreadable
+        if hit:
             raise PermissionError("synthetic unreadable record")
         return original_open(path, flags, *args, **kwargs)
 
@@ -436,7 +440,10 @@ def test_timestamp_outside_jst_range_does_not_hide_other_records(tmp_path):
 def test_undecodable_record_filename_does_not_break_error_section(tmp_path):
     save(tmp_path, record())
     malformed = tmp_path / os.fsdecode(b"ev-\xff")
-    malformed.mkdir()
+    try:
+        malformed.mkdir()
+    except OSError:
+        pytest.skip("this file system rejects non-UTF-8 names (for example APFS on macOS)")
     (malformed / "eval.json").write_text("{broken", encoding="utf-8")
     html = page(tmp_path)
     assert "読めなかった記録" in html
