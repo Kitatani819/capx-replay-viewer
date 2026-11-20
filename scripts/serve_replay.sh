@@ -9,6 +9,7 @@ runner_root="${3:-$project_dir/demo/runner}"
 python_bin="${4:-}"
 from_gmo="${5:-}"
 uds="${6:-}"
+rtx_config="${7:-}"
 if ! [[ "$port" =~ ^[0-9]{1,5}$ ]] || ((10#$port < 1 || 10#$port > 65535)); then
     echo 'Port must be a number from 1 to 65535.' >&2
     exit 2
@@ -99,5 +100,8 @@ else
 fi
 if [[ -n "$from_gmo" ]]; then
     server_args+=(--gmo)
+fi
+if [[ -n "$rtx_config" ]]; then
+    server_args+=(--site "rtx=RTX,$rtx_config,$project_dir/outputs/rtx/traces")
 fi
 exec "$python_bin" -m capx_trace_viewer.server "${server_args[@]}"
