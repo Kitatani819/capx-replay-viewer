@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EvalComparison } from '../../evals/EvalPages';
 import { FailureBreakdown } from '../../evals/FailureBreakdown';
-import { causeCounts, causeTooltip, changeTag, ruleSourceHref, trialCategory } from '../../evals/failureReasons';
+import { CELL_LEGEND, causeCounts, causeTooltip, changeTag, ruleSourceHref, trialCategory, trialCellWord } from '../../evals/failureReasons';
 import { TrialSummaryCard } from '../components/TrialSummary';
 import { buildEpisodeModel } from '../model';
 import { episodeVerdict } from '../outcome';
@@ -68,6 +68,31 @@ test('environment horizon remains distinct from the gateway step limit in summar
   assert.match(html, /<span aria-hidden="true">環境期限<\/span>/);
   assert.match(html, /環境のステップ期限に到達（上限 2000）/);
   assert.doesNotMatch(html, /stop_context.horizon_steps_used/);
+});
+
+test('referee reset and job cut have clear cells, tooltips, legend and breakdown causes before opening a trial', () => {
+  const examples = [
+    { code: 'submission_reset', reason: 'submission_reset', word: '終了', label: '提出物が試行を終えた（未達成）',
+      explanation: '提出物が試行をリセットし、審判が成功と判定する前に終了しました。' },
+    { code: 'job_cut', reason: 'timeout', word: '打ち切り', label: '評価ジョブの終了で打ち切り',
+      explanation: '試行の途中で評価ジョブが終了しました。公式集計では終了した試行に数えません。' },
+  ] as const;
+  for (const { code, reason, word, label, explanation } of examples) {
+    const detail = breakdownDetail(false);
+    const classification: EndClassification = { reason, label, evidence: {},
+      cause: { code, label, explanation, source: '審判（gateway）', evidence: { 'harness_summary.referee.ended': code === 'job_cut' ? 'cut' : 'reset' } } };
+    detail.trials = [classifiedTrial('referee', 1, reason, { local_state: 'remote', end_classification: classification })];
+    assert.equal(trialCellWord(detail.trials[0]), word);
+    const html = renderToStaticMarkup(<EvalComparison detail={detail} />);
+    assert.ok(html.includes(`<span aria-hidden="true">${word}</span>`));
+    assert.ok(html.includes(`title="${label}\n${explanation}\n試行を開く"`));
+    assert.ok(html.includes(`${word}＝${CELL_LEGEND[word]}`));
+    const breakdown = renderToStaticMarkup(<FailureBreakdown detail={detail} />);
+    assert.ok(breakdown.includes(`<summary><span>${label}</span>`));
+    assert.ok(breakdown.includes(explanation));
+    assert.ok(breakdown.includes('失敗 1件・未判定 0件'));
+    assert.match(breakdown, /終わり方が不明：今回 0件/);
+  }
 });
 
 test('breakdown compares causes and limits within the existing coarse categories', () => {

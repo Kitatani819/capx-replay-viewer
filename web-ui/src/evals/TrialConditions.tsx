@@ -11,8 +11,10 @@ const SUCCESS_POLICY_TEXT: Record<NonNullable<Conditions['success_policy']>, str
 export function TrialConditions({ ending }: { ending?: EndClassification | null }) {
   const c = ending?.conditions;
   if (!c || !Object.keys(c).length) return null;
+  const steps = stepsText(ending);
   return <span className="trial-conditions">
-    {c.step_limit != null && <span>ステップ {c.steps_used != null ? `${number(c.steps_used)} / ` : '上限 '}{number(c.step_limit)}</span>}
+    {c.step_limit != null ? <span>ステップ {c.steps_used != null ? `${number(c.steps_used)} / ` : '上限 '}{number(c.step_limit)}</span>
+      : steps && <span>{steps}</span>}
     {c.evaluation_budget_s != null && <span>評価全体の時間 {c.evaluation_elapsed_s != null ? `${number(c.evaluation_elapsed_s)} / ` : '上限 '}{number(c.evaluation_budget_s)} 秒</span>}
     {c.success_policy && <span>成功判定：{SUCCESS_POLICY_TEXT[c.success_policy]}</span>}
   </span>;
@@ -21,7 +23,8 @@ export function TrialConditions({ ending }: { ending?: EndClassification | null 
 /** Steps this trial used, for the result cell's tooltip. */
 export function stepsText(ending?: EndClassification | null): string | null {
   const c = ending?.conditions;
-  return c?.step_limit != null && c.steps_used != null ? `ステップ ${number(c.steps_used)} / ${number(c.step_limit)}` : null;
+  if (c?.steps_used == null || (c.step_limit == null && ending?.evidence.source !== '審判（gateway）')) return null;
+  return `ステップ ${number(c.steps_used)}${c.step_limit != null ? ` / ${number(c.step_limit)}` : ''}`;
 }
 
 /** The step limit every given trial shares, or null when unrecorded or mixed. */

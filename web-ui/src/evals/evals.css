@@ -73,6 +73,8 @@
 .eval-segments ol { margin: 12px 0; padding-left: 24px; list-style: decimal; }
 .eval-segments summary { cursor: pointer; color: #356b4e; }
 .eval-set, .eval-segment-count { display: block; color: #68766b; margin-top: 5px; font-size: 12px; }
+.eval-route-notes { display: block; color: #68766b; margin-top: 5px; font-size: 12px; line-height: 1.6; }
+.eval-route-notes > span { display: block; }
 .eval-remote-status { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 12px 0; color: #586454; font-size: 13px; }
 .eval-remote-status p { margin: 0; }
 .eval-remote-status button { padding: 4px 10px; border: 1px solid #acbda7; border-radius: 5px; background: #f5f8f1; color: #356b4e; cursor: pointer; }

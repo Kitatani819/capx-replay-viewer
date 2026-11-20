@@ -67,6 +67,13 @@ function GitCommit({ git }: { git: EvalRecord['git'] }) {
 function Rate({ entry }: { entry: EvalListEntry }) {
   return <>{entry.baseline_summary && <>基準 {rate(entry.baseline_summary)} → </>}{rate(entry.summary)}{delta(entry.summary, entry.baseline_summary)}</>;
 }
+/** Exported evaluation sets identify the route and suite without relying on run names. */
+function RouteBNotes({ record }: { record: EvalRecord }) {
+  const [route, suite] = record.eval_set?.split(':') ?? [];
+  if (route !== 'routeB') return null;
+  return <span className="eval-route-notes"><span>提出の形の評価（経路 B）・成否は審判の判定</span>
+    {suite === 'behavior' && <span>シミュレーターは RTX、モデルと記録は B300</span>}</span>;
+}
 export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
   return <div className="eval-table-scroll"><table className="eval-list" aria-label="評価一覧">
     <thead><tr>{['日付', '実行者', '変更した部品', '成功率', 'コミット', '状態'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
@@ -76,7 +83,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
       const href = siteHref(`/evals/${encodeURIComponent(record.eval_id)}`);
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
-        <td><a href={href}>{evaluationTitle(record)}</a>{record.eval_set && <small className="eval-set">{record.eval_set}</small>}{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
+        <td><a href={href}>{evaluationTitle(record)}</a>{record.eval_set && <small className="eval-set">{record.eval_set}</small>}<RouteBNotes record={record} />{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
         <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status && <span title={failureTooltip(entry.evaluation_failure)} className={entry.evaluation_failure ? 'eval-error' : undefined}>{entry.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[entry.display_status]}</span>}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
@@ -148,7 +155,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const officialNotes = [...ruleDifferences];
   const renderOfficialNotes = (notes: typeof officialNotes) => <ul>{notes.map(([key, diff]) => <li key={key}>{diff.sides.join('・')}：{diff.text} <a href={ruleSourceHref(diff.source)} target="_blank" rel="noreferrer">公開ルール</a></li>)}</ul>;
   return <>
-    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · <span title={failureTooltip(detail.evaluation_failure)}>{detail.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[detail.display_status]}</span></>}</p></div>
+    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · <span title={failureTooltip(detail.evaluation_failure)}>{detail.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[detail.display_status]}</span></>}</p><RouteBNotes record={record} /></div>
       <p className="eval-score">{baseline && <>基準 <Counts value={detail.baseline_summary} /> → </>}今回 <Counts value={detail.summary} />{delta(detail.summary, detail.baseline_summary)}</p>
     </div>
     {detail.evaluation_failure && <p role="note" className="eval-note eval-failure-note">{failureLine(detail.evaluation_failure)}</p>}

@@ -21,6 +21,7 @@ def test_canonical_label_table():
         "error": ("エラーで停止", "エラー"),
         "timeout": ("時間切れ・打ち切り", "時間切れ"),
         "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
+        "submission_reset": ("提出物が試行を終えた（未達成）", "終了"),
         "regen_limit": ("書き直しの上限", "上限"),
         "single_shot": ("1回だけ実行して終了（single-shot）", "1回実行"),
         "unknown": ("終わり方が不明", "不明"),
@@ -51,6 +52,96 @@ def metadata(**changes):
 
 def summary(raw=None):
     return reader.episode_summary_from_metadata("run", "trial", metadata() if raw is None else raw)
+
+
+def referee_metadata(ended, *, success=False, cycles=265):
+    return metadata(source="eval_gateway", config_flags={"route": "B"},
+                    stop_context={"steps_used": 265},
+                    harness_summary={"task_completed": success,
+                                     "referee": {"ended": ended, "cycles": cycles,
+                                                 "steps_to_success": 42 if success else None}})
+
+
+@pytest.mark.parametrize("ended,code,reason", [
+    ("steplimit", "step_limit", "timeout"),
+    ("reset", "submission_reset", "submission_reset"),
+    ("cut", "job_cut", "timeout"),
+    ("future_end_state", "unknown", "unknown"),
+])
+def test_referee_end_is_identical_before_and_after_fetch(tmp_path, ended, code, reason):
+    raw = referee_metadata(ended)
+    remote = summary(raw)
+    assert remote["episode"]["harness_summary"]["referee"]["ended"] == ended
+    classification = reader.trial_end_classification_at(None, remote)
+    assert classification["verdict"] == "failure"
+    assert classification["reason"] == reason
+    cause = classification["cause"]
+    assert cause["code"] == code
+    assert classification["evidence"]["source"] == "審判（gateway）"
+    assert cause["evidence"]["harness_summary.referee.ended"] == ended
+    assert classification["conditions"]["steps_used"] == cause["used"] == 265
+    if ended == "steplimit":
+        assert cause["limit"] == 265
+        assert cause["source"] == "capx/gateway/timing.py:reach_limit"
+    elif ended == "reset":
+        assert cause["label"] == "提出物が試行を終えた（未達成）"
+        assert "リセット" in cause["explanation"]
+    elif ended == "cut":
+        assert cause["label"] == "評価ジョブの終了で打ち切り"
+        assert "時間制限" in cause["explanation"] and "完了した試行に数えません" in cause["explanation"]
+    else:
+        assert "future_end_state" in cause["explanation"]
+
+    # A parsed FINISH, code timeout, or different event-level counters must not
+    # replace the referee's cause when the remote episode is downloaded.
+    events = [event("episode_start", 1, source="eval_gateway", stop_context={"steps_used": 999}),
+              event("model_output_parsed", 2, decision="finish", model_said_finish=True),
+              event("code_execution_timeout", 3, code_timeout=True),
+              event("episode_end", 4, end_reason="completed", stop_context={"steps_used": 999},
+                    harness_summary={"task_completed": False})]
+    directory = write_trial(tmp_path, raw=raw, events=events)
+    with reader.Dir.open_root(directory) as opened:
+        local = reader.episode_summary("run", directory)
+        assert reader.trial_end_classification_at(opened, local) == classification
+
+
+@pytest.mark.parametrize("ended", ["steplimit", "reset", "cut", "future_end_state"])
+def test_referee_success_uses_first_success_steps_and_survives_events(tmp_path, ended):
+    raw = referee_metadata(ended, success=True)
+    classification = classify_trial_end(summary(raw))
+    assert classification["verdict"] == classification["reason"] == classification["cause"]["code"] == "success"
+    assert classification["conditions"]["steps_used"] == classification["cause"]["used"] == 42
+    directory = write_trial(tmp_path, raw=raw,
+                            events=[event("model_output_parsed", 1, decision="finish", model_said_finish=True),
+                                    event("episode_end", 2, end_reason="completed", sim_step=265)])
+    with reader.Dir.open_root(directory) as opened:
+        assert reader.trial_end_classification_at(opened, reader.episode_summary("run", directory)) == classification
+
+
+@pytest.mark.parametrize("cycles", [None, -1, True, "265"])
+def test_referee_steplimit_uses_recorded_stop_context_when_cycles_unavailable(cycles):
+    classification = classify_trial_end(summary(referee_metadata("steplimit", cycles=cycles)))
+    assert classification["cause"]["limit"] == classification["cause"]["used"] == 265
+
+
+def test_referee_steplimit_does_not_invent_missing_counters():
+    raw = referee_metadata("steplimit", cycles=None)
+    raw.pop("stop_context")
+    classification = classify_trial_end(summary(raw))
+    assert classification["cause"]["code"] == "step_limit"
+    assert classification["cause"]["used"] is classification["cause"]["limit"] is None
+    assert classification["cause"]["missing_evidence"]
+
+
+@pytest.mark.parametrize("ended", ["steplimit", "reset", "cut", "future_end_state"])
+def test_route_a_does_not_use_referee_end_states(ended):
+    raw = referee_metadata(ended)
+    raw["source"] = "envs.runner"
+    events = [event("model_output_parsed", 1, decision="finish", model_said_finish=True)]
+    classification = classify_trial_end(summary(raw), events)
+    raw["harness_summary"].pop("referee")
+    assert classify_trial_end(summary(raw), events) == classification
+    assert classification["cause"]["code"] == "finish_unmet"
 
 
 def single_shot_metadata(**changes):
