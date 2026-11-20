@@ -278,11 +278,15 @@ def validate_job_context(job: Any) -> None:
 def _validate_summary(summary: Any) -> None:
     counts = {"trials", "success", "failure", "unknown", "incomplete"}
     fields = counts | {"by_task", "tasks", "seeds", "models", "config_flags", "mixed", "verdict_sources"}
-    _require(isinstance(summary, dict) and set(summary) == fields, "summary fields")
+    _require(isinstance(summary, dict) and fields.issubset(summary)
+             and set(summary).issubset(fields | {"attempts"}), "summary fields")
     for field in counts:
         _count(summary[field], f"summary.{field}")
     _require(summary["success"] + summary["failure"] + summary["unknown"] == summary["trials"]
              and summary["incomplete"] <= summary["trials"], "summary counts")
+    if "attempts" in summary:
+        _count(summary["attempts"], "summary.attempts")
+        _require(summary["attempts"] >= summary["trials"], "summary.attempts")
     for field in ("tasks", "seeds", "mixed"):
         _require(isinstance(summary[field], list) and len(summary[field]) <= _MAX_ITEMS, f"summary.{field}")
     for task in summary["tasks"]:
@@ -296,10 +300,13 @@ def _validate_summary(summary: Any) -> None:
         for key in summary[field]:
             _text(key, f"summary.{field} key", empty=False)
     for counts in summary["by_task"].values():
-        _require(isinstance(counts, dict) and set(counts) == {"trials", "success"}, "summary.by_task")
+        _require(isinstance(counts, dict) and {"trials", "success"}.issubset(counts)
+                 and set(counts).issubset({"trials", "success", "attempts"}), "summary.by_task")
         for key in counts:
             _count(counts[key], "summary.by_task")
         _require(counts["success"] <= counts["trials"], "summary.by_task")
+        if "attempts" in counts:
+            _require(counts["attempts"] >= counts["trials"], "summary.by_task.attempts")
     for model in summary["models"].values():
         _text(model, "summary.models", 512, empty=False)
     _json_value(summary["config_flags"], "summary.config_flags")
@@ -459,9 +466,12 @@ def trial_verdict(episode_summary: dict[str, Any], runner_records: Sequence[Any]
     return _verdict_and_source(episode_summary, runner_records)[0]
 
 
-def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Sequence[Any] = ()) -> dict[str, Any]:
-    """Aggregate attempts without recording individual trials, paths or endpoints."""
-    summary: dict[str, Any] = {"trials": len(episodes), "success": 0, "failure": 0,
+def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Sequence[Any] = (), *,
+                       logical: bool = False) -> dict[str, Any]:
+    """Aggregate trials, retaining all-attempt counts when selecting logical trials."""
+    attempts = episodes
+    episodes = latest_logical_episodes(episodes) if logical else episodes
+    summary: dict[str, Any] = {"trials": len(episodes), "attempts": len(attempts), "success": 0, "failure": 0,
                                "unknown": 0, "incomplete": 0, "by_task": {}, "tasks": [],
                                "seeds": [], "models": {}, "config_flags": {}, "mixed": [],
                                "verdict_sources": {}}
@@ -508,6 +518,12 @@ def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Seque
                     summary[target][key] = all_values[0]
             else:
                 summary["mixed"].append(f"models.{key}" if target == "models" else key)
+    for counts in summary["by_task"].values():
+        counts["attempts"] = 0
+    for episode in attempts:
+        task = episode.get("task")
+        if isinstance(task, str) and task in summary["by_task"]:
+            summary["by_task"][task]["attempts"] += 1
     return summary
 
 
@@ -540,7 +556,7 @@ def latest_logical_episodes(episodes: Sequence[dict[str, Any]]) -> list[dict[str
 def summarize_run(trace_root: Path, run_id: str, *, now: float | None = None, logical: bool = False) -> dict[str, Any]:
     details = reader.run_detail(trace_root, run_id, now=now) or {}
     episodes = details.get("episodes", [])
-    return aggregate_episodes(latest_logical_episodes(episodes) if logical else episodes, details.get("runner_records", []))
+    return aggregate_episodes(episodes, details.get("runner_records", []), logical=logical)
 
 
 def display_status(record: dict[str, Any], *, now: float | None = None) -> str | None:

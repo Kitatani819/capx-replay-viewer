@@ -67,6 +67,8 @@ hype-agent以外でCaP-Xを直接動かす場合は、従来どおり[記録器�
 
 `python -m capx_trace_recorder eval --changed "変更した部品" --baseline <基準の評価ID> -- <評価コマンド>` で評価を記録し、試行画面の「評価一覧」から基準との比較や試行の録画・ログを開けます。GMOでは `CAPX_TRACE_DIR` が空でも、`HYPE_TRACE_ROOT` または既存の `~/shared-storage` から自分の記録先を選びます。`Host gmo` が設定済みなら、各メンバーは `bash Start-Replay.sh --from-gmo` だけで共有先の評価を見られます（[実行方法・保存先の優先順位](docs/evals.md)）。
 
+評価の開始時と終了時に、全員の結果を1ファイルにまとめた `~/shared-storage/traces/index.html` も更新します。GMO上で直接開くかPCへコピーすると、Viewerを起動せず一覧を読めます。失敗した試行はViewerで開けます。手動の再生成は `python -m capx_trace_recorder index --root ~/shared-storage/traces`、自動更新の停止は `CAPX_EVAL_INDEX=0` または `eval --no-index` です（[HTML一覧の使い方](docs/evals.md#viewerを起動せず一覧を見る)）。
+
 ## 対応環境
 
 | サーバーを動かす環境 | 起動方法 |

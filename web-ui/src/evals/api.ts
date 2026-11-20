@@ -3,7 +3,7 @@ import { getJson } from '../trace/api';
 import type { TaskVerdict } from '../trace/outcome';
 import type { EndClassification } from '../trace/types';
 
-export interface EvalCounts { trials: number; success: number }
+export interface EvalCounts { trials: number; success: number; attempts?: number }
 export interface CodeChangeMetadata {
   status: 'recorded' | 'no_baseline' | 'baseline_missing' | 'baseline_ambiguous' | 'baseline_git_missing' | 'baseline_dirty' | 'current_git_missing' | 'git_unavailable' | 'write_failed';
   baseline_commit: string | null;

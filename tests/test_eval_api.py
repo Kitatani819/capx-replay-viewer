@@ -20,6 +20,7 @@ def record(eval_id, *, baseline=None, status="completed", success=1):
     summary = evals.aggregate_episodes([])
     summary.update(trials=2, success=success, failure=2-success, by_task={"cube": {"trials": 2, "success": success}},
                    tasks=["cube"], seeds=[401, 402])
+    summary.pop("attempts", None)  # Legacy records did not distinguish retries.
     return {
         "schema": "capx-eval/1", "eval_id": eval_id, "status": status,
         "end": None if status == "running" else {"exit_code": 0, "signal": None},
@@ -37,11 +38,13 @@ def write_record(root, value):
     return run
 
 
-def episode(run, episode_id="trial", *, success=True, attempt=1):
+def episode(run, episode_id="trial", *, success=True, attempt=1, seed=401, segment=None):
     directory = run / episode_id
     directory.mkdir()
-    metadata = {"status": "ended", "trace_complete": True, "task": "cube", "condition": "M1", "seed": 401,
+    metadata = {"status": "ended", "trace_complete": True, "task": "cube", "condition": "M1", "seed": seed,
                 "attempt_index": attempt, "end_reason": "completed", "harness_summary": {"task_completed": success}}
+    if segment is not None:
+        metadata["eval_segment"] = segment
     (directory / "episode.json").write_text(json.dumps(metadata), encoding="utf-8")
     return metadata
 
@@ -79,7 +82,75 @@ def test_local_listing_and_comparison(tmp_path):
                                                                      "missing_evidence": ["最終のモデル判断 / 適用されたターン・書き直し上限 / 終了した規則名"]},
                                                            "rule_differences": []},
                                     "trace_complete": True, "local_state": "local"}
-    assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401, 403]}]
+    assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401]}]
+
+
+@pytest.mark.parametrize("stored_logical", [False, True])
+def test_finished_summary_matches_logical_trials_and_listing(tmp_path, stored_logical):
+    value = record("ev-retried")
+    trials = 2 if stored_logical else 3
+    value["summary"].update(trials=trials, failure=trials-1,
+                            by_task={"cube": {"trials": trials, "success": 1}})
+    if stored_logical:
+        value["summary"]["attempts"] = 3
+        value["summary"]["by_task"]["cube"]["attempts"] = 3
+    run = write_record(tmp_path, value)
+    episode(run, "timed-out", success=False)
+    episode(run, "retry", success=True, attempt=2)
+    episode(run, "other-seed", success=False, seed=402)
+
+    service = EvalService(tmp_path)
+    detail = service.detail(value["eval_id"])
+    summary = detail["summary"]
+    assert (summary["success"], summary["trials"], summary["attempts"]) == (1, 2, 3)
+    assert summary["by_task"] == {"cube": {"success": 1, "trials": 2, "attempts": 3}}
+    logical = {}
+    for trial in detail["trials"]:
+        key = (trial["task"], trial["condition"], trial["seed"])
+        if key not in logical or trial["attempt"] > logical[key]["attempt"]:
+            logical[key] = trial
+    assert summary["trials"] == len(logical)
+    assert summary["success"] == sum(trial["verdict"] == "success" for trial in logical.values())
+    assert service.listing()["evals"][0]["summary"] == summary
+    assert detail["eval"]["summary"] == value["summary"]
+    assert json.loads((run / "eval.json").read_text()) == value
+
+
+@pytest.mark.parametrize("available", ["missing", "run_metadata_only", "corrupt", "symlink"])
+def test_finished_summary_falls_back_without_readable_local_episodes(tmp_path, available):
+    value = record("ev-unavailable")
+    run = write_record(tmp_path, value)
+    if available == "run_metadata_only":
+        (run / "run.json").write_text("{}")
+    elif available in ("corrupt", "symlink"):
+        episode(run)
+        target = run / "trial" / "episode.json"
+        if available == "corrupt":
+            target.write_text("{")
+        else:
+            original = tmp_path / "outside.json"
+            target.rename(original)
+            target.symlink_to(original)
+    service = EvalService(tmp_path)
+    assert service.detail(value["eval_id"])["summary"] == value["summary"]
+    assert service.listing()["evals"][0]["summary"] == value["summary"]
+
+
+def test_running_local_summary_prefers_latest_segment(tmp_path):
+    value = record("ev-resumed", status="running")
+    value["segments"] = [
+        {"index": 1, "status": "interrupted", "started_at": value["started_at"],
+         "ended_at": value["started_at"], "end": {"exit_code": 1, "signal": None},
+         "completed_before": 0, "completed_after": 0},
+        {"index": 2, "status": "running", "started_at": value["started_at"],
+         "ended_at": None, "end": None, "completed_before": 0, "completed_after": None},
+    ]
+    run = write_record(tmp_path, value)
+    episode(run, "old-segment", success=False, attempt=3, segment=1)
+    episode(run, "new-segment", success=True, segment=2)
+    detail = EvalService(tmp_path).detail(value["eval_id"])
+    assert detail["eval"]["segments"] == value["segments"]
+    assert (detail["summary"]["success"], detail["summary"]["trials"], detail["summary"]["attempts"]) == (1, 1, 2)
 
 
 @pytest.mark.parametrize("damage", ["json", "size", "schema", "id", "length", "type", "nan", "symlink", "directory"])
@@ -128,13 +199,50 @@ def test_remote_evals_merge_trials_with_local_precedence_and_missing_baseline(tm
     service = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing))
     row = next(row for row in service.listing()["evals"] if row["eval_id"] == value["eval_id"])
     assert row["location"] == "both"
-    assert row["summary"]["trials"] == 2 and row["summary"]["success"] == 1
+    assert row["summary"]["trials"] == 1 and row["summary"]["success"] == 1
+    assert row["summary"]["attempts"] == 2
     detail = service.detail(value["eval_id"])
     assert detail["baseline"] is None and detail["baseline_error"]
     trials = {trial["episode_id"]: trial for trial in detail["trials"]}
     assert trials["trial"]["verdict"] == "failure" and trials["trial"]["local_state"] == "local"
     assert trials["remote-only"]["verdict"] == "success" and trials["remote-only"]["local_state"] == "remote"
     assert service.detail("ev-empty")["trials"] == []
+
+
+@pytest.mark.parametrize("status,segmented", [("completed", False), ("running", False), ("running", True)])
+def test_remote_only_summary_preserves_stored_and_segment_behavior(tmp_path, monkeypatch, status, segmented):
+    value = record("ev-remote", status=status)
+    if segmented:
+        value["segments"] = [{"index": 1, "status": "running", "started_at": value["started_at"],
+                              "ended_at": None, "end": None, "completed_before": 0, "completed_after": None}]
+    old = {"task": "cube", "condition": "M1", "seed": 401, "attempt_index": 1,
+           "status": "ended", "trace_complete": True, "end_reason": "completed",
+           "harness_summary": {"task_completed": False}}
+    latest = {**old, "attempt_index": 2, "harness_summary": {"task_completed": True}}
+    listing = {"evals": [remote_eval(value)],
+               "episodes": [remote_episode(value["eval_id"], old, "old"),
+                            remote_episode(value["eval_id"], latest, "latest")]}
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    detail = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing)).detail(value["eval_id"])
+    if status == "completed":
+        assert detail["summary"] == value["summary"]
+    else:
+        assert (detail["summary"]["success"], detail["summary"]["trials"], detail["summary"]["attempts"]) == (
+            1, 1 if segmented else 2, 2)
+
+
+def test_remote_conflict_still_allows_local_logical_summary(tmp_path, monkeypatch):
+    value = record("ev-conflict-local")
+    run = write_record(tmp_path, value)
+    episode(run, "old", success=False)
+    metadata = episode(run, "retry", attempt=2)
+    listing = {"evals": [remote_eval(value, conflict=True)],
+               "episodes": [remote_episode(value["eval_id"], {**metadata, "seed": 999}, "ignored")]}
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    detail = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing)).detail(value["eval_id"])
+    assert detail["error"]
+    assert {trial["episode_id"] for trial in detail["trials"]} == {"old", "retry"}
+    assert (detail["summary"]["success"], detail["summary"]["trials"], detail["summary"]["attempts"]) == (1, 1, 2)
 
 
 def test_remote_invalid_conflicting_and_unavailable_are_isolated(tmp_path, monkeypatch):
@@ -148,6 +256,7 @@ def test_remote_invalid_conflicting_and_unavailable_are_isolated(tmp_path, monke
     rows = {row["eval_id"]: row for row in service.listing()["evals"]}
     assert rows["ev-malformed"]["error"] and rows["ev-malformed"]["eval"] is None
     assert rows["ev-conflict"]["error"] and service.detail("ev-conflict")["trials"] == []
+    assert rows["ev-conflict"]["summary"] == value["summary"]
     write_record(tmp_path, record("ev-offline"))
 
     def unavailable():

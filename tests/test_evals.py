@@ -41,6 +41,10 @@ def test_stdlib_only_imports():
     (("eval_set",), "x" * 201), (("started_at",), "invalid"),
     (("heartbeat_at",), "2026-11-18T09:00:00"),
     (("summary", "trials"), True), (("summary", "incomplete"), -1),
+    (("summary", "attempts"), True), (("summary", "attempts"), -1),
+    (("summary", "attempts"), 1_000_000_001),
+    (("summary", "by_task"), {"cube": {"trials": 2, "success": 1, "attempts": 1}}),
+    (("summary", "by_task"), {"cube": {"trials": 1, "success": 1, "attempts": True}}),
     (("summary", "models"), {"code_generator": {"endpoint": "secret"}}),
     (("summary", "models"), {"m": "x" * 513}),
     (("summary", "seeds"), [True]), (("summary", "config_flags"), {"x": float("nan")}),
@@ -106,12 +110,71 @@ def test_aggregate_keeps_task_results_and_only_model_names():
     assert summary["config_flags"] == {"use_parallel_ensemble": False}
     assert summary["mixed"] == ["multi_turn"]
     assert summary["tasks"] == ["cube"] and summary["seeds"] == [1, 2]
-    assert summary["by_task"] == {"cube": {"trials": 2, "success": 0}}
+    assert summary["attempts"] == 2
+    assert summary["by_task"] == {"cube": {"trials": 2, "success": 0, "attempts": 2}}
     assert summary["verdict_sources"] == {"runner_record": 1, "unknown": 1}
     assert "secret" not in json.dumps(summary)
     _data = record()
     _data["summary"] = summary
     evals.validate_eval_record(_data)
+
+
+def test_logical_aggregation_preserves_all_attempt_counts_and_selected_metadata():
+    def episode(task, seed, attempt, success, model):
+        return {"task": task, "condition": None, "seed": seed, "attempt_index": attempt,
+                "status": "ended", "trace_complete": True, "episode": {
+                    "trial_outcome": {"task_success": success, "source": "recorder_terminal"},
+                    "models": {"code_generator": model}}}
+
+    episodes = [episode("cube", 1, 1, False, "old"), episode("cube", 1, 2, True, "new"),
+                episode("cube", 2, 1, False, "new"), episode("lift", 1, 1, True, "new")]
+    legacy = evals.aggregate_episodes(episodes)
+    logical = evals.aggregate_episodes(episodes, logical=True)
+    assert (legacy["success"], legacy["trials"], legacy["attempts"]) == (2, 4, 4)
+    assert (logical["success"], logical["trials"], logical["attempts"]) == (2, 3, 4)
+    assert logical["by_task"] == {
+        "cube": {"trials": 2, "success": 1, "attempts": 3},
+        "lift": {"trials": 1, "success": 1, "attempts": 1},
+    }
+    assert logical["models"] == {"code_generator": "new"}
+    assert logical["mixed"] == []
+    selected = evals.aggregate_episodes(evals.latest_logical_episodes(episodes))
+    assert {key: value for key, value in logical.items() if key not in ("attempts", "by_task")} == {
+        key: value for key, value in selected.items() if key not in ("attempts", "by_task")}
+    for summary in (legacy, logical):
+        data = record()
+        data["summary"] = summary
+        assert evals.validate_eval_record(data) == data
+
+    # Records written before attempt counts were introduced remain readable.
+    legacy.pop("attempts")
+    for counts in legacy["by_task"].values():
+        counts.pop("attempts")
+    data["summary"] = legacy
+    assert evals.validate_eval_record(data) == data
+
+
+def test_attempt_count_cannot_be_less_than_trials():
+    data = record()
+    data["summary"] = evals.aggregate_episodes([{}])
+    data["summary"]["attempts"] = 0
+    with pytest.raises(evals.EvalValidationError, match="summary.attempts"):
+        evals.validate_eval_record(data)
+
+
+def test_summarize_run_keeps_attempts_for_logical_trials(tmp_path, monkeypatch):
+    episodes = [{"task": "cube", "seed": 1, "attempt_index": index} for index in (1, 2)]
+    monkeypatch.setattr(evals.reader, "run_detail", lambda *_args, **_kwargs: {
+        "episodes": episodes, "runner_records": []})
+    summary = evals.summarize_run(tmp_path, "ev-test", logical=True)
+    assert (summary["trials"], summary["attempts"]) == (1, 2)
+    assert summary["by_task"]["cube"] == {"trials": 1, "success": 0, "attempts": 2}
+
+
+def test_summarize_missing_run_has_no_trials_or_attempts(tmp_path):
+    summary = evals.summarize_run(tmp_path, "ev-missing", logical=True)
+    assert summary["trials"] == summary["attempts"] == 0
+    assert summary["by_task"] == {}
 
 
 def test_local_evals_report_bad_files_and_do_not_follow_symlinks(tmp_path):

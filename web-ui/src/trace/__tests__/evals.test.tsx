@@ -63,6 +63,27 @@ test('comparison renders regression text and border, retry, blanks, condition di
   assert.match(html, /title="試行を開く" aria-label="失敗（終わり方が不明）・悪化（基準は成功）・再試行あり（試行を開く）"/);
   assert.match(html, /集計と試行の表の数が異なります/);
 });
+test('logical summaries match the displayed retries without segment metadata on either side', () => {
+  const d = detail();
+  d.trials = [trial('current-timeout', 401, 'failure'), trial('current-retry', 401, 'success', { attempt: 2 }), trial('current-other', 402, 'failure')];
+  d.baseline_trials = [trial('baseline-first', 401, 'success'), trial('baseline-retry', 401, 'failure', { attempt: 2 }), trial('baseline-other', 402, 'success')];
+  // The API corrects the displayed summary while preserving the old eval.json.
+  d.eval!.summary = { ...summary, trials: 3, failure: 2 };
+  d.baseline!.summary = { ...summary, trials: 3, success: 2 };
+  d.summary = { ...summary, attempts: 3 };
+  d.baseline_summary = { ...summary, attempts: 3 };
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /基準 1\/2 → 今回 1\/2/);
+  assert.match(html, /episode=current-retry/);
+  assert.match(html, /episode=baseline-retry/);
+  assert.doesNotMatch(html, /集計と試行の表の数が異なります/);
+
+  d.summary = { ...summary, success: 0, failure: 2 };
+  assert.match(renderToStaticMarkup(<EvalComparison detail={d} />), /集計と試行の表の数が異なります/);
+  d.summary = summary;
+  d.baseline_summary = { trials: 2, success: 0 };
+  assert.match(renderToStaticMarkup(<EvalComparison detail={d} />), /集計と試行の表の数が異なります/);
+});
 test('condition differences show only changed config flags and preserve the API data', () => {
   const d = detail();
   d.differences = [{ field: 'config_flags',
