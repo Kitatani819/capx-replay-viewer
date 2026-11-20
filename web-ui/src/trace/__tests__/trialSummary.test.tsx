@@ -132,3 +132,15 @@ test('a written frame reference remains usable when a separate frame event is mi
   assert.equal(lastRecordedFrame(model)?.event.event_id, end.event_id);
   assert.equal(resolveSelection(model, end.event_id)?.eventId, end.event_id);
 });
+
+test('a running trial says it is still running instead of naming a partial record as its ending', () => {
+  const f = fixture();
+  const summary: EpisodeSummary = { ...f.summary, status: 'running', end_reason: null,
+    end_classification: { reason: 'unknown', label: '', evidence: {},
+      cause: { code: 'recording_incomplete', explanation: '試行の終了または成否の記録が欠けています。' } } as EpisodeSummary['end_classification'] };
+  const html = renderToStaticMarkup(<TrialSummaryCard ep={ep} model={f.model} summary={summary} verdict="running" />);
+  assert.match(html, /<dt>終わり方<\/dt><dd><strong>まだ実行中です<\/strong><\/dd>/);
+  assert.doesNotMatch(html, /記録が欠けています|根拠を見る/);
+  assert.match(html, /最新（今回）/);
+  assert.doesNotMatch(html, /終了時（今回）/);
+});
