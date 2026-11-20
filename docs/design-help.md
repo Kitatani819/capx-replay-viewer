@@ -95,7 +95,7 @@ scp gmo:shared-storage/traces/index.html ./capx-evals.html
 
 | 画面 | URL | 何を見るための画面か |
 | --- | --- | --- |
-| 評価一覧 | `/evals` | 評価ごとの成功率と、基準からの変化。成功率の推移のグラフ |
+| 評価一覧 | `/evals` | 評価ごとの成功率と、基準からの変化 |
 | 評価の比較 | `/evals/<評価ID>` | 基準と改良版の、課題×seed ごとの成否。悪化した試行と失敗の原因（失敗の内訳） |
 | 試行 | `/traces?run=…&episode=…` | 1 回の試行の要約（終わり方・最初のエラー）、動画（複数カメラ）、1 行ずつの処理の一覧、モデルの入出力 |
 | 共有用の HTML 評価一覧 | `outputs/demo/traces/index.html` | Viewer を起動せず読める評価の一覧。React の画面と同じ見た目にそろえる |
