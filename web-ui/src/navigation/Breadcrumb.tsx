@@ -1,6 +1,7 @@
 import type { EvalRecord } from '../evals/api';
 import { trialEventUrl } from '../trace/sideBySide';
 import './breadcrumb.css';
+import { siteHref } from './site';
 
 export interface BreadcrumbItem { label: string; href?: string }
 
@@ -11,7 +12,7 @@ export function Breadcrumb({ items }: { items: readonly BreadcrumbItem[] }) {
       {index > 0 && <span className="breadcrumb-separator" aria-hidden="true">›</span>}
       {index === items.length - 1
         ? <span aria-current="page">{item.label}</span>
-        : <a href={item.href}>{item.label}</a>}
+        : <a href={item.href ? siteHref(item.href) : undefined}>{item.label}</a>}
     </li>)}</ol>
   </nav>;
 }

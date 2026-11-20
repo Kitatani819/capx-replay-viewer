@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { evalApi } from '../evals/api';
 import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
+import { SiteTabs } from '../navigation/SiteTabs';
 import { ApiError, episodeFileUrl, fetchJsonFile, traceApi, type EpisodeRef } from './api';
 import { TaskOutcomeBadge } from './components/TaskOutcomeBadge';
 import { cameraForVideo, cameraLabel, mainCameraOf } from './cameras';
@@ -225,8 +226,8 @@ export default function SideBySidePage() {
   const complete = !!runId && !!episodeId && !!baselineRunId && !!baselineEpisodeId;
   useEffect(() => { document.title = '同じseedで比べる · CaP-X'; }, []);
   return <main className="replay-workspace comparison-page">
-    <Breadcrumb items={trialBreadcrumbs({ runId, episodeId, evaluation: evaluation.data?.eval,
-      task: current.summary?.task ?? currentTrial?.task, seed: current.summary?.seed ?? currentTrial?.seed, compare: true })} />
+    <div className="site-page-navigation"><Breadcrumb items={trialBreadcrumbs({ runId, episodeId, evaluation: evaluation.data?.eval,
+      task: current.summary?.task ?? currentTrial?.task, seed: current.summary?.seed ?? currentTrial?.seed, compare: true })} /><SiteTabs /></div>
     {!complete ? <p role="alert">比較する2つの試行を指定してください。</p> : <>
       {!baseline.data && <div className="comparison-loading" role="status">基準：{baseline.message}
         {!baseline.importing?.busy && <button type="button" onClick={baseline.retry}>再読み込み</button>}</div>}
