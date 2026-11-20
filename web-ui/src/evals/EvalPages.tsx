@@ -1,3 +1,6 @@
+import { remoteName } from '../navigation/site';
+import { siteHref } from '../navigation/site';
+import { SiteTabs } from '../navigation/SiteTabs';
 /** Calm, read-only evaluation list and baseline comparison. */
 import { useEffect, useRef } from 'react';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
@@ -70,7 +73,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
     <tbody>{entries.map((entry, index) => {
       const record = entry.eval;
       if (!record) return <tr key={`${entry.eval_id}-${index}`}><td colSpan={6} className="eval-error">読み取れない評価：{entry.eval_id}<br />{entry.error || '記録が不正です'}</td></tr>;
-      const href = `/evals/${encodeURIComponent(record.eval_id)}`;
+      const href = siteHref(`/evals/${encodeURIComponent(record.eval_id)}`);
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
         <td><a href={href}>{evaluationTitle(record)}</a>{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
@@ -92,12 +95,12 @@ export function EvalListPage() {
   const status = listing.data?.remote_status;
   return <main className="eval-page"><div className="eval-content">
     <Breadcrumb items={[{ label: '評価一覧' }]} />
-    <header className="eval-header"><h1>評価一覧</h1><a href="/traces">試行を見る</a></header>
+    <header className="eval-header"><h1>評価一覧</h1><SiteTabs /><a href={siteHref('/traces')}>試行を見る</a></header>
     <p className="eval-intro">基準と改良の結果を比べ、試行の記録を開けます。</p>
     {listing.loading && !listing.data && <p role="status">評価を読み込み中…</p>}
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
-    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>GMO の一覧を更新</button></div>}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>{remoteName()} の一覧を更新</button></div>}
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
@@ -116,9 +119,9 @@ function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: {
   const label = `${trial.verdict === 'failure' ? `失敗（${reasonLabel(trial)}）` : reasonLabel(trial)}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
   const query = new URLSearchParams({ run: evalId, episode: trial.episode_id });
   const tooltip = [trial.end_classification && causeTooltip(trial.end_classification), stepsText(trial.end_classification), '試行を開く'].filter(Boolean).join('\n');
-  return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title={tooltip} aria-label={`${label}（試行を開く）`}>
+  return <td className="eval-cell"><div className="eval-cell-actions"><a href={siteHref(`/traces?${query.toString()}`)} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title={tooltip} aria-label={`${label}（試行を開く）`}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
-  </a>{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
+  </a>{baselineCell && baselineId && <a className="eval-compare-link" href={siteHref(`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`)} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
 }
 export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
@@ -167,7 +170,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     <p className="eval-legend">{table.seeds.length > MAX_SEEDS_FOR_WORDS
       ? `○ ${END_LABELS.success}　× 失敗　– ${CATEGORY_CELL_WORDS.unjudged}＝${UNJUDGED_LABEL}　… ${CATEGORY_CELL_WORDS.running}　空欄＝記録なし（seed が多いため記号で表示しています）`
       : WORD_LEGEND}</p>
-    {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
+    {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。{remoteName()} の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
     <EvalCodeChanges record={record} />
     <FailureBreakdown detail={detail} />
   </>;
@@ -206,10 +209,10 @@ export function EvalDetailPage({ evalId }: { evalId: string }) {
   const status = detail.data?.remote_status;
   useInterval(detail.poll, status?.refreshing ? 2000 : 30_000, status?.refreshing === true || detail.data?.eval?.status === 'running');
   return <main className="eval-page"><div className="eval-content">
-    <Breadcrumb items={[{ label: '評価一覧', href: '/evals' }, { label: detail.data?.eval ? evaluationTitle(detail.data.eval) : evalId }]} />
+    <div className="site-page-navigation"><Breadcrumb items={[{ label: '評価一覧', href: '/evals' }, { label: detail.data?.eval ? evaluationTitle(detail.data.eval) : evalId }]} /><SiteTabs /></div>
     {detail.loading && !detail.data && <p role="status">評価を読み込み中…</p>}
     {detail.error && <p role="alert" className="eval-error">評価を読み込めません：{detail.error}</p>}
-    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={detail.loading || status.refreshing} onClick={() => { refreshNext.current = true; detail.reload(); }}>GMO の一覧を更新</button></div>}
-    {detail.data?.loading_remote ? <p role="status">GMO の評価を取得中…</p> : detail.data && <EvalComparison detail={detail.data} />}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={detail.loading || status.refreshing} onClick={() => { refreshNext.current = true; detail.reload(); }}>{remoteName()} の一覧を更新</button></div>}
+    {detail.data?.loading_remote ? <p role="status">{remoteName()} の評価を取得中…</p> : detail.data && <EvalComparison detail={detail.data} />}
   </div></main>;
 }

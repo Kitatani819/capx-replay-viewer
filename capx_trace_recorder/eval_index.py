@@ -20,7 +20,7 @@ import stat
 import sys
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from capx_trace_recorder.evaluation_failure import (
     evaluation_failure, failure_description, preserve_evaluation_failure,
@@ -314,7 +314,8 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
     rows = []
     for record in records:
         identity = record["eval_id"]  # Validated before it becomes part of a URL.
-        link = _escape(f"{viewer_url}/evals/{identity}")
+        viewer = urlsplit(viewer_url)
+        link = _escape(urlunsplit(viewer._replace(path=f"{viewer.path.rstrip('/')}/evals/{identity}")))
         git = record.get("git")
         commit = git["commit"][:8] + (" (dirty)" if git.get("dirty") else "") if git else "記録なし"
         baseline = record.get("baseline_eval_id")
@@ -381,9 +382,9 @@ def build_index(root: Path, out: Path | None = None,
     out = Path(os.path.abspath(Path(out).expanduser())) if out is not None else root / "index.html"
     parsed = urlsplit(viewer_url)
     _require(parsed.scheme in ("http", "https") and bool(parsed.hostname)
-             and not parsed.query and not parsed.fragment and not parsed.username and not parsed.password
+             and not parsed.fragment and not parsed.username and not parsed.password
              and not any(ord(c) < 32 or ord(c) == 127 for c in viewer_url), "viewer URL (use http:// or https://)")
-    viewer_url = viewer_url.rstrip("/")
+    viewer_url = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")))
     with _directory(out.parent) as output_fd:
         group = os.fstat(output_fd).st_gid
         lock_fd = os.open(out.name + ".lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,

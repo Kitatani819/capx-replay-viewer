@@ -1,3 +1,4 @@
+import { remoteName } from '../navigation/site';
 /** Import only the missing episode named in the URL; never a whole run. */
 import { useEffect, useState } from 'react';
 import { ApiError, errorText, gmoApi } from './api';
@@ -23,7 +24,7 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
       if (!signal.aborted) setState({ key, value: { busy, message } });
     };
     const start = async () => {
-      update(true, '手元にないため、GMO の記録を確認中…');
+      update(true, `手元にないため、${remoteName()} の記録を確認中…`);
       try {
         let config;
         try { config = await gmoApi.config(signal); }
@@ -47,7 +48,7 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
           if (signal.aborted) return;
           if (status.error && !status.refreshing) throw new Error(status.error);
           if (status.refreshing) {
-            update(true, 'GMO の一覧を更新中…');
+            update(true, `${remoteName()} の一覧を更新中…`);
             await waitForPoll(signal);
           }
           // Completion can fall between the rows and status reads. Always
@@ -59,7 +60,7 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
         }
         if (matches.length === 0) { update(false, 'この試行は手元にも GMO にも見つかりません。'); return; }
         if (matches.length > 1 || matches.some(row => row.conflict)) {
-          update(false, '同じ run ID が GMO の複数の場所にあるため取り込めません。'); return;
+          update(false, `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません。`); return;
         }
         const row = matches[0];
         if (!row.size_approximate && row.size_bytes >= 1024 ** 3) { update(false, '1 GiB の上限を超えるため、この試行は自動で取り込めません。'); return; }

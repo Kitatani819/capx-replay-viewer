@@ -357,6 +357,8 @@ def api_ssh_argv(settings: GmoSettings) -> list[str]:
     if os.name != "nt" and sys.platform != "win32":
         # A private, short local path also fits macOS's Unix-socket path limit.
         # Multiplexing avoids a fresh login for every live manifest and rsync.
+        # OpenSSH %C hashes the local host, remote host, port and remote user,
+        # so sites on different hosts cannot reuse each other's control socket.
         control_dir = Path("/tmp") / f"capx-gmo-ssh-{os.getuid()}"
         control_dir.mkdir(mode=0o700, exist_ok=True)
         st = control_dir.lstat()
@@ -1139,10 +1141,10 @@ def fetch_episode(runner: ProcessRunner, settings: GmoSettings, row: dict[str, A
                              max_bytes=max_bytes, deadline=deadline, notes=notes, changes=changes)
 
 
-def prefetch_mine(dest: Path) -> int:
-    """Launcher prefetch: copy only episodes matched by the configured mine patterns."""
+def prefetch_mine(dest: Path, config_path: Path | None = None) -> int:
+    """Launcher prefetch using one site's configured mine patterns."""
     try:
-        settings = load_settings()
+        settings = load_settings() if config_path is None else load_settings(config_path)
         if not settings.host or not (settings.shared_root or settings.mine):
             print("GMO settings for mine are missing; starting without prefetch.", file=sys.stderr)
             return 0

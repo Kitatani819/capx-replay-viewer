@@ -1,3 +1,4 @@
+import { remoteName } from '../../navigation/site';
 /**
  * Run and episode picker (docs/trace-format.md 9.3): runs newest first, then
  * the episodes of a run with status badges (attempts of one seed next to each
@@ -99,7 +100,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
     <div className="flex flex-col h-full min-h-0 bg-surface">
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-b border-surface-border bg-surface-raised">
         {gmoAvailable && (
-          <SmallButton active={mode === 'gmo'} title="GMO の記録を探して取り込み、開きます" onClick={() => selectMode('gmo')}>GMO</SmallButton>
+          <SmallButton active={mode === 'gmo'} title={`${remoteName()} の記録を探して取り込み、開きます`} onClick={() => selectMode('gmo')}>{remoteName()}</SmallButton>
         )}
         <SmallButton active={mode === 'traced'} title="手元に保存されたトレースの一覧です" onClick={() => selectMode('traced')}>
           {LABELS.localSection}

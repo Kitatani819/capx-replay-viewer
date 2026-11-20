@@ -101,6 +101,8 @@ bash Start-Replay.sh
 
 2回目以降はプロジェクト直下で `bash Start-Replay.sh` を実行します。更新後に画面をビルドし直す場合は `web-ui` で `npm ci` と `npm run build` を実行してください。
 
+GMO B300とRTX PRO 6000 VMの記録を1つのviewerで開くには、`bash Start-Replay.sh --from-gmo --rtx` を使います。上部の「B300」「RTX」で切り替え、各サイトの接続設定・取り込み・Live追従を使えます。RTX用の `rtx.json` を既定の設定ディレクトリに置くか、`--rtx /path/to/rtx.json` で指定してください。RTXの設定がなければB300だけで起動します。[複数サイトの設定](docs/gmo.md#複数の接続先を1つのviewerで開く)を参照してください。
+
 デュアルブートのUbuntuでは、Ubuntu側のホームディレクトリにこのリポジトリを取得して、この手順を実行してください。Windows側の `.venv` や `node_modules` はOSごとの実行ファイルを含むため流用しません。録画・ログは、Ubuntuから読める保存先を `--trace-root` / `--runner-root` で指定できます。
 
 自分で用意したPython環境を使う場合は、必要なパッケージを導入して明示できます。この指定ではランチャーからパッケージを追加しません。

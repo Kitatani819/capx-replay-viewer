@@ -1,3 +1,4 @@
+import { remoteName } from '../navigation/site';
 /**
  * The /traces page of the web UI (docs/trace-format.md 9.1, 9.3).
  *
@@ -42,6 +43,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { evalApi } from '../evals/api';
 import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
+import { SiteTabs } from '../navigation/SiteTabs';
+import { siteHref } from '../navigation/site';
 import './replay.css';
 import { ApiError, traceApi } from './api';
 import { cameraForVideo, mainCameraOf } from './cameras';
@@ -540,7 +543,7 @@ export default function TraceViewerPage() {
   // turn into an arrow, "!=" into "≠").
   return (
     <div className={`${!simple ? 'replay-workspace ' : ''}${pageScroll ? 'replay-page min-h-full' : 'h-full'} flex flex-col bg-surface text-text-primary [font-variant-ligatures:none]`}>
-      <div className="trial-navigation"><Breadcrumb items={breadcrumbs} /></div>
+      <div className="trial-navigation site-page-navigation"><Breadcrumb items={breadcrumbs} /><SiteTabs /></div>
       {simple && <header className="flex-shrink-0 flex flex-wrap items-center gap-3 px-5 py-3 border-b border-surface-border bg-surface-raised">
         <span className="font-semibold">{simple ? '実験を見る' : '実験の詳細'}</span>
         {simple && ep && <><span className="text-sm text-text-secondary">{summary.data?.task ?? ''} · {summary.data?.condition ?? ''}</span><span className="text-sm text-accent">試行全体の最終結果：{simpleOutcome}</span></>}
@@ -610,9 +613,9 @@ export default function TraceViewerPage() {
         <div className="flex-1 min-h-0">{picker}</div>
       ) : missing ? (
         <section className="p-8 space-y-4" aria-label="手元にない試行">
-          <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? '手元にないため、GMO の記録を確認中…'}</p>
+          <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? `手元にないため、${remoteName()} の記録を確認中…`}</p>
           {episodeImport?.retry && <button type="button" className="underline text-accent" onClick={episodeImport.retry}>もう一度読み込む</button>}
-          <a className="underline text-accent" href={`/evals/${encodeURIComponent(runId!)}`}>比較ページへ戻る</a>
+          <a className="underline text-accent" href={siteHref(`/evals/${encodeURIComponent(runId!)}`)}>比較ページへ戻る</a>
         </section>
       ) : simple ? (
         <ErrorBoundary label="動画と入力" resetKey={epKey}>

@@ -30,8 +30,9 @@ function addTimer(fn: () => void, ms: unknown, repeat: boolean): number {
 }
 
 const listeners = new Map<string, Set<(e: unknown) => void>>();
-const location = { pathname: '/traces', search: '', hash: '' };
+const location = { pathname: '/traces', search: '', hash: '', replace: (url: string) => setUrl(url) };
 const storage = new Map<string, string>();
+const sessionStorage = new Map<string, string>();
 
 function setUrl(url: string): void {
   const u = new URL(url, 'http://localhost');
@@ -59,6 +60,11 @@ const fakeWindow = {
   localStorage: {
     getItem: (k: string) => (storage.has(k) ? (storage.get(k) as string) : null),
     setItem: (k: string, v: string) => storage.set(k, String(v)),
+  },
+  sessionStorage: {
+    getItem: (k: string) => sessionStorage.get(k) ?? null,
+    setItem: (k: string, v: string) => sessionStorage.set(k, String(v)),
+    removeItem: (k: string) => sessionStorage.delete(k),
   },
   isSecureContext: false,
 };
@@ -205,6 +211,7 @@ export function resetBrowser(): void {
   net.handler = () => null;
   net.latency = 5;
   storage.clear();
+  sessionStorage.clear();
   listeners.clear();
   setUrl('/traces');
 }

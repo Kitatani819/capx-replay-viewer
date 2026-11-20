@@ -457,6 +457,12 @@ def test_viewer_url_is_escaped_in_link_attributes(tmp_path):
     assert "&amp;" in html and "&quot;" in html
 
 
+def test_viewer_links_preserve_site_query(tmp_path):
+    save(tmp_path, record())
+    markup = Markup(page(tmp_path, viewer_url="http://127.0.0.1:8390/?site=rtx"))
+    assert "http://127.0.0.1:8390/evals/ev-older?site=rtx" in markup.links
+
+
 @pytest.mark.parametrize("content", [
     json.dumps(record()).replace('"by": "member-a"', '"by": NaN'),
     json.dumps(record(changed="\ud800"), ensure_ascii=True),
