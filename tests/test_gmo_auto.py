@@ -674,3 +674,31 @@ def test_auto_api_gate_validation_and_disabled_routes(auto_source):
     disabled = TestClient(create_app(trace_root=service.dest), client=("127.0.0.1", 40001), base_url=BASE)
     assert disabled.get("/api/gmo/auto", headers=READ).status_code == 404
     assert disabled.put("/api/gmo/auto", json={"paused": True}, headers=WRITE).status_code == 404
+
+
+def test_auto_file_listing_gets_its_own_longer_time_limit(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    _episode(mine, "slow")
+    seen = []
+    original = gmo.list_remote_episodes
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gmo, "list_remote_episodes", recording)
+    monkeypatch.setattr(gmo, "_transfer_episode", lambda *args, **kwargs: 0)
+    service.run_auto_once()
+    assert seen == [gmo.FILE_LISTING_TIMEOUT_S]
+    assert gmo.FILE_LISTING_TIMEOUT_S > gmo.LISTING_TIMEOUT_S
+
+
+def test_listing_timeout_says_how_long_it_waited():
+    class SlowRunner:
+        def run(self, command, *, timeout):
+            raise gmo.FetchError("GMO operation timed out")
+
+    settings = gmo.GmoSettings(host="gmo", shared_root="~/shared-storage/traces")
+    with pytest.raises(gmo.FetchError) as error:
+        gmo.list_remote_episodes(SlowRunner(), settings, include_files=True, timeout=600)
+    assert "Host gmo" in str(error.value) and "600 秒以内に応答がありませんでした" in str(error.value)

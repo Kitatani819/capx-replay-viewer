@@ -36,6 +36,10 @@ SAFE_HOST = re.compile(r"[A-Za-z0-9._@-]+")
 MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
 MAX_INTERVAL_S = 24 * 60 * 60
+LISTING_TIMEOUT_S = 60
+# The background import lists every file of every own trial, which takes over a
+# minute once a few large evaluations have run; it runs off the request path.
+FILE_LISTING_TIMEOUT_S = 600
 CONNECTION_ERROR = (
     "GMOに接続できません。公式GENIACチュートリアルの Host gmo をSSH設定に追加するか、"
     "接続設定で接続先を指定してください。"
@@ -806,7 +810,7 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
         raise FetchError(CONNECTION_ERROR) from exc
     except FetchError as exc:
         if "timed out" in str(exc):
-            raise FetchError(CONNECTION_ERROR) from exc
+            raise FetchError(f"{CONNECTION_ERROR}（{timeout:g} 秒以内に応答がありませんでした）") from exc
         raise
     if proc.returncode != 0:
         if proc.returncode == 255:
@@ -822,9 +826,11 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                          include_files: bool = False, mine_only: bool = False,
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
-                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+                         metadata_only: bool = False,
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
     return _list_remote_records(runner, settings, include_files=include_files, mine_only=mine_only,
-                                run_ids=run_ids, previous=previous, metadata_only=metadata_only)
+                                run_ids=run_ids, previous=previous, metadata_only=metadata_only,
+                                timeout=timeout)
 
 
 def list_remote_evals(runner: ProcessRunner, settings: GmoSettings) -> dict[str, list[dict[str, Any]]]:
@@ -836,7 +842,8 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
                          mine_only: bool = False, eval_only: bool = False,
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
-                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+                         metadata_only: bool = False,
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
     if include_files and metadata_only:
         raise FetchError("An exact manifest cannot be metadata-only")
     if not settings.configured:
@@ -859,7 +866,7 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
         "eval_only": eval_only, "run_ids": run_ids, "previous": compact, "metadata_only": metadata_only,
     })
     args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
-    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
+    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=timeout)
     if isinstance(listing, dict) and isinstance(listing.get("episodes"), list):
         merged = []
         for row in listing["episodes"]:
