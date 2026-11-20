@@ -876,3 +876,19 @@ details[open] summary::before {
   color: var(--ce-text-secondary);
 }
 
+/* ============================================
+   記録フレーム / キーフレーム表示の Figma 寄せ
+   ============================================ */
+
+/* 1. シークバーを黄色からフォレストグリーンに統一 */
+.replay-media input[type="range"] {
+  accent-color: var(--ce-accent) !important;
+}
+
+
+/* 3. キーフレーム画像枠の角丸と枠線 */
+.replay-media figure img,
+.replay-media canvas {
+  border-radius: 8px;
+  border: 1px solid var(--ce-border-subtle);
+}
