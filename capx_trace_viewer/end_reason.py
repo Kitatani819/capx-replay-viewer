@@ -22,6 +22,7 @@ END_REASON_WORDS = {
     "timeout": ("時間切れ・打ち切り", "時間切れ"),
     "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
     "regen_limit": ("書き直しの上限", "上限"),
+    "single_shot": ("1回だけ実行して終了（single-shot）", "1回実行"),
     "unknown": ("終わり方が不明", "不明"),
 }
 END_LABELS = {reason: words[0] for reason, words in END_REASON_WORDS.items()}
@@ -39,6 +40,7 @@ END_CAUSE_LABELS = {
     "env_horizon": "環境のステップ期限に到達",
     "evaluation_budget": "評価全体の時間制限に到達",
     "planned_unrun": "計画された試行が実行されなかった",
+    "single_shot": "1回だけ実行して終了（single-shot）",
 }
 # One vocabulary for cell words and their explanations, mirrored in TypeScript.
 END_CAUSE_WORDS = {
@@ -60,6 +62,7 @@ END_CAUSE_WORDS = {
     "env_horizon": ("環境期限", "シミュレーター自身のステップ数の期限に到達"),
     "evaluation_budget": ("評価時間", "評価全体の時間制限に到達"),
     "planned_unrun": ("未走行", "計画されたが実行されず、失敗として集計した試行"),
+    "single_shot": ("1回実行", "初回のプログラムを実行し、書き直しの判断をせず終了"),
 }
 END_CAUSE_CELL_WORDS = {code: words[0] for code, words in END_CAUSE_WORDS.items()}
 # Include compatibility words used when an older server has no detailed cause.
@@ -165,6 +168,7 @@ def _cause_copy(code: str, reason: str, limit: Any, used: Any, task: Any,
         "success": "課題の達成が記録されています。",
         "finish_unmet": "モデルは「終わった」と答えましたが、課題の達成条件を満たしていませんでした。",
         "parser_finish": "モデルの回答に続行の指示がなかったため、終了として扱われました。課題は未達成です。",
+        "single_shot": "1回だけ実行する設定で、初回のプログラムの実行を終えました。終了や書き直しの判断は行わず、課題は未達成です。",
         "execution_error": "プログラムの実行中にエラーが起き、試行が終了しました。",
         "simulator_crash": "シミュレーターで異常が起き、試行が終了しました。" + ("公式の評価ではこの試行は無効になりました。" if fields.get("episode_voided") is True else ""),
         "manual_stop": "手動の停止操作により、試行が終了しました。",
@@ -186,6 +190,7 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     raw = _dict(episode.get("episode"))
     end = decision = block = first_error = last_error = alarm = evaluator = code_timeout_event = None
     start_context: dict[str, Any] = {}
+    start_config: dict[str, Any] = {}
     start_source = raw.get("source")
     local_block_checks = start_source == "envs.runner"
     decision_order = block_order = last_error_order = block_start_order = code_timeout_order = -1
@@ -196,6 +201,7 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
         kind = event.get("event_type")
         if kind == "episode_start":
             start_context.update(_dict(data.get("stop_context")))
+            start_config.update(_dict(data.get("config_flags")))
             start_source = data.get("source", start_source)
             local_block_checks |= start_source == "envs.runner"
         elif kind == "episode_end":
@@ -558,6 +564,25 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
                               "stop_context.regeneration_limit": regeneration_limit},
                       missing=[] if _number(regeneration_limit) else ["stop_context.regeneration_limit / multiturn_limit"],
                       num_regenerations=regenerations, num_finishes=0, inferred=True)
+    config = {**start_config, **_dict(raw.get("config_flags"))}
+    # multi_turn records bool(multi_turn_prompt), not the number of code blocks:
+    # a single initial response may contain several executable blocks. Require
+    # a complete, normal return and counts that corroborate no decision loop.
+    complete = end_data.get("trace_complete", raw.get("trace_complete"))
+    blocks = harness.get("num_code_blocks")
+    if (start_source == "envs.runner" and config.get("multi_turn") is False
+            and complete is True and decision is None
+            and type(blocks) is int and blocks > 0
+            and type(harness.get("num_regenerations")) is int and harness["num_regenerations"] == 0
+            and type(harness.get("num_finishes")) is int and harness["num_finishes"] == 0
+            and type(harness.get("sandbox_rc")) is int and harness["sandbox_rc"] == 0
+            and harness.get("terminated") is False and harness.get("stopping_reason") is None):
+        return result("single_shot", "recorded_config_and_harness_summary", end, used=blocks,
+                      rule_source="capx/envs/trial.py:953",
+                      fields={"config_flags.multi_turn": False, "episode_end.end_reason": end_reason,
+                              "trace_complete": True, "harness_summary.num_code_blocks": blocks,
+                              "harness_summary.num_regenerations": 0, "harness_summary.num_finishes": 0,
+                              "harness_summary.sandbox_rc": 0, "harness_summary.terminated": False})
     return result("unknown", "missing_terminal_evidence", end, code="unknown",
                   explanation="終了と失敗は記録されていますが、終了させた規則を特定できません。",
                   missing=["最終のモデル判断 / 適用されたターン・書き直し上限 / 終了した規則名"])

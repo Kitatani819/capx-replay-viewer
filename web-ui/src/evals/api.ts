@@ -4,6 +4,12 @@ import type { TaskVerdict } from '../trace/outcome';
 import type { EndClassification } from '../trace/types';
 
 export interface EvalCounts { trials: number; success: number; attempts?: number }
+export interface EvaluationFailure {
+  kind: 'infrastructure' | 'incomplete';
+  reason: string;
+  infrastructure_failures: { task: string | null; seed: number | null; reason: string }[];
+  count: number;
+}
 export interface CodeChangeMetadata {
   status: 'recorded' | 'no_baseline' | 'baseline_missing' | 'baseline_ambiguous' | 'baseline_git_missing' | 'baseline_dirty' | 'current_git_missing' | 'git_unavailable' | 'write_failed';
   baseline_commit: string | null;
@@ -65,7 +71,8 @@ export interface EvalListEntry {
   eval: EvalRecord | null;
   error: string | null;
   location: 'local' | 'gmo' | 'both';
-  display_status: 'running' | 'interrupted' | 'incomplete' | null;
+  display_status: 'running' | 'interrupted' | 'incomplete' | 'failed' | null;
+  evaluation_failure?: EvaluationFailure | null;
   summary: EvalSummary | null;
   baseline_summary: EvalCounts | null;
 }
@@ -87,6 +94,7 @@ export interface EvalTrial {
 export interface EvalDifference { field: string; baseline: unknown; current: unknown }
 export interface EvalDetail extends EvalListEntry {
   baseline: EvalRecord | null;
+  baseline_evaluation_failure?: EvaluationFailure | null;
   baseline_error: string | null;
   trials: EvalTrial[];
   baseline_trials: EvalTrial[];

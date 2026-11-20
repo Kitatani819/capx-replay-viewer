@@ -740,10 +740,10 @@ export interface RunListResponse {
   runs: RunListItem[];
 }
 
-export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'unknown';
+export type EndReason = 'success' | 'error' | 'timeout' | 'finish_unmet' | 'regen_limit' | 'single_shot' | 'unknown';
 export type EndCauseCode = 'success' | 'step_limit' | 'env_horizon' | 'trial_time_limit' | 'code_time_limit' | 'turn_limit' |
   'regeneration_limit' | 'finish_unmet' | 'parser_finish' | 'execution_error' | 'simulator_crash' | 'slurm_time_limit' |
-  'manual_stop' | 'replaced' | 'recording_incomplete' | 'evaluation_budget' | 'planned_unrun' | 'unknown';
+  'manual_stop' | 'replaced' | 'recording_incomplete' | 'evaluation_budget' | 'planned_unrun' | 'single_shot' | 'unknown';
 export interface EndCause {
   code: EndCauseCode;
   label: string;

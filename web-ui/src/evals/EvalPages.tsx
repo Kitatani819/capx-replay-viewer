@@ -2,7 +2,7 @@
 import { useEffect } from 'react';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
 import { useAsync, useInterval } from '../trace/hooks';
-import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord } from './api';
+import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord, type EvaluationFailure } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
 import { EvalSegments } from './EvalSegments';
@@ -12,7 +12,20 @@ import { EvalCodeChanges } from './EvalCodeChanges';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
-const STATUS = { running: '実行中', interrupted: '中断', incomplete: '欠損あり' };
+const STATUS = { running: '実行中', interrupted: '中断', incomplete: '欠損あり', failed: '評価失敗' };
+function failureReasons(failure: EvaluationFailure): string[] {
+  const reasons = failure.infrastructure_failures.map(item => `${item.task ?? '課題未記録'}・seed ${item.seed ?? '未記録'}・${item.reason}`);
+  if (reasons.length && failure.count > reasons.length) reasons.push(`ほか ${failure.count - reasons.length}件`);
+  return reasons;
+}
+function failureTooltip(failure: EvaluationFailure | null | undefined): string | undefined {
+  return failure ? [failure.reason, ...failureReasons(failure)].join('\n') : undefined;
+}
+function failureLine(failure: EvaluationFailure, baseline = false): string {
+  const subject = baseline ? '基準の評価' : 'この評価';
+  const stop = failure.kind === 'infrastructure' ? '準備・実行の失敗で止まりました' : '一部の試行を終えずに止まりました';
+  return `${subject}は${stop}：${failureReasons(failure).join(' / ') || failure.reason}`;
+}
 const FIELDS: Record<string, string> = { tasks: 'タスク', seeds: 'seed', models: 'モデル', config_flags: '設定', eval_set: '評価セット' };
 function date(value: string): string {
   const d = new Date(value);
@@ -61,7 +74,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
         <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
         <td><a href={href}>{evaluationTitle(record)}</a>{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
         <td><GitCommit git={record.git} /></td>
-        <td>{entry.display_status ? STATUS[entry.display_status] : ''}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
+        <td>{entry.display_status && <span title={failureTooltip(entry.evaluation_failure)} className={entry.evaluation_failure ? 'eval-error' : undefined}>{entry.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[entry.display_status]}</span>}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
     })}</tbody>
   </table></div>;
@@ -124,9 +137,11 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const officialNotes = [...ruleDifferences];
   const renderOfficialNotes = (notes: typeof officialNotes) => <ul>{notes.map(([key, diff]) => <li key={key}>{diff.sides.join('・')}：{diff.text} <a href={ruleSourceHref(diff.source)} target="_blank" rel="noreferrer">公開ルール</a></li>)}</ul>;
   return <>
-    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · {STATUS[detail.display_status]}</>}</p></div>
+    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · <span title={failureTooltip(detail.evaluation_failure)}>{detail.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[detail.display_status]}</span></>}</p></div>
       <p className="eval-score">{baseline && <>基準 <Counts value={detail.baseline_summary} /> → </>}今回 <Counts value={detail.summary} />{delta(detail.summary, detail.baseline_summary)}</p>
     </div>
+    {detail.evaluation_failure && <p role="note" className="eval-note eval-failure-note">{failureLine(detail.evaluation_failure)}</p>}
+    {baseline && detail.baseline_evaluation_failure && <p role="note" className="eval-note eval-failure-note">{failureLine(detail.baseline_evaluation_failure, true)}</p>}
     {detail.error && <p role="status" className="eval-note">{detail.error}</p>}
     {detail.remote_error && <p role="status" className="eval-note">{detail.remote_error}</p>}
     {detail.baseline_error && <p className="eval-note">{detail.baseline_error}</p>}

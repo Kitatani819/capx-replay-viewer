@@ -44,6 +44,7 @@
 | 1 試行の wall-clock | ローカルは 1000 秒、timeout 時の試行は最大 3 回。reset 後にタイマーを再設定。記録値が優先 | [`capx/envs/runner.py:38–42,210–243,270–317`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/runner.py#L38)、[`capx/envs/trial.py:780–786`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/trial.py#L780) |
 | 書き直し・ターン | `MULTITURN_LIMIT=10`。先頭ブロックを含め最大 11 ブロックを実行。複数ブロックの応答では「10 回書き直し」と一致しない場合がある | [`capx/envs/trial.py:51,916–918,951–953`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/trial.py#L916) |
 | FINISH と暗黙の終了 | `FINISH` または `REGENERATE` がない応答を finish と解釈。終了後に実際の達成判定を別に見る | [`capx/llm/client.py:468–478`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/llm/client.py#L468)、[`capx/envs/trial.py:1000–1011`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/trial.py#L1000) |
+| single-shot | 初回に生成したプログラムを実行し、multi-turn prompt がなければ FINISH / REGENERATE を問い合わせず終了。初回応答が複数のコードブロックを含む場合もある | [`capx/envs/trial.py:874,916–953`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/trial.py#L916) |
 | コード実行 | 独立した実行秒数制限は見つからない。直接 `exec` し、ローカルでは試行全体の alarm が中断する。通常の例外は stderr としてモデルへ返す | [`capx/envs/tasks/base.py:189–219`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/tasks/base.py#L189) |
 | Web UI のコード実行 | `execution_timeout` は既定 180 秒 / block。待機を打ち切り、reset を試みてブロックループを抜ける（実行スレッドの停止を保証する仕組みではない）。Web UI の `MULTITURN_LIMIT` は 30 | [`capx/web/async_trial_runner.py:57,500–522`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/web/async_trial_runner.py#L500)、[`capx/web/session_manager.py:82`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/web/session_manager.py#L82) |
 | ローカル horizon・達成判定 | シミュレーターの `max_steps` と `_sim_step_count` で打ち切る。高位コードの実行終了時に報酬・`task_completed()` を読む。公式は各サイクルの成功を保持する | [`capx/envs/tasks/base.py:297–332`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/tasks/base.py#L297) |
@@ -57,11 +58,11 @@
 
 ## 表示と証拠の読み方
 
-Viewer は既存の大分類 `reason` を保ち、具体的な `cause` をチーム向けの言葉で説明します。試行の要約には、太字の原因と数字（例：「ステップ上限に到達（1000/1000 ステップ）」）と、短い日本語の説明を表示します。技術的な根拠、公開規則へのリンク、不足している記録は、閉じた「根拠を見る」にまとめます。通常の表示と表のツールチップには生のフィールド名を出しません。
+Viewer は大分類 `reason` と具体的な `cause` をチーム向けの言葉で説明します。single-shot の通常終了には `reason=single_shot` / `cause.code=single_shot` を追加し、既存の分類も引き続き使えます。試行の要約には、太字の原因と数字（例：「ステップ上限に到達（1000/1000 ステップ）」）と、短い日本語の説明を表示します。技術的な根拠、公開規則へのリンク、不足している記録は、閉じた「根拠を見る」にまとめます。通常の表示と表のツールチップには生のフィールド名を出しません。
 
 試行の実際の上限が記録されていない場合、公式パックの値をその試行の上限として埋めません。説明には「この記録には実際の上限値が残っていません（公式の上限は 1000）」のように、タスクごとの `official_rules.json` の値を比較用として示します。書き直し回数だけが分かる場合も「書き直し 10 回で終了（上限の設定は記録なし）」と、分かる範囲を表示します。成功は `TrialSummary.success`（コードがエラーなく終了した意味）から判断せず、達成判定を使います。
 
-比較表のセルと凡例は、Python の終了原因の定義と、その TypeScript の対応表を共通の出発点にします。凡例はセルに出る語を説明し、古い大分類の語だけを並べません。ツールチップは「数字を含む原因」「短い日本語の説明」「試行を開く」の順とし、同じラベルを繰り返しません。「失敗の内訳」は、時間切れ・打ち切り、未判定、未達成、書き直しの上限、エラー、不明の各グループで原因別の件数と、開閉できる試行一覧を表示します。成否が未判定でも、記録から分かる停止原因は表示できます。
+比較表のセルと凡例は、Python の終了原因の定義と、その TypeScript の対応表を共通の出発点にします。凡例はセルに出る語を説明し、古い大分類の語だけを並べません。ツールチップは「数字を含む原因」「短い日本語の説明」「試行を開く」の順とし、同じラベルを繰り返しません。「失敗の内訳」は、時間切れ・打ち切り、未判定、未達成、書き直しの上限、single-shot、エラー、不明の各グループで原因別の件数と、開閉できる試行一覧を表示します。成否が未判定でも、記録から分かる停止原因は表示できます。
 
 「公式の評価と条件が違います」では、記録や公開実装で確認できる次の違いを、1項目につき短い1文と公開ルールのリンクで表示します。表示は先頭3項目までとし、残りは「ほかの違い」にまとめます。
 
@@ -81,3 +82,17 @@ Viewer は既存の大分類 `reason` を保ち、具体的な `cause` をチー
 - `runner_records.jsonl` がない場合、達成判定が recorder から得られない試行もあります。判定不能時は不足している項目を示し、未達成と断定しません。
 
 記録フィールドの正確な定義は [`trace-format.md`](trace-format.md) を参照してください。
+
+## single-shot の通常終了
+
+`single_shot` は「1回だけ実行して終了（single-shot）」、比較表のセルは「1回実行」と表示します。課題の成功・失敗は別に判定し、正常なコード実行を課題成功にはしません。
+
+判定には `source=envs.runner`、明示的な `config_flags.multi_turn=false`、`end_reason=completed`、完全な記録、1個以上の実行ブロック、書き直し・FINISH 各0回、`sandbox_rc=0`、`terminated=false` を使います。`multi_turn` は recorder が multi-turn prompt の有無から記録する値で、`episode.json` または `episode_start` から読みます。FINISH / REGENERATE の判断がある記録には適用しません。成功、例外、時間切れ、ステップ・ターン上限などの具体的な記録を優先します。設定や終了の裏付けがなければ「不明」または「記録中断」を維持します。
+
+GMO の LIBERO job 50139 を読み取り専用の SSH と既存エクスポートで照合しました。`completed`、`trace_complete=true`、`multi_turn=false`、1ブロック・116/8000ステップ、`sandbox_rc=0`、`task_completed=false`、書き直し・FINISH 各0回、`terminated=false` / `truncated=false` が記録され、抽出パーサーの `decision=null` の後に正常な `episode_end` がありました。終了判断がないことは、このモードの正常な動作です。テストにはこの構造の最小限の合成データを使い、実トレースや接続情報を含めません。判定結果は根拠フィールドと公開の [`capx/envs/trial.py:953`](https://github.com/matsuolab/geniac_prize_2026_code/blob/d64344d/capx/envs/trial.py#L953) を示します。
+
+## 評価全体の準備・実行失敗と未完了
+
+評価ラッパーは `eval.json.summary.config_flags.evaluation_failure` に任意の診断を記録します。`kind` は `infrastructure`（準備・workerなどの失敗）または `incomplete`（未完了）、`reason` は理由です。個別の失敗があれば `infrastructure_failures` に `{task, seed, reason}` を最大100件、`count` に総件数を保存します。task / seed は不明なら null です。評価の `status` は `interrupted` のままで、`end.exit_code` は実際の子プロセスの終了コードです。終了コード0でもラッパーの完了確認が失敗する場合があるため、表示には診断を使います。
+
+評価一覧と共有HTML一覧は「評価失敗」または「未完了」を示し、理由・課題・seed をツールチップで読めます。比較ページの先頭にも「この評価は準備・実行の失敗で止まりました：…」などの日本語を表示します。基準評価に診断があれば基準の失敗も示します。試行から成功数を再集計しても評価全体の診断を保持し、実験条件の差分には含めません。診断のない古い記録と、課題自体に失敗した通常の評価は既存の表示を保ちます。

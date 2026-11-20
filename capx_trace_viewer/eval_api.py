@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from capx_trace_recorder.evaluation_failure import evaluation_failure, preserve_evaluation_failure
 from capx_trace_viewer import evals, reader, repeat_reference
 from capx_trace_viewer.trace_api import (
     client_is_local, host_is_loopback, json_response, origin_is_loopback,
@@ -69,6 +70,7 @@ class EvalService:
                 "error": " / ".join(dict.fromkeys(errors)) or None,
                 "location": "both" if len(locations) > 1 else next(iter(locations)),
                 "display_status": evals.display_status(record) if record is not None else None,
+                "evaluation_failure": evaluation_failure(record),
                 "summary": record["summary"] if record else None,
                 "baseline_summary": None,
                 "_mtime": sources[0][1].get("eval_mtime") or 0,
@@ -112,7 +114,7 @@ class EvalService:
         # Older records count retries as trials. Rebuild from the same episodes
         # shown in the table when the local metadata is available and readable.
         if local and all(not episode.get("episode_json_error") for episode in local):
-            return evals.aggregate_episodes(episodes, records, logical=True)
+            return preserve_evaluation_failure(evals.aggregate_episodes(episodes, records, logical=True), record)
         if record["summary"] is not None:
             return record["summary"]
         return evals.aggregate_episodes(episodes, records, logical=bool(record.get("segments")))
@@ -216,6 +218,7 @@ class EvalService:
         entry["baseline_summary"] = self._summary(baseline, remote) if baseline else None
         return {
             **self._public(entry), "baseline": baseline_record, "baseline_error": baseline_error,
+            "baseline_evaluation_failure": evaluation_failure(baseline_record),
             "trials": self._trials(eval_id, remote, conflict=entry["_conflict"], evaluation=record),
             "baseline_trials": self._trials(baseline_id, remote, conflict=baseline["_conflict"], evaluation=baseline_record) if baseline else [],
             "differences": evals.condition_differences(

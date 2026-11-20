@@ -116,6 +116,47 @@ def test_finished_summary_matches_logical_trials_and_listing(tmp_path, stored_lo
     assert json.loads((run / "eval.json").read_text()) == value
 
 
+@pytest.mark.parametrize("kind,status", [("infrastructure", "failed"), ("incomplete", "incomplete")])
+@pytest.mark.parametrize("local_episode", [False, True])
+def test_evaluation_failure_survives_logical_summary_rebuild_and_reaches_list_and_comparison(tmp_path, kind, status, local_episode):
+    baseline = record("ev-failed-baseline", status="interrupted")
+    current = record("ev-failed-current", baseline=baseline["eval_id"], status="interrupted")
+    diagnostic = {"kind": kind, "reason": "task setup or worker failed",
+                  "infrastructure_failures": [{"task": "cube", "seed": 401, "reason": "simulator unavailable"}],
+                  "count": 1}
+    for value in (baseline, current):
+        value["summary"]["config_flags"]["evaluation_failure"] = diagnostic
+        run = write_record(tmp_path, value)
+        if local_episode:
+            episode(run, success=False)
+    service = EvalService(tmp_path)
+    entries = service.listing()["evals"]
+    for entry in entries:
+        assert entry["evaluation_failure"] == diagnostic
+        assert entry["display_status"] == status
+        assert entry["summary"]["config_flags"]["evaluation_failure"] == diagnostic
+    detail = service.detail(current["eval_id"])
+    assert detail["evaluation_failure"] == detail["baseline_evaluation_failure"] == diagnostic
+    assert detail["summary"]["config_flags"]["evaluation_failure"] == diagnostic
+    assert detail["baseline_summary"]["config_flags"]["evaluation_failure"] == diagnostic
+    assert json.loads((tmp_path / current["eval_id"] / "eval.json").read_text()) == current
+
+
+def test_evaluation_failure_is_projected_for_remote_only_records_and_absent_from_old_records(tmp_path, monkeypatch):
+    failed = record("ev-remote-failed", status="interrupted")
+    diagnostic = {"kind": "incomplete", "reason": "planned trials are incomplete"}
+    failed["summary"]["config_flags"]["evaluation_failure"] = diagnostic
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    service = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: {
+        "evals": [remote_eval(failed), remote_eval(record("ev-old"))], "episodes": []}))
+    rows = {entry["eval_id"]: entry for entry in service.listing()["evals"]}
+    assert rows["ev-remote-failed"]["evaluation_failure"] == {**diagnostic, "infrastructure_failures": [], "count": 0}
+    assert rows["ev-remote-failed"]["display_status"] == "incomplete"
+    assert rows["ev-old"]["evaluation_failure"] is None
+    assert rows["ev-old"]["display_status"] is None
+    assert service.detail("ev-old")["baseline_evaluation_failure"] is None
+
+
 @pytest.mark.parametrize("available", ["missing", "run_metadata_only", "corrupt", "symlink"])
 def test_finished_summary_falls_back_without_readable_local_episodes(tmp_path, available):
     value = record("ev-unavailable")

@@ -51,7 +51,7 @@ test('summary renders available facts, baseline regression and exact event/file 
 test('summary uses canonical long ending labels even when the API label is stale', () => {
   const labels: Record<EndReason, string> = {
     success: '成功', error: 'エラーで停止', timeout: '時間切れ・打ち切り',
-    finish_unmet: '「終わった」と答えたが未達成', regen_limit: '書き直しの上限', unknown: '終わり方が不明',
+    finish_unmet: '「終わった」と答えたが未達成', regen_limit: '書き直しの上限', single_shot: '1回だけ実行して終了（single-shot）', unknown: '終わり方が不明',
   };
   for (const [reason, label] of Object.entries(labels)) {
     const summary: EpisodeSummary = { episode_id: ep.episodeId,
