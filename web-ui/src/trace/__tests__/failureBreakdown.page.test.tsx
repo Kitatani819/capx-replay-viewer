@@ -11,6 +11,24 @@ function text(node: unknown): string {
   if (Array.isArray(node)) return node.map(text).join('');
   return typeof node === 'object' && 'props' in node ? text((node as FakeElement).props.children) : '';
 }
+test('cause comparisons stay in a named keyboard-focusable scroll region when the category changes', async () => {
+  for (const hasBaseline of [true, false]) {
+    resetBrowser();
+    const page = mount(FailureBreakdown, { detail: breakdownDetail(hasBaseline) });
+    const causeRegion = () => findAll(page.output, 'div').find(div => div.props.className === 'failure-cause-scroll')!;
+    assert.equal(causeRegion().props.role, 'region');
+    assert.equal(causeRegion().props.tabIndex, 0);
+    assert.equal(causeRegion().props['aria-label'], 'エラーで停止の原因別比較（横にスクロールできます）');
+    assert.equal(findAll(causeRegion(), 'table').length, 1);
+    assert.equal(findAll(causeRegion(), 'td').length, hasBaseline ? 3 : 1);
+    assert.deepEqual(findAll(causeRegion(), 'a').map(a => a.props.href), ['/traces?run=current&episode=c2', '/traces?run=current&episode=c3']);
+    const button = findAll(page.output, 'button').find(b => text(b).startsWith('「終わった」と答えたが未達成'))!;
+    (button.props.onClick as () => void)(); await advance(0);
+    assert.equal(causeRegion().props['aria-label'], '「終わった」と答えたが未達成の原因別比較（横にスクロールできます）');
+    assert.deepEqual(findAll(causeRegion(), 'a').map(a => a.props.href), ['/traces?run=current&episode=c1']);
+    page.unmount();
+  }
+});
 test('clicking a breakdown button selects its category and lists only current trials', async () => {
   resetBrowser();
   const page = mount(FailureBreakdown, { detail: breakdownDetail() });

@@ -34,7 +34,7 @@ export function FailureBreakdown({ detail }: { detail: EvalDetail }) {
     {omittedRetries > 0 && <p className="eval-note">再試行 {omittedRetries}件は最後の試行だけを数えています</p>}
     <div className="failure-trials" aria-live="polite">
       <h3>{CATEGORY_LABELS[selected]}：今回 {trials.length}件</h3>
-      {causes.length > 0 && <table className="failure-cause-table" aria-label={`${CATEGORY_LABELS[selected]}の原因別比較`}>
+      {causes.length > 0 && <div className="failure-cause-scroll" tabIndex={0} role="region" aria-label={`${CATEGORY_LABELS[selected]}の原因別比較（横にスクロールできます）`}><table className="failure-cause-table" aria-label={`${CATEGORY_LABELS[selected]}の原因別比較`}>
         <thead><tr><th scope="col">具体的な原因</th>{hasBaseline && <th scope="col">基準</th>}<th scope="col">今回</th>{hasBaseline && <th scope="col">増減</th>}</tr></thead>
         <tbody>{causes.map(cause => <tr key={cause.key}><th scope="row"><details className="failure-cause-trials">
           <summary><span>{cause.label}</span><small>今回 {cause.current}件の試行を見る</small></summary>
@@ -47,7 +47,7 @@ export function FailureBreakdown({ detail }: { detail: EvalDetail }) {
           </li>)}</ul>}
         </details></th>
           {hasBaseline && <td>{cause.baseline}件</td>}<td>{cause.current}件</td>{hasBaseline && <td>{cause.current > cause.baseline ? '+' : ''}{cause.current - cause.baseline}</td>}</tr>)}</tbody>
-      </table>}
+      </table></div>}
       {trials.length === 0 && <p>この分類の試行はありません。</p>}
     </div>
     <p className="eval-legend">分類は記録から自動で推測したもので、外れることがあります。</p>
