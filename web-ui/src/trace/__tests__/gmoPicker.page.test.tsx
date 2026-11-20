@@ -7,7 +7,7 @@ import { GmoPicker } from '../components/GmoPicker';
 import { TopBar } from '../components/TopBar';
 import { SmallButton, Spinner } from '../components/common';
 import { TaskOutcomeBadge } from '../components/TaskOutcomeBadge';
-import type { GmoAutoStatus, GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings } from '../api';
+import type { GmoAutoStatus, GmoConfigResponse, GmoEpisodeSummary, GmoJob, GmoSettings, RemoteListingStatus } from '../api';
 import { advance, findAll, net, propsOf, resetBrowser, setLocation, type FakeElement } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
@@ -34,6 +34,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   const state = { config: config(configured), disabled: false, configError: '', configStatus: 502, configLatency: 5,
     legacyRuns: [] as { run_id: string; root_index: number; n_trials: number }[], legacyError: false, legacyLatency: 5,
     rows, jobs: [] as GmoJob[],
+    listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     auto: { enabled: configured, paused: false, interval_s: 120, running: false, last_run_at: null,
       next_run_at: new Date(Date.now() + 120_000).toISOString(), last_error: null, queued_in_last_run: 0, skipped_large: [] } as GmoAutoStatus,
     check: { ok: true, mine_episodes: 2, team_episodes: 3, error: null as string | null },
@@ -70,6 +71,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
       return { json: state.config, latency: state.configLatency };
     }
     if (req.path === '/api/gmo/check') return { json: state.check };
+    if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/episodes') return { json: state.rows };
     if (req.path === '/api/gmo/jobs') return { json: state.jobs };
     if (req.path === '/api/gmo/fetch') {
@@ -355,7 +357,7 @@ test('GMO lists local state, result, owner and size and filters scope, outcome, 
   assert.equal(findAll(rowFor(page.output, 'task_mine'), TaskOutcomeBadge)[0].props.verdict, 'success');
   assert.equal(findAll(rowFor(page.output, 'task_team'), TaskOutcomeBadge)[0].props.verdict, 'failure');
   assert.equal(findAll(rowFor(page.output, 'task_stale'), TaskOutcomeBadge)[0].props.verdict, 'running');
-  assert.match(text(page.output), /一覧の更新時刻/);
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点/);
   change(page.output, 'GMO の範囲', 'mine'); await advance(0);
   assert.equal(rowsOf(page.output).length, 2);
   change(page.output, 'GMO の範囲', 'team'); await advance(0);
@@ -375,6 +377,41 @@ test('GMO lists local state, result, owner and size and filters scope, outcome, 
   click(page.output, '一覧を更新'); await advance(100);
   assert.ok(net.log.some(req => req.path === '/api/gmo/episodes' && req.query.get('refresh') === '1'));
   assertGmoHeaders(state.sent); page.unmount();
+});
+
+test('GMO serves cached rows during refresh, labels approximate sizes, and keeps them after refresh failure', async () => {
+  const state = setup([episode('cached', { size_approximate: true })]);
+  state.listingStatus.refreshing = true;
+  const page = mountGmo(state.config); await advance(100);
+  assert.equal(rowsOf(page.output).length, 1);
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点（更新中…）/);
+  assert.match(text(rowFor(page.output, 'task_cached')), /約 2\.0 KB/);
+  assert.equal(button(page.output, '一覧を更新').props.disabled, true);
+  state.listingStatus = { ...state.listingStatus, refreshing: false, error: 'Remote refresh failed' };
+  await advance(2000);
+  assert.equal(rowsOf(page.output).length, 1);
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点（更新に失敗）/);
+  assert.match(text(page.output), /Remote refresh failed/);
+  click(page.output, '一覧を更新'); await advance(100);
+  assert.ok(net.log.some(req => req.path === '/api/gmo/episodes' && req.query.get('refresh') === '1'));
+  page.unmount();
+});
+
+test('GMO fills a cold list when its background refresh finishes and stops fast polling', async () => {
+  const state = setup();
+  state.listingStatus = { fetched_at: null, refreshing: true, error: null };
+  const page = mountGmo(state.config); await advance(100);
+  assert.match(text(page.output), /GMO の一覧：未取得（更新中…）/);
+  assert.equal(rowsOf(page.output).length, 0);
+  state.rows = [episode('new')];
+  state.listingStatus = { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null };
+  await advance(2000);
+  assert.equal(rowsOf(page.output).length, 1);
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点/);
+  const reads = net.log.filter(req => req.path === '/api/gmo/episodes').length;
+  await advance(2500);
+  assert.equal(net.log.filter(req => req.path === '/api/gmo/episodes').length, reads);
+  page.unmount();
 });
 
 function autoCheckbox(node: unknown): FakeElement {

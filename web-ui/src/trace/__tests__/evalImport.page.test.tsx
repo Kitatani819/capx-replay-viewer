@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { mount } from './harness/fakeReact';
 import TraceViewerPage from '../TraceViewerPage';
 import { TopBar } from '../components/TopBar';
-import type { GmoEpisodeSummary, GmoJob } from '../api';
+import type { GmoEpisodeSummary, GmoJob, RemoteListingStatus } from '../api';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
 
 const browserFetch = globalThis.fetch;
@@ -22,6 +22,7 @@ function setup() {
   serve(run); const traceHandler = net.handler;
   const row: GmoEpisodeSummary = { run_id: run.runId, episode_id: 'target', task: 'cube', seed: 401, status: 'ended', owner: 'alice', mine: false, size_bytes: 2048, local_state: 'remote', conflict: false };
   const state = { rows: [row], enabled: true, configured: true, configStatus: 200, fetchStatus: 200,
+    listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     job: { job_id: 'job_1', run_id: run.runId, episode_id: 'target', state: 'queued', bytes: 0, error: null, note: null, started_at: null, finished_at: null } as GmoJob,
     otherJobs: [] as GmoJob[],
     posts: [] as { path: string; body: unknown }[] };
@@ -32,6 +33,7 @@ function setup() {
   net.handler = req => {
     if (req.path === '/api/gmo/config') return { status: state.configStatus, json: { enabled: state.enabled, configured: state.configured } };
     if (req.path === '/api/gmo/episodes') { assert.equal(req.query.get('scope'), 'all'); return { json: state.rows }; }
+    if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/fetch') return state.fetchStatus === 200 ? { json: { job_id: 'job_1' } } : { status: state.fetchStatus, json: { detail: state.fetchStatus === 409 ? 'This episode is already queued or running' : '1 GiB transfer limit' } };
     if (req.path === '/api/gmo/jobs') return { json: [...state.otherJobs, state.job] };
     return traceHandler(req);
@@ -55,6 +57,46 @@ test('missing trial follows discovery, one fetch and jobs, then opens local trac
   assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
   assert.doesNotMatch(text(page.output), /GMOから取り込み中/);
   assert.equal(state.posts.length, 1);
+  page.unmount();
+});
+
+test('missing trial waits for a cold background listing before importing its single episode', async () => {
+  const { state, row, complete } = setup();
+  state.rows = [];
+  state.listingStatus = { fetched_at: null, refreshing: true, error: null };
+  const page = mount(TraceViewerPage, {});
+  await advance(100);
+  assert.match(text(page.output), /GMO の一覧を更新中/);
+  assert.equal(state.posts.length, 0);
+  state.rows = [row];
+  state.listingStatus = { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null };
+  await advance(1100);
+  assert.deepEqual(state.posts, [{ path: '/api/gmo/fetch', body: { run_id: 'ev-demo', episode_id: 'target' } }]);
+  complete(); await advance(1100);
+  assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
+  page.unmount();
+});
+
+test('missing trial reports background discovery failures without declaring a remote episode absent', async () => {
+  const { state } = setup();
+  state.rows = [];
+  state.listingStatus = { fetched_at: null, refreshing: false, error: 'GMO listing failed' };
+  const page = mount(TraceViewerPage, {});
+  await advance(100);
+  assert.match(text(page.output), /GMOから取り込めません：GMO listing failed/);
+  assert.doesNotMatch(text(page.output), /GMO にも見つかりません/);
+  assert.equal(state.posts.length, 0);
+  page.unmount();
+});
+
+test('automatic import leaves approximate transfer limits to the server exact manifest', async () => {
+  const { row, state } = setup();
+  row.size_bytes = 1024 ** 3;
+  row.size_approximate = true;
+  const page = mount(TraceViewerPage, {});
+  await advance(100);
+  assert.equal(state.posts.length, 1);
+  assert.match(text(page.output), /GMOから取り込み中（約 1.00 GB）/);
   page.unmount();
 });
 for (const jobState of ['queued', 'running'] as const) {

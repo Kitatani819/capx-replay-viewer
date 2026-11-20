@@ -1,5 +1,5 @@
 /** Evaluation records are validated by /api/evals before being displayed. */
-import { getJson } from '../trace/api';
+import { getJson, type RemoteListingStatus } from '../trace/api';
 import type { TaskVerdict } from '../trace/outcome';
 import type { EndClassification } from '../trace/types';
 
@@ -100,11 +100,13 @@ export interface EvalDetail extends EvalListEntry {
   baseline_trials: EvalTrial[];
   differences: EvalDifference[];
   remote_error?: string | null;
+  remote_status?: RemoteListingStatus | null;
+  loading_remote?: boolean;
   repeat_references?: { side: 'current' | 'baseline'; eval: EvalRecord; trials: EvalTrial[] }[];
 }
-export interface EvalList { evals: EvalListEntry[]; error?: string | null }
+export interface EvalList { evals: EvalListEntry[]; error?: string | null; remote_status?: RemoteListingStatus | null }
 export const evalApi = {
-  list: (signal?: AbortSignal): Promise<EvalList> => getJson('/api/evals', signal),
-  detail: (id: string, signal?: AbortSignal): Promise<EvalDetail> => getJson(`/api/evals/${encodeURIComponent(id)}`, signal),
+  list: (signal?: AbortSignal, refresh = false): Promise<EvalList> => getJson(`/api/evals${refresh ? '?refresh=1' : ''}`, signal),
+  detail: (id: string, signal?: AbortSignal, refresh = false): Promise<EvalDetail> => getJson(`/api/evals/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`, signal),
   codeChanges: (id: string, signal?: AbortSignal): Promise<CodeChanges> => getJson(`/api/evals/${encodeURIComponent(id)}/code-changes`, signal),
 };

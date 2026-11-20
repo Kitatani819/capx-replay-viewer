@@ -38,6 +38,7 @@ class LocalPythonRunner:
 
 @pytest.fixture
 def metadata_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAPX_GMO_CONFIG", str(tmp_path / "config" / "gmo.json"))
     root = tmp_path / "remote"
     episode = root / "run_a" / "ep_1"
     episode.mkdir(parents=True)
@@ -178,7 +179,7 @@ def test_remote_first_event_accepts_64_kib_complete_line(metadata_source):
     assert row["first_event"] == event
 
 
-def test_remote_evals_include_empty_runs_and_share_episode_cache(metadata_source, monkeypatch):
+def test_remote_evals_include_empty_runs_with_independent_light_cache(metadata_source, monkeypatch):
     episode, service, settings = metadata_source
     (episode / "events.jsonl").write_text(json.dumps(_start_event()) + "\n")
     record = {"schema": "capx-eval/1", "eval_id": "run_a"}
@@ -202,12 +203,16 @@ def test_remote_evals_include_empty_runs_and_share_episode_cache(metadata_source
     assert row["path"] == str(episode.parent) and row["mine"] is True
     assert isinstance(row["owner"], str) and row["eval_mtime"] > 0
     assert row["conflict"] is False
-    assert service.remote_evals() == listing["evals"]
+    light_rows = service.remote_evals()
+    assert [{key: value for key, value in row.items() if key != "remote_now"} for row in light_rows] == [
+        {key: value for key, value in row.items() if key != "remote_now"} for row in listing["evals"]]
     assert service.remote_rows() == listing["episodes"]
-    assert len(calls) == 1
-    service.invalidate()
-    assert [row["eval_json"] for row in service.remote_evals()] == [{}, record]
     assert len(calls) == 2
+    assert service.remote_evals() == light_rows
+    assert len(calls) == 2
+    service.invalidate()
+    assert [row["eval_json"] for row in service.remote_evals(refresh=True)] == [{}, record]
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize("damage,error", [

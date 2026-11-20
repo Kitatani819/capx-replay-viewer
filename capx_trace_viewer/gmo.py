@@ -509,8 +509,90 @@ def stats(directory):
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
     return count, size, newest, digest, files
 
+
+def digest(value):
+    return hashlib.sha256(json.dumps(sorted(value), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
+
+def directory_stat(path):
+    try:
+        st = os.lstat(path)
+        return st if stat.S_ISDIR(st.st_mode) else None
+    except OSError:
+        return None
+
+def cheap_stats(directory, run, previous=None):
+    # Only immediate files and a bounded nested sample are stat-ed. Type checks use
+    # directory entries' d_type, avoiding an RPC per frame on network storage.
+    top = []
+    child_dirs = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if entry.is_file(follow_symlinks=False):
+                st = entry.stat(follow_symlinks=False)
+                top.append((entry.name, st.st_size, int(st.st_mtime), st.st_mtime_ns))
+            elif entry.is_dir(follow_symlinks=False):
+                child_dirs.append(entry.name)
+    metadata = []
+    for name in ('run.json', 'eval.json', 'runner_records.jsonl'):
+        st = regular(os.path.join(run, name))
+        if st is not None:
+            metadata.append(('run/' + name, st.st_size, st.st_mtime_ns))
+    def fingerprint(directories):
+        signature = [('file/' + name, size, ns) for name, size, mtime, ns in top] + metadata
+        for rel in directories:
+            st = directory_stat(os.path.join(directory, rel))
+            if st is None:
+                return None
+            signature.append(('dir/' + rel, st.st_size, st.st_mtime_ns))
+        return digest(signature)
+    if previous is not None:
+        previous_fingerprint, directories = previous
+        # A parent directory mtime changes when a nested directory is added or
+        # removed. Reusing the old directory paths therefore also detects new
+        # subtrees, without enumerating unchanged frame directories.
+        if set(child_dirs) == {rel for rel in directories if '/' not in rel}:
+            current = fingerprint(directories)
+            if current == previous_fingerprint:
+                return None, current, directories
+    directories = []
+    nested = []
+    pending = list(child_dirs)
+    nested_size = 0
+    while pending:
+        rel = pending.pop()
+        directories.append(rel)
+        st = directory_stat(os.path.join(directory, rel))
+        if st is None:
+            continue
+        directory_files = 0
+        samples = []
+        with os.scandir(os.path.join(directory, rel)) as entries:
+            for entry in entries:
+                name = rel + '/' + entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(name)
+                elif entry.is_file(follow_symlinks=False):
+                    nested.append(name)
+                    directory_files += 1
+                    if len(samples) < 4:
+                        samples.append(entry.stat(follow_symlinks=False).st_size)
+        if samples:
+            nested_size += (sum(samples) * directory_files + len(samples) - 1) // len(samples)
+    # Estimate nested bytes from at most four regular files per directory. This
+    # bounds network metadata RPCs independently of the number of frame files.
+    size = sum(item[1] for item in top) + nested_size
+    newest = max((item[2] for item in top), default=None)
+    content = [(name, size, mtime) for name, size, mtime, ns in top]
+    content.extend((name, None, None) for name in nested)
+    result = (len(top) + len(nested), size, newest, digest(content), bool(nested))
+    return result, fingerprint(directories), directories
+
 config = json.loads(sys.argv[1])
 mine, team = config['mine'], config['team']
+eval_only = config.get('eval_only', False)
+metadata_only = config.get('metadata_only', False)
+run_ids = config.get('run_ids')
+previous = {(path, episode): (fingerprint, directories) for path, episode, fingerprint, directories in config.get('previous', [])}
 shared_root = os.path.realpath(os.path.expanduser(config['shared_root'])) if config['shared_root'] else None
 shared_real = shared_root
 if shared_root:
@@ -549,6 +631,8 @@ for scope, patterns in (('mine', mine), ('team', team)):
                 # destination collision; never walk their episode contents.
                 if mine_only and scope == 'team':
                     continue
+                if run_ids is not None and name not in run_ids:
+                    continue
                 try:
                     trace_root = os.path.dirname(real)
                     if shared_real is not None and os.path.dirname(trace_root) == shared_real:
@@ -559,11 +643,12 @@ for scope, patterns in (('mine', mine), ('team', team)):
                             owner = pwd.getpwuid(owner_id).pw_name
                         except (KeyError, OSError):
                             owner = str(owner_id)
-                    names = sorted(os.listdir(run))
+                    names = [] if eval_only else sorted(os.listdir(run))
                 except OSError:
                     continue
                 rows = []
-                run_json, run_error, run_mtime = read_json(os.path.join(run, 'run.json'))
+                if not eval_only:
+                    run_json, run_error, run_mtime = read_json(os.path.join(run, 'run.json'))
                 eval_json, eval_error, eval_mtime = read_json(os.path.join(run, 'eval.json'), strict=True)
                 if eval_error != 'missing':
                     evals.append(dict(run_id=name, path=real, owner=owner, mine=scope == 'mine',
@@ -577,9 +662,25 @@ for scope, patterns in (('mine', mine), ('team', team)):
                     episode_st = regular(os.path.join(episode, 'episode.json'))
                     if events_st is None and episode_st is None:
                         continue
+                    if include_files:
+                        count, size, newest, files_digest, files = stats(episode)
+                        cheap = (count, size, newest, files_digest, False)
+                        fingerprint, directories = None, []
+                    elif metadata_only:
+                        # Detail pages need only the bounded metadata below, not
+                        # frame counts or size estimates. Fetch still takes its
+                        # own exact manifest before copying any episode.
+                        cheap = (0, 0, None, hashlib.sha256(b'').hexdigest(), False)
+                        fingerprint, directories = None, []
+                    else:
+                        cheap, fingerprint, directories = cheap_stats(episode, run, previous.get((real, episode_id)))
+                    if cheap is None:
+                        rows.append(dict(run_id=name, episode_id=episode_id, path=real, owner=owner,
+                                         mine=scope == 'mine', _unchanged=True))
+                        continue
                     episode_json, episode_error, episode_mtime = read_json(os.path.join(episode, 'episode.json'))
                     heartbeat_st = regular(os.path.join(episode, 'heartbeat'))
-                    count, size, newest, digest, files = stats(episode)
+                    count, size, newest, files_digest, approximate = cheap
                     rows.append(dict(run_id=name, episode_id=episode_id, path=real, owner=owner,
                                      mine=scope == 'mine', episode_json=episode_json,
                                      episode_json_error=episode_error, episode_mtime=episode_mtime,
@@ -589,7 +690,11 @@ for scope, patterns in (('mine', mine), ('team', team)):
                                      events_mtime=events_st.st_mtime if events_st else None,
                                      first_event=first_event(os.path.join(episode, 'events.jsonl')),
                                      file_count=count, size_bytes=size, max_mtime=newest,
-                                     files_digest=digest))
+                                     files_digest=files_digest, fingerprint=fingerprint,
+                                     fingerprint_directories=directories, size_approximate=approximate,
+                                     listing_digest=None if include_files or metadata_only else files_digest))
+                    if metadata_only:
+                        rows[-1]['metadata_only'] = True
                     if include_files:
                         manifest = [[episode_id + '/' + rel, size, mtime] for rel, size, mtime in files]
                         for metadata in ('run.json', 'eval.json', 'runner_records.jsonl', 'code_changes.json'):
@@ -714,15 +819,62 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
 
 
 def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
-                         include_files: bool = False, mine_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+                         include_files: bool = False, mine_only: bool = False,
+                         run_ids: tuple[str, ...] | None = None,
+                         previous: dict[str, Any] | None = None,
+                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+    return _list_remote_records(runner, settings, include_files=include_files, mine_only=mine_only,
+                                run_ids=run_ids, previous=previous, metadata_only=metadata_only)
+
+
+def list_remote_evals(runner: ProcessRunner, settings: GmoSettings) -> dict[str, list[dict[str, Any]]]:
+    """Read only bounded eval.json records; never enumerate episode directories."""
+    return _list_remote_records(runner, settings, eval_only=True)
+
+
+def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, include_files: bool = False,
+                         mine_only: bool = False, eval_only: bool = False,
+                         run_ids: tuple[str, ...] | None = None,
+                         previous: dict[str, Any] | None = None,
+                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+    if include_files and metadata_only:
+        raise FetchError("An exact manifest cannot be metadata-only")
     if not settings.configured:
         raise FetchError("GMO host and a shared_root or at least one trace pattern are required")
+    if run_ids is not None and any(not isinstance(value, str) or not RUN_ID.fullmatch(value) for value in run_ids):
+        raise FetchError("Refusing an unexpected run name")
+    if previous is not None:
+        previous = validate_remote_listing(previous)
+    previous_rows = {(row["path"], row["episode_id"]): row
+                     for row in (previous or {}).get("episodes", []) if row.get("fingerprint")}
+    compact = [[path, episode, row["fingerprint"], row.get("fingerprint_directories", [])]
+               for (path, episode), row in previous_rows.items()]
+    # SSH passes the program and config as one shell argument. Stay below the
+    # per-argument limit even for very large listings; a full cheap scan is safe.
+    if len(json.dumps(compact)) > 48 * 1024:
+        compact = []
     payload = json.dumps({
         "mine": settings.mine, "team": settings.team, "shared_root": settings.shared_root,
         "username": settings.host.rsplit("@", 1)[0] if "@" in settings.host else "",
+        "eval_only": eval_only, "run_ids": run_ids, "previous": compact, "metadata_only": metadata_only,
     })
     args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
     listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
+    if isinstance(listing, dict) and isinstance(listing.get("episodes"), list):
+        merged = []
+        for row in listing["episodes"]:
+            if isinstance(row, dict) and row.get("_unchanged"):
+                prior = previous_rows.get((row.get("path"), row.get("episode_id")))
+                if prior is None or prior.get("run_id") != row.get("run_id"):
+                    raise FetchError("Unexpected unchanged episode from GMO")
+                row = {**prior, **{key: value for key, value in row.items() if key != "_unchanged"}}
+            merged.append(row)
+        listing["episodes"] = merged
+    return validate_remote_listing(listing, include_files=include_files)
+
+
+def validate_remote_listing(listing: Any, *, include_files: bool = False) -> dict[str, list[dict[str, Any]]]:
+    """Apply the same validation to transport replies and private disk caches."""
     if (not isinstance(listing, dict) or not isinstance(listing.get("episodes"), list)
             or not isinstance(listing.get("evals"), list)):
         raise FetchError("Unexpected episode list from GMO")
@@ -743,6 +895,17 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                 raise FetchError("Unexpected episode fingerprint from GMO")
             if row["first_event"] is not None and not isinstance(row["first_event"], dict):
                 raise FetchError("Unexpected first event from GMO")
+            if row.get("fingerprint") is not None:
+                if not isinstance(row["fingerprint"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["fingerprint"]):
+                    raise FetchError("Unexpected episode fingerprint from GMO")
+                directories = row.get("fingerprint_directories")
+                if not isinstance(directories, list) or any(
+                    not isinstance(rel, str) or "\x00" in rel or rel.startswith("/")
+                    or any(part in ("", ".", "..") for part in rel.split("/")) for rel in directories
+                ):
+                    raise FetchError("Unexpected episode directory from GMO")
+            if row.get("listing_digest") is not None and row["listing_digest"] != row["files_digest"]:
+                raise FetchError("Unexpected episode content digest from GMO")
             if include_files:
                 episode_manifest(row, row)
         except (KeyError, TypeError, AttributeError) as exc:
@@ -795,14 +958,35 @@ def local_episode_stats(episode: Path) -> tuple[int, int, int | None, str] | Non
                 mtime = int(st.st_mtime)
                 newest = mtime if newest is None else max(newest, mtime)
                 files.append(((Path(base) / name).relative_to(episode).as_posix(), st.st_size, mtime))
-    # Identical to REMOTE_EPISODE_LISTER; do not return the potentially large list.
+    # Identical to the exact transfer-manifest stats in REMOTE_EPISODE_LISTER.
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
     return count, size, newest, digest
+
+
+def _local_listing_digest(episode: Path) -> str | None:
+    if episode.is_symlink() or not episode.is_dir():
+        return None
+    files: list[tuple[str, int | None, int | None]] = []
+    pending = [(episode, "")]
+    while pending:
+        directory, prefix = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                rel = prefix + entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append((Path(entry.path), rel + "/"))
+                elif entry.is_file(follow_symlinks=False):
+                    info = entry.stat(follow_symlinks=False) if not prefix else None
+                    files.append((rel, info.st_size if info else None, int(info.st_mtime) if info else None))
+    return hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
 
 
 def local_state(row: dict[str, Any], dest: Path) -> str:
     if (dest / row["run_id"]).is_symlink():
         return "stale"
+    if row.get("listing_digest") is not None:
+        digest = _local_listing_digest(dest / row["run_id"] / row["episode_id"])
+        return "remote" if digest is None else "local" if digest == row["listing_digest"] else "stale"
     stats = local_episode_stats(dest / row["run_id"] / row["episode_id"])
     if stats is None:
         return "remote"

@@ -5,6 +5,7 @@ import { mount } from './harness/fakeReact';
 import { EvalComparison, EvalDetailPage, EvalListPage, EvalListTable } from '../../evals/EvalPages';
 import { Breadcrumb } from '../../navigation/Breadcrumb';
 import { breakdownDetail } from './failureBreakdownFixtures';
+import type { RemoteListingStatus } from '../api';
 
 function text(node: unknown): string {
   if (node === null || node === undefined || typeof node === 'boolean') return '';
@@ -66,4 +67,54 @@ test('evaluation comparison breadcrumb uses the list title and a real ancestor l
     assert.doesNotMatch(text(page.output), /← 評価一覧/);
     breadcrumb.unmount(); page.unmount();
   }
+});
+
+test('evaluation list keeps cached entries, polls a background refresh, and forces only the light listing', async () => {
+  resetBrowser();
+  let status: RemoteListingStatus = { fetched_at: '2026-11-20T02:34:00Z', refreshing: true, error: null };
+  let entries = [{ eval_id: 'local', eval: null, error: 'local record', location: 'local' }];
+  net.handler = req => req.path === '/api/evals' ? { json: { evals: entries, remote_status: status } } : null;
+  const page = mount(EvalListPage, {});
+  await advance(100);
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点（更新中…）/);
+  assert.equal(propsOf<Parameters<typeof EvalListTable>[0]>(page.output, EvalListTable).entries[0].eval_id, 'local');
+  assert.equal(findAll(page.output, 'button')[0].props.disabled, true);
+  status = { ...status, refreshing: false, fetched_at: '2026-11-20T02:35:00Z' };
+  entries = [...entries, { eval_id: 'remote', eval: null, error: 'remote record', location: 'gmo' }];
+  await advance(2000);
+  assert.deepEqual(propsOf<Parameters<typeof EvalListTable>[0]>(page.output, EvalListTable).entries.map(entry => entry.eval_id), ['local', 'remote']);
+  assert.doesNotMatch(text(page.output), /更新中/);
+  const button = findAll(page.output, 'button')[0];
+  assert.equal(button.props.disabled, false);
+  status = { ...status, error: 'GMO unavailable' };
+  (button.props.onClick as () => void)();
+  await advance(100);
+  assert.ok(net.log.some(req => req.path === '/api/evals' && req.query.get('refresh') === '1'));
+  assert.match(text(page.output), /GMO の一覧：\d{2}:\d{2} 時点（更新に失敗）/);
+  assert.equal(propsOf<Parameters<typeof EvalListTable>[0]>(page.output, EvalListTable).entries.length, 2);
+  assert.equal(net.log.some(req => req.path === '/api/gmo/episodes'), false);
+  page.unmount();
+});
+
+test('cold evaluation detail polls its 202 placeholder until the GMO evaluation arrives', async () => {
+  resetBrowser();
+  const completed = breakdownDetail(true);
+  let ready = false;
+  net.handler = req => req.path === '/api/evals/current' ? { status: ready ? 200 : 202, json: ready
+    ? { ...completed, remote_status: { fetched_at: '2026-11-20T02:34:00Z', refreshing: false, error: null } }
+    : { eval_id: 'current', eval: null, loading_remote: true, remote_status: { fetched_at: null, refreshing: true, error: null } } } : null;
+  const page = mount(EvalDetailPage, { evalId: 'current' });
+  await advance(100);
+  assert.match(text(page.output), /GMO の評価を取得中/);
+  assert.match(text(page.output), /GMO の一覧：未取得（更新中…）/);
+  assert.equal(findAll(page.output, EvalComparison).length, 0);
+  ready = true;
+  await advance(2000);
+  assert.equal(propsOf<Parameters<typeof EvalComparison>[0]>(page.output, EvalComparison).detail.eval_id, completed.eval_id);
+  assert.doesNotMatch(text(page.output), /GMO の評価を取得中/);
+  const button = findAll(page.output, 'button')[0];
+  (button.props.onClick as () => void)();
+  await advance(100);
+  assert.ok(net.log.some(req => req.path === '/api/evals/current' && req.query.get('refresh') === '1'));
+  page.unmount();
 });

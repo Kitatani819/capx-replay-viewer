@@ -6,7 +6,7 @@ import TraceViewerPage from '../TraceViewerPage';
 import { TopBar } from '../components/TopBar';
 import { Picker } from '../components/Picker';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
-import type { GmoLiveStatus } from '../api';
+import type { GmoLiveStatus, RemoteListingStatus } from '../api';
 
 const LIVE = /^\/api\/gmo\/live$/;
 type Bar = Parameters<typeof TopBar>[0];
@@ -22,6 +22,7 @@ function setup(localStatus = 'running') {
   const state = {
     enabled: true, configured: true, conflict: false, remoteStatus: 'running', localOnly: false,
     latency: 5, error: false,
+    listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     status: {
       following: true, run_id: 'r1', episode_id: 'e1', last_ok_at: '2026-11-20T00:00:00Z',
       last_error: null, interval_s: 2, copied_bytes: 100, stopped_reason: null,
@@ -42,6 +43,7 @@ function setup(localStatus = 'running') {
     if (req.path === '/api/gmo/episodes') return { json: state.localOnly ? [] : ['e1', 'e2'].map(id => ({
       run_id: 'r1', episode_id: id, status: state.remoteStatus, conflict: state.conflict,
     })) };
+    if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/live') return state.error
       ? { status: 502, json: { detail: '接続できません' }, latency: state.latency }
       : { json: state.status, latency: state.latency };
@@ -72,6 +74,22 @@ test('a remote running trial starts its lease, renews every ten seconds and poll
     assert.ok(requests(/\/episodes\/e1$/).done >= 30);
     assert.ok(requests(/\/episodes\/e1\/events$/).done >= 30);
     assert.ok(requests(LIVE).done > remote.leases.length, 'GET reads status between renewals');
+  } finally { page.unmount(); remote.restore(); }
+});
+
+test('a cold remote listing keeps discovering the open Live trial until refresh completes', async () => {
+  const remote = setup();
+  remote.state.localOnly = true;
+  remote.state.listingStatus = { fetched_at: null, refreshing: true, error: null };
+  const page = open();
+  try {
+    await advance(100);
+    assert.equal(remote.leases.length, 0);
+    remote.state.localOnly = false;
+    remote.state.listingStatus = { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null };
+    await advance(2100);
+    assert.equal(remote.leases.length, 1);
+    assert.equal(remote.leases[0].body.episode_id, 'e1');
   } finally { page.unmount(); remote.restore(); }
 });
 

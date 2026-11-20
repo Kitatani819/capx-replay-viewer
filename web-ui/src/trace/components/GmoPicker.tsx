@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { GmoDisabledError, errorText, gmoApi, type GmoConfigResponse, type GmoJob, type GmoScope, type GmoSettings } from '../api';
 import { fmtBytes, fmtWall } from '../format';
 import { useAsync, useInterval } from '../hooks';
+import { remoteListingText } from '../remoteListing';
 import { episodeVerdict, VERDICT_LABELS, type TaskVerdict } from '../outcome';
 import { Badge, ErrorText, SmallButton, Spinner } from './common';
 import { TaskOutcomeBadge } from './TaskOutcomeBadge';
@@ -75,6 +76,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const savingRef = useRef(false);
   const autoSavingRef = useRef(false);
   const seenAutoRun = useRef<string | null>(null);
+  const seenListingFetchedAt = useRef<string | null>(null);
 
   useEffect(() => {
     if (!initialConfig) return;
@@ -100,9 +102,20 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     const recheckingJobs = new Set(missingJobs.current);
     try {
       const rows = await gmoApi.episodes('all', refresh, signal);
-      return { rows, updatedAt: Date.now(), recheckingJobs };
+      const status = await gmoApi.listingStatus(signal);
+      return { rows, status, recheckingJobs };
     } catch (error) { return handleError(error, signal); }
   } : null, [config?.settings]);
+  const remoteStatus = listing.data?.status;
+  useInterval(listing.poll, remoteStatus?.refreshing || (remoteStatus && !remoteStatus.fetched_at && !remoteStatus.error) ? 2000 : 30_000, configured);
+  useEffect(() => {
+    const fetchedAt = remoteStatus?.fetched_at;
+    if (!fetchedAt || seenListingFetchedAt.current === fetchedAt) return;
+    seenListingFetchedAt.current = fetchedAt;
+    // A refresh can finish between the rows and status reads. Read its rows
+    // once more when that completion is observed, including the cold start.
+    listing.reload();
+  }, [remoteStatus?.fetched_at, listing.reload]);
   const jobs = useAsync(configured ? async (signal) => {
     try { return await gmoApi.jobs(signal); }
     catch (error) { return handleError(error, signal); }
@@ -268,7 +281,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   };
 
   const initialConfigError = !config ? configError : null;
-  const connectionError = checkError || listing.error || initialConfigError;
+  const connectionError = checkError || listing.error || listing.data?.status.error || initialConfigError;
   const connectionStatus = saving ? '接続を確認中…' : connectionError ? '接続エラー' : !configured ? '未設定' : listing.data || checkMessage ? '接続できました' : listing.loading ? '接続中…' : '未確認';
   const updateDraft = (key: keyof SettingsDraft, value: string) => setDraft(previous => ({ ...previous, [key]: value }));
   const configuredInterval = config?.settings.interval_s ?? 120;
@@ -286,9 +299,9 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-y-auto">
       <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
         <span role="status" className="text-xs text-text-secondary">接続の状態：{connectionStatus}</span>
-        <span className="text-[11px] text-text-tertiary">一覧の更新時刻：{fmtWall(listing.data?.updatedAt)}</span>
+        {remoteStatus && <span role="status" className="text-[11px] text-text-tertiary">{remoteListingText(remoteStatus)}</span>}
         <div className="ml-auto flex gap-2">
-          <SmallButton onClick={reloadList} disabled={!configured || listing.loading || saving}>一覧を更新</SmallButton>
+          <SmallButton onClick={reloadList} disabled={!configured || listing.loading || remoteStatus?.refreshing || saving}>一覧を更新</SmallButton>
           <SmallButton active={settingsOpen} onClick={() => setSettingsOpen(previous => !previous)}>接続設定</SmallButton>
         </div>
       </div>
@@ -348,6 +361,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
         </section>
       )}
       {listing.error && <div role="alert" className="px-3 py-2"><ErrorText>一覧を取得できませんでした：{listing.error}</ErrorText></div>}
+      {remoteStatus?.error && <div role="status" className="px-3 py-2"><ErrorText>GMO の一覧を更新できませんでした：{remoteStatus.error}</ErrorText></div>}
       {jobs.error && <div role="alert" className="px-3 py-2"><ErrorText>取り込み状況を確認できませんでした：{jobs.error}</ErrorText><SmallButton onClick={jobs.reload}>取り込み状況を再確認</SmallButton></div>}
       {configured && <>
         <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
@@ -382,7 +396,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
                 <td className="py-2 px-3"><div>{row.task ?? '—'} · seed {row.seed ?? '—'}</div><div className="text-[11px] text-text-tertiary font-mono break-all">{row.run_id} / {row.episode_id}</div></td>
                 <td className="py-2 px-3">{row.mine ? '自分' : row.owner || '—'}</td>
                 <td className="py-2 px-3 whitespace-nowrap">{fmtWall(row.start_wall_time)}</td>
-                <td className="py-2 px-3 whitespace-nowrap">{fmtBytes(row.size_bytes)}</td>
+                <td className="py-2 px-3 whitespace-nowrap">{row.size_approximate ? '約 ' : ''}{fmtBytes(row.size_bytes)}</td>
                 <td className="py-2 px-3"><div className="flex flex-wrap gap-1 whitespace-nowrap"><SmallButton disabled={!!reason || !!busy} title={reason ?? undefined} onClick={() => row.local_state === 'local' ? onPick(row.run_id, row.episode_id) : void fetchEpisode(row.run_id, row.episode_id)}>{busy ? '取り込み中…' : row.local_state === 'local' ? '開く' : row.local_state === 'stale' ? '更新を取り込む' : '取り込む'}</SmallButton></div>
                   {reason && <p className="mt-1 text-[11px] text-text-secondary">{reason}</p>}
                   {error && <div role="alert" className="mt-1"><ErrorText>{error}</ErrorText></div>}
