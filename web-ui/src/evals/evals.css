@@ -44,25 +44,6 @@
 .eval-page .eval-cell .eval-compare-link:hover, .eval-page .eval-cell .eval-compare-link:focus-visible { border-color: #467e5c; background: #e6efdf; text-decoration: none; }
 .eval-legend { margin: 16px 0; color: #55675a; font-size: 13px; }
 .eval-empty { margin: 30px 0; }
-.eval-trend { margin: 0 0 32px; padding: 22px 24px; background: #fff; border: 1px solid #dce3da; border-radius: 8px; }
-.eval-trend-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 14px; }
-.eval-trend h2 { font-size: 18px; font-weight: 600; }
-.eval-trend label { font-size: 14px; }
-.eval-trend select { max-width: min(420px, 65vw); margin-left: 6px; padding: 7px 10px; border: 1px solid #acbda7; border-radius: 5px; background: #f5f8f1; }
-.eval-trend select:focus-visible { outline: 2px solid #467e5c; outline-offset: 2px; }
-.eval-trend-note { color: #55675a; font-size: 12px; margin: 6px 0; overflow-wrap: anywhere; }
-.eval-trend-scroll { overflow-x: auto; margin: 12px 0 4px; }
-.eval-trend svg { display: block; width: 100%; min-width: 560px; }
-.eval-trend svg text { font-size: 13px; fill: #55675a; }
-.eval-trend-grid { stroke: #e2e8df; stroke-width: 1; }
-.eval-trend-line { stroke: #7c9b77; stroke-width: 2; }
-.eval-trend-point { fill: #356b4e; stroke: #356b4e; stroke-width: 2; }
-.eval-trend-provisional { fill: #fff; }
-.eval-trend svg a:hover circle, .eval-trend svg a:focus-visible circle { stroke: #24332b; stroke-width: 4; }
-.eval-trend-details { margin-top: 18px; font-size: 13px; }
-.eval-trend-details summary { cursor: pointer; color: #356b4e; margin-bottom: 10px; list-style: none; }
-.eval-trend-details table { min-width: 680px; }
-.eval-trend-details td { overflow-wrap: anywhere; }
 .eval-code-changes { margin: 26px 0; padding: 18px 20px; border: 1px solid #dce3da; border-radius: 8px; background: #fff; font-size: 14px; }
 .eval-code-changes summary { cursor: pointer; list-style: none; overflow-wrap: anywhere; }
 .eval-code-changes > summary { font-size: 16px; font-weight: 600; }
