@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import Any, Sequence
 
+from capx_trace_recorder.evaluation_failure import evaluation_failure
 from capx_trace_viewer import reader
 
 SCHEMA = "capx-eval/1"
@@ -564,6 +565,9 @@ def display_status(record: dict[str, Any], *, now: float | None = None) -> str |
         now = time.time() if now is None else now
         heartbeat = _time(record["heartbeat_at"])
         return "running" if heartbeat is not None and now - heartbeat < HEARTBEAT_STALE_S else "interrupted"
+    failure = evaluation_failure(record)
+    if failure is not None:
+        return "failed" if failure["kind"] == "infrastructure" else "incomplete"
     if record["status"] == "interrupted":
         return "interrupted"
     return "incomplete" if (record.get("summary") or {}).get("incomplete", 0) else None
@@ -574,6 +578,13 @@ def condition_differences(record: dict[str, Any], baseline: dict[str, Any]) -> l
     for field in ("tasks", "seeds", "models", "config_flags", "eval_set"):
         current = record.get(field) if field == "eval_set" else (record.get("summary") or {}).get(field)
         previous = baseline.get(field) if field == "eval_set" else (baseline.get("summary") or {}).get(field)
+        if field == "config_flags":
+            # Evaluation outcome evidence is stored here for schema compatibility,
+            # but it is not a setting that changes how trials are run.
+            if isinstance(current, dict):
+                current = {key: value for key, value in current.items() if key != "evaluation_failure"}
+            if isinstance(previous, dict):
+                previous = {key: value for key, value in previous.items() if key != "evaluation_failure"}
         comparable_current = sorted(set(current)) if field in ("tasks", "seeds") and isinstance(current, list) else current
         comparable_previous = sorted(set(previous)) if field in ("tasks", "seeds") and isinstance(previous, list) else previous
         if json.dumps(comparable_current, sort_keys=True) != json.dumps(comparable_previous, sort_keys=True):

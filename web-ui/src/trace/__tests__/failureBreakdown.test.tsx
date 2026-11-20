@@ -9,14 +9,14 @@ import { breakdownDetail, classifiedTrial } from './failureBreakdownFixtures';
 
 test('breakdown separates failures from unjudged trials and preserves category order', () => {
   const d = breakdownDetail();
-  assert.deepEqual(reasonCounts(d.trials), { error: 2, timeout: 0, finish_unmet: 1, regen_limit: 0, unknown: 0, unjudged: 1 });
-  assert.deepEqual(reasonCounts(d.baseline_trials), { error: 1, timeout: 2, finish_unmet: 0, regen_limit: 0, unknown: 0, unjudged: 0 });
+  assert.deepEqual(reasonCounts(d.trials), { error: 2, timeout: 0, finish_unmet: 1, regen_limit: 0, single_shot: 0, unknown: 0, unjudged: 1 });
+  assert.deepEqual(reasonCounts(d.baseline_trials), { error: 1, timeout: 2, finish_unmet: 0, regen_limit: 0, single_shot: 0, unknown: 0, unjudged: 0 });
   assert.deepEqual(reasonCounts([classifiedTrial('old', 1, 'success', { end_classification: undefined })]),
-    { error: 0, timeout: 0, finish_unmet: 0, regen_limit: 0, unknown: 0, unjudged: 0 });
+    { error: 0, timeout: 0, finish_unmet: 0, regen_limit: 0, single_shot: 0, unknown: 0, unjudged: 0 });
   const html = renderToStaticMarkup(<FailureBreakdown detail={d} />);
   assert.match(html, /失敗 3件（基準 3件）・未判定 1件（基準 0件）/);
   const rows = [...html.matchAll(/<button[^>]+aria-label="([^"]+)"/g)].map(match => match[1].split('：')[0]);
-  assert.deepEqual(rows, ['エラーで停止', '時間切れ・打ち切り', '「終わった」と答えたが未達成', '書き直しの上限', '終わり方が不明', '未判定（成否が記録から分からない）']);
+  assert.deepEqual(rows, ['エラーで停止', '時間切れ・打ち切り', '「終わった」と答えたが未達成', '書き直しの上限', '1回だけ実行して終了（single-shot）', '終わり方が不明', '未判定（成否が記録から分からない）']);
   assert.match(html, /failure-increase[^>]*>\+1/);
   assert.match(html, /failure-decrease[^>]*>-2/);
   assert.match(html, /分類は記録から自動で推測したもので、外れることがあります。/);

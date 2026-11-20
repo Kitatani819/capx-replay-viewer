@@ -22,6 +22,7 @@ def test_canonical_label_table():
         "timeout": ("時間切れ・打ち切り", "時間切れ"),
         "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
         "regen_limit": ("書き直しの上限", "上限"),
+        "single_shot": ("1回だけ実行して終了（single-shot）", "1回実行"),
         "unknown": ("終わり方が不明", "不明"),
     }
 
@@ -50,6 +51,93 @@ def metadata(**changes):
 
 def summary(raw=None):
     return reader.episode_summary_from_metadata("run", "trial", metadata() if raw is None else raw)
+
+
+def single_shot_metadata(**changes):
+    # Minimal synthetic projection of the normal LIBERO single-shot return:
+    # sandbox success is distinct from task success; no model decision is made.
+    return metadata(**{"source": "envs.runner", "config_flags": {"multi_turn": False},
+                       "harness_summary": {"task_completed": False, "sandbox_rc": 0,
+                                           "num_code_blocks": 1, "num_regenerations": 0,
+                                           "num_finishes": 0, "terminated": False,
+                                           "truncated": False, "budget_exhausted": False}, **changes})
+
+
+def test_normal_single_shot_has_a_recorded_cause_without_a_finish_decision():
+    raw = single_shot_metadata(stop_context={"step_limit": 8000, "steps_used": 116, "turns_used": 1})
+    events = [event("model_output_parsed", 1, parser="_extract_code", decision=None),
+              event("code_block_start", 2), event("code_block_end", 3, sandbox_rc=0),
+              event("episode_end", 4, end_reason="completed", trace_complete=True)]
+    result = classify_trial_end(summary(raw), events)
+    assert result["verdict"] == "failure"
+    assert result["reason"] == result["cause"]["code"] == "single_shot"
+    assert result["cause"]["headline"] == "1回だけ実行して終了（single-shot）"
+    assert result["cause"]["source"] == "capx/envs/trial.py:953"
+    assert result["evidence"]["event_id"] == "e4"
+    assert result["cause"]["evidence"]["config_flags.multi_turn"] is False
+    assert result["cause"]["evidence"]["harness_summary.num_code_blocks"] == 1
+    assert result["cause"]["missing_evidence"] == []
+    assert result["cause"]["limit"] is None
+
+
+def test_single_shot_can_execute_multiple_initial_code_blocks_and_start_event_config():
+    raw = single_shot_metadata()
+    raw.pop("config_flags")
+    raw["harness_summary"]["num_code_blocks"] = 2
+    result = classify_trial_end(summary(raw), [event("episode_start", 1, source="envs.runner",
+                                                    config_flags={"multi_turn": False})])
+    assert result["cause"]["code"] == "single_shot"
+    assert result["cause"]["used"] == 2
+
+
+@pytest.mark.parametrize("flags", [{}, {"multi_turn": True}, {"multi_turn": None}, {"multi_turn": 0}])
+def test_single_shot_is_never_inferred_from_a_missing_or_non_boolean_setting(flags):
+    raw = single_shot_metadata()
+    raw["config_flags"] = flags
+    assert classify_trial_end(summary(raw))["cause"]["code"] == "unknown"
+
+
+@pytest.mark.parametrize("changes", [{"trace_complete": False}, {"source": "web_ui"}])
+def test_single_shot_requires_complete_recording_of_the_known_runner(changes):
+    assert classify_trial_end(summary(single_shot_metadata(**changes)))["cause"]["code"] == "unknown"
+
+
+@pytest.mark.parametrize("field,value", [("num_code_blocks", 0), ("num_code_blocks", None),
+                                         ("num_regenerations", 1), ("num_finishes", 1),
+                                         ("sandbox_rc", None), ("terminated", True),
+                                         ("stopping_reason", "unrecognized_rule")])
+def test_single_shot_needs_corroborating_normal_return_counts(field, value):
+    raw = single_shot_metadata()
+    raw["harness_summary"][field] = value
+    assert classify_trial_end(summary(raw))["cause"]["code"] == "unknown"
+
+
+@pytest.mark.parametrize("change,expected", [("success", "success"), ("error", "execution_error"),
+                                           ("timeout", "trial_time_limit"), ("budget", "evaluation_budget"),
+                                           ("truncated", "step_limit"), ("turns", "turn_limit"),
+                                           ("finish", "finish_unmet"), ("unfinished", "recording_incomplete")])
+def test_single_shot_does_not_hide_other_terminal_evidence(change, expected):
+    raw = single_shot_metadata()
+    events = []
+    if change == "success":
+        raw["harness_summary"]["task_completed"] = True
+    elif change == "error":
+        raw.update(end_reason="exception", exception={"type": "RuntimeError"})
+    elif change == "timeout":
+        raw.update(end_reason="timeout_alarm", alarm_seen=True)
+    elif change == "budget":
+        raw["harness_summary"]["budget_exhausted"] = True
+    elif change == "truncated":
+        raw["harness_summary"]["truncated"] = True
+        raw["stop_context"] = {"step_limit": 8000, "steps_used": 8000}
+    elif change == "turns":
+        raw["stop_context"] = {"multiturn_limit": 1, "turns_used": 2}
+        raw["harness_summary"]["num_code_blocks"] = 2
+    elif change == "finish":
+        events = [event("model_output_parsed", 1, decision="finish", model_said_finish=True)]
+    else:
+        raw.update(status="running", end_reason=None)
+    assert classify_trial_end(summary(raw), events)["cause"]["code"] == expected
 
 
 @pytest.mark.parametrize(("raw", "events", "reason", "evidence"), [
@@ -180,8 +268,14 @@ def write_trial(tmp_path, raw=None, events=None):
     return directory
 
 
-def test_trial_and_eval_api_expose_the_same_field(tmp_path):
-    write_trial(tmp_path)
+@pytest.mark.parametrize("single_shot", [False, True])
+def test_trial_and_eval_api_expose_the_same_field(tmp_path, single_shot):
+    if single_shot:
+        write_trial(tmp_path, raw=single_shot_metadata(),
+                    events=[event("code_block_start", 1), event("code_block_end", 2, sandbox_rc=0),
+                            event("episode_end", 3, end_reason="completed", trace_complete=True)])
+    else:
+        write_trial(tmp_path)
     stamp = datetime.now(timezone.utc).isoformat()
     record = {"schema": "capx-eval/1", "eval_id": "run", "status": "completed",
               "by": "demo", "changed": "", "baseline_eval_id": "base", "eval_set": None,
@@ -202,8 +296,8 @@ def test_trial_and_eval_api_expose_the_same_field(tmp_path):
     assert trial_response.status_code == eval_response.status_code == 200
     trial, comparison = json.loads(trial_response.body), json.loads(eval_response.body)
     assert trial["end_classification"] == comparison["trials"][0]["end_classification"]
-    assert trial["end_classification"]["reason"] == "finish_unmet"
-    assert trial["end_classification"]["evidence"]["event_id"] == "e2"
+    assert trial["end_classification"]["reason"] == ("single_shot" if single_shot else "finish_unmet")
+    assert trial["end_classification"]["evidence"]["event_id"] == ("e3" if single_shot else "e2")
     assert comparison["baseline_trials"][0]["end_classification"]["reason"] == "success"
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from capx_trace_viewer import evals
+from capx_trace_recorder.evaluation_failure import evaluation_failure, failure_description
 
 CASES = json.loads((Path(__file__).parent / "fixtures" / "eval_verdicts.json").read_text())
 
@@ -241,3 +242,53 @@ def test_explicit_interruption_verdict_is_not_inferred_for_legacy_records():
     assert evals.trial_verdict(new) == 'failure'
     new['episode']['trial_outcome']['task_success'] = True
     assert evals.trial_verdict(new) == 'success'
+
+
+@pytest.mark.parametrize("kind,status", [("infrastructure", "failed"), ("incomplete", "incomplete")])
+def test_evaluation_failure_is_a_separate_status_with_bounded_evidence(kind, status):
+    data = record()
+    # A wrapper can detect a failure even after a child command exits zero.
+    data["status"] = "interrupted"
+    diagnostic = {"kind": kind, "reason": "task setup or worker failed", "count": 3,
+                  "infrastructure_failures": [{"task": "cube", "seed": 401, "reason": "simulator unavailable"},
+                                               {"task": None, "seed": None, "reason": "invalid configuration"}]}
+    data["summary"]["config_flags"]["evaluation_failure"] = diagnostic
+    assert evals.validate_eval_record(data) == data
+    assert evaluation_failure(data) == diagnostic
+    assert evals.display_status(data) == status
+    assert failure_description(diagnostic) == "cube・seed 401・simulator unavailable / invalid configuration / ほか 1 件"
+    assert data["end"]["exit_code"] == 0
+    baseline = record()
+    assert evals.condition_differences(data, baseline) == []
+    data["status"] = "running"
+    assert evals.display_status(data, now=evals._time(data["heartbeat_at"])) == "running"
+
+
+@pytest.mark.parametrize("marker", [None, [], "failure", {}, {"kind": "unknown", "reason": "reason"},
+                                  {"kind": "infrastructure", "reason": ""},
+                                  {"kind": "incomplete", "reason": ["bad"]}])
+def test_missing_or_unknown_optional_evaluation_failure_keeps_legacy_behavior(marker):
+    data = record()
+    data["status"] = "interrupted"
+    data["summary"]["config_flags"]["evaluation_failure"] = marker
+    assert evaluation_failure(data) is None
+    assert evals.display_status(data) == "interrupted"
+
+
+def test_evaluation_failure_projection_ignores_malformed_tuples_and_bounds_entries():
+    data = record()
+    diagnostic = {"kind": "infrastructure", "reason": "worker failed", "count": True,
+                  "infrastructure_failures": [None, {"task": "cube", "seed": True, "reason": "bad seed"},
+                                               {"task": [], "seed": 1, "reason": "bad task"},
+                                               {"task": None, "seed": None, "reason": "valid"}]}
+    data["summary"]["config_flags"]["evaluation_failure"] = diagnostic
+    original = copy.deepcopy(diagnostic)
+    projected = evaluation_failure(data)
+    assert projected["infrastructure_failures"] == [{"task": None, "seed": None, "reason": "valid"}]
+    assert projected["count"] == 1
+    assert diagnostic == original
+    diagnostic["infrastructure_failures"] = [{"task": "cube", "seed": 1, "reason": "worker failed"}] * 105
+    diagnostic["count"] = 105
+    projected = evaluation_failure(data)
+    assert len(projected["infrastructure_failures"]) == 100
+    assert failure_description(projected).endswith("ほか 5 件")

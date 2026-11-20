@@ -20,6 +20,7 @@ test('each failure group and unjudged group has causes with an expandable trial 
     ['finish_unmet', 'finish_unmet', '「終わった」と答えたが未達成', 'ロボットは課題を達成していません。', false],
     ['regen_limit', 'unknown', '書き直し 10 回で終了（上限の設定は記録なし）', 'コードを書き直して試行を終えました。', false],
     ['error', 'execution_error', 'エラーで停止', '処理を続けられず終了しました。', false],
+    ['single_shot', 'single_shot', '1回だけ実行して終了（single-shot）', '初回のプログラムを実行して終了しました。', false],
     ['unknown', 'unknown', '終了原因を特定できない', '終了した理由を確かめられません。', false],
   ];
   for (const [reason, code, headline, explanation, unjudged] of groups) {
@@ -39,6 +40,19 @@ test('each failure group and unjudged group has causes with an expandable trial 
     if (reason === 'regen_limit') assert.doesNotMatch(html, /終了原因を特定できない/);
     assert.match(html, /分類は記録から自動で推測したもので、外れることがあります。/);
   }
+});
+
+test('single-shot uses its own word and failure group instead of unknown', () => {
+  const detail = breakdownDetail(false);
+  detail.trials = [classifiedTrial('once', 1, 'single_shot', {
+    end_classification: classification('single_shot', 'single_shot', '1回だけ実行して終了（single-shot）', '初回の実行を終えました。'),
+  })];
+  assert.equal(trialCellWord(detail.trials[0]), '1回実行');
+  assert.equal(CELL_LEGEND['1回実行'], '初回のプログラムを実行し、書き直しの判断をせず終了');
+  assert.equal(causeCounts(detail.trials, [], 'single_shot')[0].current, 1);
+  assert.deepEqual(causeCounts(detail.trials, [], 'unknown'), []);
+  const html = renderToStaticMarkup(<EvalComparison detail={detail} />);
+  assert.match(html, /<span aria-hidden="true">1回実行<\/span>/);
 });
 
 test('cell tooltip contains one cause line, one plain explanation and the trial action', () => {

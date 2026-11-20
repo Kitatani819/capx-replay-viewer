@@ -28,11 +28,14 @@ class Markup(HTMLParser):
         self.details = []
         self.headers = []
         self.cells = []
+        self.titles = []
         self._capture = None
         self.feed(html)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if "title" in attrs:
+            self.titles.append(attrs["title"])
         if tag == "a":
             self.links.append(attrs.get("href", ""))
             self.link_attrs.append(attrs)
@@ -247,6 +250,47 @@ def test_running_stale_and_interrupted_status(tmp_path):
     markup = Markup(html)
     assert "実行中" in markup.cells
     assert sum("途中で終了" in cell for cell in markup.cells) == 2
+
+
+@pytest.mark.parametrize("kind,word", [("infrastructure", "評価失敗"), ("incomplete", "未完了")])
+@pytest.mark.parametrize("local_episodes", [False, True])
+def test_failed_evaluation_status_keeps_reason_when_scores_are_rebuilt(tmp_path, kind, word, local_episodes):
+    if local_episodes:
+        path, value = retried_record(tmp_path)
+    else:
+        value = record()
+        path = save(tmp_path, value)
+    value["status"] = "interrupted"
+    reason = 'setup <failed> & "reason"'
+    value["summary"]["config_flags"]["evaluation_failure"] = {
+        "kind": kind, "reason": "task setup or worker failed", "count": 2,
+        "infrastructure_failures": [{"task": "task-a", "seed": 401, "reason": reason}],
+    }
+    path.write_text(json.dumps(value), encoding="utf-8")
+    html = page(tmp_path)
+    markup = Markup(html)
+    assert "状態" in markup.headers
+    assert word in markup.cells
+    assert f'task-a・seed 401・{reason} / ほか 1 件' in markup.titles
+    assert 'setup <failed>' not in html
+    assert "&lt;failed&gt;" in html and "&quot;reason&quot;" in html
+    assert json.loads(path.read_text()) == value
+
+
+def test_failed_evaluation_with_global_reason_and_legacy_diagnostic(tmp_path):
+    value = record(status="interrupted")
+    value["summary"]["config_flags"]["evaluation_failure"] = {
+        "kind": "infrastructure", "reason": "command could not start",
+        "infrastructure_failures": [{"task": None, "seed": None, "reason": "invalid configuration"}],
+    }
+    save(tmp_path, value)
+    old = record("ev-old", status="interrupted")
+    old["summary"]["config_flags"]["evaluation_failure"] = {"kind": "unknown", "reason": "old marker"}
+    save(tmp_path, old)
+    markup = Markup(page(tmp_path))
+    assert "評価失敗" in markup.cells
+    assert "invalid configuration" in markup.titles
+    assert "中断" in markup.cells
 
 
 def test_missing_baseline_has_id_without_invented_delta(tmp_path):
@@ -588,13 +632,19 @@ print('finished', flush=True)
 
 
 @pytest.mark.parametrize("stored", ["attempts", "logical", "logical_with_attempts"])
-def test_cli_is_usable_without_viewer_or_site_packages(tmp_path, stored):
+@pytest.mark.parametrize("failure", [False, True])
+def test_cli_is_usable_without_viewer_or_site_packages(tmp_path, stored, failure):
     package_root = Path(__file__).resolve().parents[2]
     isolated = tmp_path / "isolated"
     isolated.mkdir()
     shutil.copytree(package_root / "capx_trace_recorder", isolated / "capx_trace_recorder")
     root = tmp_path / "records"
-    _path, value = retried_record(root, stored=stored)
+    path, value = retried_record(root, stored=stored)
+    if failure:
+        value["status"] = "interrupted"
+        value["summary"]["config_flags"]["evaluation_failure"] = {
+            "kind": "incomplete", "reason": "planned trials are incomplete"}
+        path.write_text(json.dumps(value), encoding="utf-8")
     out = tmp_path / "portable.html"
     env = {**os.environ, "PYTHONPATH": str(isolated)}
     result = subprocess.run([sys.executable, "-S", "-m", "capx_trace_recorder", "index",
@@ -605,6 +655,9 @@ def test_cli_is_usable_without_viewer_or_site_packages(tmp_path, stored):
     html = out.read_text(encoding="utf-8")
     assert "http://127.0.0.1:9001/evals/ev-retried" in html
     assert eval_index._score(value["summary"]) in html
+    if failure:
+        assert "未完了" in Markup(html).cells
+        assert "planned trials are incomplete" in Markup(html).titles
 
 
 @pytest.mark.skipif(not hasattr(os, "O_PATH") or os.geteuid() == 0,

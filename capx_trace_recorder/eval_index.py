@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlsplit
 
+from capx_trace_recorder.evaluation_failure import (
+    evaluation_failure, failure_description, preserve_evaluation_failure,
+)
+
 MAX_EVAL_BYTES = 256 * 1024
 HEARTBEAT_STALE_S = 300
 JST = dt.timezone(dt.timedelta(hours=9), name="JST")
@@ -181,7 +185,7 @@ def _scan(root_fd: int) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
             value = _validate(value, eval_id)
             summary = _logical_summary(directory, eval_id)
             if summary is not None:
-                value = {**value, "summary": summary}
+                value = {**value, "summary": preserve_evaluation_failure(summary, value)}
             records.append(value)
         except FileNotFoundError:
             pass  # A newly created evaluation directory may not have its record yet.
@@ -287,6 +291,20 @@ def _duration(record: dict[str, Any], now: dt.datetime) -> str:
     return f"途中で終了（{duration}）" if record["status"] == "interrupted" else duration
 
 
+def _status(record: dict[str, Any], now: dt.datetime) -> str:
+    failure = evaluation_failure(record)
+    if record["status"] != "running" and failure is not None:
+        word = "評価失敗" if failure["kind"] == "infrastructure" else "未完了"
+        return f'<span title="{_escape(failure_description(failure))}">{word}</span>'
+    if record["status"] == "running":
+        word = "実行中" if _duration(record, now) == "実行中" else "中断"
+    elif record["status"] == "interrupted":
+        word = "中断"
+    else:
+        word = "欠損あり" if (record.get("summary") or {}).get("incomplete", 0) else "完了"
+    return word
+
+
 def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer_url: str,
             now: dt.datetime) -> str:
     # Ambiguous IDs must not produce a misleading baseline comparison.
@@ -310,22 +328,22 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
             f'<time datetime="{_escape(record["started_at"])}">{_escape(_time(record["started_at"]).astimezone(JST).strftime("%Y-%m-%d %H:%M:%S"))}</time>'
             f'<small class="eval-id">{_escape(identity)}</small>',
             _escape(record.get("by") or "—"), _escape(record.get("changed") or "—"),
-            _escape(record.get("eval_set") or "—"), _score(summary),
+            _escape(record.get("eval_set") or "—"), _status(record, now), _score(summary),
             _escape(_duration(record, now)), _escape(commit), baseline_html,
             f'<a href="{link}">Viewerで開く</a>',
         ]
-        classes = ("date", "by", "changed", "eval-set", "score", "duration", "commit", "baseline", "open")
+        classes = ("date", "by", "changed", "eval-set", "status", "score", "duration", "commit", "baseline", "open")
         row = "".join(f'<td class="{cls}">{cell}</td>' for cls, cell in zip(classes, cells))
         tasks = (summary or {}).get("by_task", {})
         items = "".join(f'<li>{_escape(task)}: {_score(counts)}</li>' for task, counts in sorted(tasks.items()))
         breakdown = f'<ul class="task-list">{items}</ul>' if items else '<p class="empty">タスク別の記録なし</p>'
-        rows.append(f'<tbody><tr>{row}</tr><tr class="breakdown"><td colspan="9"><details>'
+        rows.append(f'<tbody><tr>{row}</tr><tr class="breakdown"><td colspan="10"><details>'
                     f'<summary>タスク別の内訳</summary>{breakdown}</details></td></tr></tbody>')
     warnings = ""
     if errors:
         items = "".join(f"<li>{_escape(path)}: {_escape(reason)}</li>" for path, reason in errors)
         warnings = f'<section class="warnings"><h2>読めなかった記録</h2><ul>{items}</ul></section>'
-    headings = ("日付（JST）", "誰", "変えた部品", "組", "成功数 / 試行数", "時間", "commit", "基準", "開く")
+    headings = ("日付（JST）", "誰", "変えた部品", "組", "状態", "成功数 / 試行数", "時間", "commit", "基準", "開く")
     table = '<div class="table-scroll" tabindex="0" role="region" aria-label="評価一覧（横にスクロールできます）"><table>'
     table += '<caption>評価一覧 · 新しい順</caption><thead><tr>' + "".join(f'<th scope="col">{_escape(h)}</th>' for h in headings) + '</tr></thead>'
     table += "".join(rows) + '</table></div>'
