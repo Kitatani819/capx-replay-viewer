@@ -336,7 +336,7 @@ class GmoService:
         try:
             with self._refresh_lock:
                 rows = gmo.list_remote_episodes(self.runner, settings, include_files=True,
-                                               mine_only=True)["episodes"]
+                                               mine_only=True, timeout=gmo.FILE_LISTING_TIMEOUT_S)["episodes"]
                 plans = []
                 for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
                                   reverse=True):
