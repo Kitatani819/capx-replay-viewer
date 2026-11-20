@@ -210,6 +210,7 @@ export interface GmoSettings {
   port: number | null;
   identity_file: string | null;
   shared_root: string;
+  submission_root: string;
   mine: string[];
   team: string[];
   interval_s: number;

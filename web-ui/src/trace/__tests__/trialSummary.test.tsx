@@ -52,6 +52,7 @@ test('summary uses canonical long ending labels even when the API label is stale
   const labels: Record<EndReason, string> = {
     success: '成功', error: 'エラーで停止', timeout: '時間切れ・打ち切り',
     finish_unmet: '「終わった」と答えたが未達成', regen_limit: '書き直しの上限', single_shot: '1回だけ実行して終了（single-shot）', unknown: '終わり方が不明',
+    submission_reset: '提出物が試行を終えた（未達成）',
   };
   for (const [reason, label] of Object.entries(labels)) {
     const summary: EpisodeSummary = { episode_id: ep.episodeId,

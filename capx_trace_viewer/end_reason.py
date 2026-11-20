@@ -21,6 +21,7 @@ END_REASON_WORDS = {
     "error": ("エラーで停止", "エラー"),
     "timeout": ("時間切れ・打ち切り", "時間切れ"),
     "finish_unmet": ("「終わった」と答えたが未達成", "未達成"),
+    "submission_reset": ("提出物が試行を終えた（未達成）", "終了"),
     "regen_limit": ("書き直しの上限", "上限"),
     "single_shot": ("1回だけ実行して終了（single-shot）", "1回実行"),
     "unknown": ("終わり方が不明", "不明"),
@@ -41,6 +42,8 @@ END_CAUSE_LABELS = {
     "evaluation_budget": "評価全体の時間制限に到達",
     "planned_unrun": "計画された試行が実行されなかった",
     "single_shot": "1回だけ実行して終了（single-shot）",
+    "submission_reset": "提出物が試行を終えた（未達成）",
+    "job_cut": "評価ジョブの終了で打ち切り",
 }
 # One vocabulary for cell words and their explanations, mirrored in TypeScript.
 END_CAUSE_WORDS = {
@@ -63,6 +66,8 @@ END_CAUSE_WORDS = {
     "evaluation_budget": ("評価時間", "評価全体の時間制限に到達"),
     "planned_unrun": ("未走行", "計画されたが実行されず、失敗として集計した試行"),
     "single_shot": ("1回実行", "初回のプログラムを実行し、書き直しの判断をせず終了"),
+    "submission_reset": ("終了", "審判が成功と判定する前に提出物が試行を終えた"),
+    "job_cut": ("打ち切り", "試行の途中で評価ジョブが終了し、公式集計では終了した試行に数えない"),
 }
 END_CAUSE_CELL_WORDS = {code: words[0] for code, words in END_CAUSE_WORDS.items()}
 # Include compatibility words used when an older server has no detailed cause.
@@ -173,6 +178,8 @@ def _cause_copy(code: str, reason: str, limit: Any, used: Any, task: Any,
         "simulator_crash": "シミュレーターで異常が起き、試行が終了しました。" + ("公式の評価ではこの試行は無効になりました。" if fields.get("episode_voided") is True else ""),
         "manual_stop": "手動の停止操作により、試行が終了しました。",
         "replaced": "別の試行を始めたため、この試行は終了しました。",
+        "submission_reset": "審判（gateway）が成功と判定する前に、提出物が試行をリセットして終了しました。課題は未達成です。",
+        "job_cut": "試行が進行中のまま、評価ジョブが終了したか、評価全体の時間制限に達したため打ち切られました。公式の集計では、完了した試行に数えません。",
     }
     # Uncertainty and recorded process signals are already expressed in plain words.
     return headline, sentences.get(code, explanation or "終了原因を特定する記録が足りません。")
@@ -188,6 +195,12 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     An evaluation's scheduler TIMEOUT applies only to an unfinished episode.
     """
     raw = _dict(episode.get("episode"))
+    referee = _dict(_dict(raw.get("harness_summary")).get("referee"))
+    referee_record = raw.get("source") != "envs.runner" and isinstance(referee.get("ended"), str)
+    if referee_record:
+        # The gateway's final record is authoritative, including unfamiliar end
+        # states. Opening an exported trace must not change its classification.
+        events = ()
     end = decision = block = first_error = last_error = alarm = evaluator = code_timeout_event = None
     start_context: dict[str, Any] = {}
     start_config: dict[str, Any] = {}
@@ -259,6 +272,19 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
     if end is not None or end_reason:
         enriched["status"] = "ended"
     verdict, verdict_source = evals._verdict_and_source(enriched, runner_records)
+    if referee_record and type(harness.get("task_completed")) is bool:
+        verdict = "success" if harness["task_completed"] else "failure"
+        verdict_source = "審判（gateway）"
+    referee_steps = referee.get("cycles")
+    if not _number(referee_steps):
+        referee_steps = context.get("steps_used")
+    if referee_record:
+        if verdict == "success" and _number(referee.get("steps_to_success")):
+            referee_steps = referee["steps_to_success"]
+        if _number(referee_steps):
+            context["steps_used"] = referee_steps
+            if verdict != "success" and referee["ended"] == "steplimit":
+                context["step_limit"] = referee_steps
     record, attempt, final = evals._runner_attempt(enriched, runner_records)
     outcome = _dict(record.get("outcome")) if record and final else {}
     attempt = attempt or {}
@@ -299,6 +325,32 @@ def classify_trial_end(episode: dict[str, Any], events: Iterable[dict[str, Any]]
         return {"reason": reason, "label": END_LABELS[reason], "evidence": evidence, "verdict": effective_verdict,
                 **({"conditions": conditions} if conditions else {}),
                 "cause": cause, "rule_differences": differences}
+
+    if referee_record:
+        fields = {"harness_summary.referee.ended": referee["ended"],
+                  "harness_summary.task_completed": harness.get("task_completed")}
+        for key in ("cycles", "steps_to_success"):
+            if _number(referee.get(key)):
+                fields[f"harness_summary.referee.{key}"] = referee[key]
+        if _number(_dict(raw.get("stop_context")).get("steps_used")):
+            fields["stop_context.steps_used"] = raw["stop_context"]["steps_used"]
+        source = "審判（gateway）"
+        used = referee_steps if _number(referee_steps) else None
+        if verdict == "success":
+            return result("success", source, used=used, fields=fields)
+        if referee["ended"] == "steplimit":
+            return result("timeout", source, code="step_limit", limit=used, used=used,
+                          rule_source="capx/gateway/timing.py:reach_limit", fields=fields,
+                          missing=[] if used is not None else ["harness_summary.referee.cycles / stop_context.steps_used"])
+        if referee["ended"] == "reset":
+            return result("submission_reset", source, used=used,
+                          rule_source="capx/gateway/gateway.py:_end_episode", fields=fields)
+        if referee["ended"] == "cut":
+            return result("timeout", source, code="job_cut", used=used,
+                          rule_source="capx/gateway/gateway.py:_end_episode", fields=fields)
+        return result("unknown", source, used=used, fields=fields,
+                      explanation=f"審判（gateway）の記録は referee.ended={referee['ended']!r} です。この値の終了原因には対応していません。",
+                      missing=["referee.ended の値に対応する終了規則"])
 
     crash_flag = (context.get("env_crashed") is True or harness.get("env_crashed") is True
                   or outcome.get("env_crashed") is True)

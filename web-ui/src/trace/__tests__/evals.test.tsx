@@ -163,6 +163,47 @@ test('list preserves invalid records as errors and completed evaluations have no
   assert.match(html, /schema が不正です/);
   assert.doesNotMatch(html, /完了/);
 });
+test('list shows each evaluation set below the changed description and omits absent sets', () => {
+  const entries = ['routeB:behavior:bringing_water', 'routeB:robosuite:cube_lifting'].map((evalSet, index) => {
+    const entry = detail();
+    entry.eval = { ...entry.eval!, eval_id: `route-${index}`, eval_set: evalSet };
+    return entry;
+  });
+  const html = renderToStaticMarkup(<EvalListTable entries={entries} />);
+  for (const [index, entry] of entries.entries()) {
+    assert.ok(html.includes(`<a href="/evals/route-${index}">把持位置の修正</a><small class="eval-set">${entry.eval!.eval_set}</small>`));
+  }
+  for (const evalSet of [null, '']) {
+    const entry = detail();
+    entry.eval!.eval_set = evalSet;
+    assert.doesNotMatch(renderToStaticMarkup(<EvalListTable entries={[entry]} />), /class="eval-set"/);
+  }
+});
+test('route B list and evaluation headers explain the referee and BEHAVIOR placement from the evaluation set', () => {
+  const routeNote = '提出の形の評価（経路 B）・成否は審判の判定';
+  const behaviorNote = 'シミュレーターは RTX、モデルと記録は B300';
+  for (const evalSet of ['routeB:behavior:bringing_water', 'routeB:libero:libero_10', 'routeB:robosuite:cube_lifting', 'routeB:future:task']) {
+    const d = detail();
+    d.eval!.eval_set = evalSet;
+    const listHtml = renderToStaticMarkup(<EvalListTable entries={[d]} />);
+    const pageHtml = renderToStaticMarkup(<EvalComparison detail={d} />);
+    for (const html of [listHtml, pageHtml]) {
+      assert.ok(html.includes(`<span class="eval-route-notes"><span>${routeNote}</span>`));
+      assert.equal(html.includes(behaviorNote), evalSet.startsWith('routeB:behavior:'));
+    }
+    assert.ok(listHtml.indexOf('class="eval-set"') < listHtml.indexOf(routeNote));
+    assert.ok(pageHtml.indexOf(routeNote) < pageHtml.indexOf('class="eval-score"'));
+  }
+  for (const evalSet of [null, '', 'routeA:behavior:bringing_water', 'behavior:bringing_water', 'routeBish:behavior:task']) {
+    const d = detail();
+    d.eval!.eval_id = 'routeB-behavior-name-is-not-metadata';
+    d.eval!.eval_set = evalSet;
+    for (const html of [renderToStaticMarkup(<EvalListTable entries={[d]} />), renderToStaticMarkup(<EvalComparison detail={d} />)]) {
+      assert.ok(!html.includes(routeNote));
+      assert.ok(!html.includes(behaviorNote));
+    }
+  }
+});
 test('list and comparison show short commits and distinguish unknown uncommitted changes', () => {
   for (const dirty of [true, false, null]) {
     const d = detail();

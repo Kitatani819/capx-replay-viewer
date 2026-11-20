@@ -257,6 +257,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     try {
       const saved = await gmoApi.saveConfig({
         shared_root: draft.sharedRoot.trim(),
+        submission_root: config?.settings.submission_root ?? '~/shared-storage/submission_evals/_viewer',
         host: draft.host.trim(), port: draft.port.trim() ? Number(draft.port) : null,
         identity_file: draft.identityFile.trim() || null, mine: lines(draft.mine), team: lines(draft.team),
         interval_s: Number(draft.interval),
@@ -294,6 +295,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const skippedLarge = new Set(autoStatus?.skipped_large.map(rowKey));
   const usingDefaults = config?.settings.host === 'gmo' && config.settings.port === null
     && config.settings.identity_file === null && config.settings.shared_root === '~/shared-storage/traces'
+    && config.settings.submission_root === '~/shared-storage/submission_evals/_viewer'
     && !config.settings.mine.length && !config.settings.team.length && config.settings.interval_s === 120;
 
   return (
