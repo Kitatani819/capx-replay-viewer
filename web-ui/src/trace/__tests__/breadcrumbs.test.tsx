@@ -38,6 +38,7 @@ test('trial breadcrumb shares the evaluation list title and links to the evaluat
   ]);
   const baseline = { ...evaluation, baseline_eval_id: null, changed: '' };
   assert.equal(evaluationTitle(baseline), '評価（基準）');
+  assert.equal(evaluationTitle({ ...baseline, changed: '公式条件での基準' }), '公式条件での基準');
   assert.equal(trialBreadcrumbs({ runId: baseline.eval_id, episodeId: 'base', evaluation: baseline, task: 'cube', seed: 0 })[1].label, '評価（基準）');
 });
 

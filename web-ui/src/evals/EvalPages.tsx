@@ -7,7 +7,7 @@ import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type Ev
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
 import { EvalSegments } from './EvalSegments';
-import { TrialConditions } from './TrialConditions';
+import { evaluationConditions, sharedStepLimit, stepLimitText, stepsText } from './TrialConditions';
 import { PairedSignificance } from './PairedSignificance';
 import { EvalCodeChanges } from './EvalCodeChanges';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
@@ -115,10 +115,10 @@ function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: {
   const symbol = compact ? { success: '○', failure: '×', unknown: '–', running: '…' }[trial.verdict] : word.text;
   const label = `${trial.verdict === 'failure' ? `失敗（${reasonLabel(trial)}）` : reasonLabel(trial)}${regression ? '・悪化（基準は成功）' : ''}${retried ? '・再試行あり' : ''}`;
   const query = new URLSearchParams({ run: evalId, episode: trial.episode_id });
-  const tooltip = trial.end_classification && causeTooltip(trial.end_classification);
-  return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title={tooltip ? `${tooltip}\n試行を開く` : '試行を開く'} aria-label={`${label}（試行を開く）`}>
+  const tooltip = [trial.end_classification && causeTooltip(trial.end_classification), stepsText(trial.end_classification), '試行を開く'].filter(Boolean).join('\n');
+  return <td className="eval-cell"><div className="eval-cell-actions"><a href={`/traces?${query.toString()}`} className={`eval-result eval-result-${word.tone}${compact ? ' eval-result-compact' : ''}${regression ? ' eval-regression' : ''}`} title={tooltip} aria-label={`${label}（試行を開く）`}>
     <span aria-hidden="true">{symbol}</span>{regression && <small>悪化</small>}{retried && <small>再試行あり</small>}
-  </a><TrialConditions ending={trial.end_classification} />{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
+  </a>{baselineCell && baselineId && <a className="eval-compare-link" href={`/traces/compare?${new URLSearchParams({ run: evalId, episode: trial.episode_id, baseline_run: baselineId, baseline_episode: baselineCell.trial.episode_id })}`} aria-label={`${trial.task ?? 'タスク未記録'} seed ${trial.seed ?? '—'}を基準と並べて見る`}>並べて見る</a>}</div></td>;
 }
 export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
@@ -159,6 +159,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
       {officialNotes.length > 3 && <details><summary>ほかの違い</summary>{renderOfficialNotes(officialNotes.slice(3))}</details>}</div>}
     <PairedSignificance detail={detail} />
     <div className="eval-table-heading"><p>タスク・seed ごとの結果</p>{baseline && <p>悪化 {table.regressions}件</p>}</div>
+    <EvalConditions detail={detail} />
     {table.rows.length > 0 ? <div className="eval-table-scroll"><table className="eval-comparison" aria-label="評価の比較">
       <thead><tr><th scope="col">タスク{table.showConditions ? '・条件' : ''}</th><th scope="col">評価</th>{table.seeds.map(seed => <th key={String(seed)} scope="col">seed {seed ?? '—'}</th>)}</tr></thead>
       <tbody>{table.rows.map(row => <ComparisonRows key={row.key} row={row} seeds={table.seeds} record={record} baseline={baseline} showConditions={table.showConditions} />)}</tbody>
@@ -171,11 +172,28 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     <FailureBreakdown detail={detail} />
   </>;
 }
+/** Conditions every trial of an evaluation shares, shown once instead of in every cell. */
+function EvalConditions({ detail }: { detail: EvalDetail }) {
+  const current = evaluationConditions(detail.trials.map(t => t.end_classification));
+  const base = detail.baseline ? evaluationConditions(detail.baseline_trials.map(t => t.end_classification)) : [];
+  if (!current.length && !base.length) return null;
+  const line = (label: string, parts: string[]) => <p>{label}：{parts.length ? parts.map(part => <span key={part}>{part}</span>) : <span>記録なし</span>}</p>;
+  return <div className="eval-conditions">{detail.baseline && base.join() !== current.join()
+    ? <>{line('基準の評価条件', base)}{line('今回の評価条件', current)}</>
+    : line('評価条件', current.length ? current : base)}</div>;
+}
+type ComparisonRow = ReturnType<typeof comparisonTable>['rows'][number];
+function rowStepLimit(row: ComparisonRow, hasBaseline: boolean): string | null {
+  const limit = (cells: ComparisonRow['current']) => sharedStepLimit([...cells.values()].map(cell => cell.trial.end_classification));
+  return stepLimitText(hasBaseline ? limit(row.baseline) : null, limit(row.current));
+}
 function ComparisonRows({ row, seeds, record, baseline, showConditions }: {
-  row: ReturnType<typeof comparisonTable>['rows'][number]; seeds: (number | null)[]; record: EvalRecord; baseline: EvalRecord | null; showConditions: boolean;
+  row: ComparisonRow; seeds: (number | null)[]; record: EvalRecord; baseline: EvalRecord | null; showConditions: boolean;
 }) {
-  return <>{baseline && <tr className="eval-task-start"><th scope="rowgroup" rowSpan={2}>{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th><th scope="row">基準</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.baseline.get(seed)} evalId={baseline.eval_id} regression={false} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr>}
-    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr></>;
+  const stepLimit = rowStepLimit(row, !!baseline);
+  const heading = <>{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}{stepLimit && <small>{stepLimit}</small>}</>;
+  return <>{baseline && <tr className="eval-task-start"><th scope="rowgroup" rowSpan={2}>{heading}</th><th scope="row">基準</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.baseline.get(seed)} evalId={baseline.eval_id} regression={false} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr>}
+    <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{heading}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr></>;
 }
 export function EvalDetailPage({ evalId }: { evalId: string }) {
   const refreshNext = useRef(false);

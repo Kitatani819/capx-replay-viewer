@@ -16,6 +16,10 @@ from capx_trace_viewer.trace_api import (
 )
 
 
+# How far a trial's recording has got; a local copy behind GMO is not shown.
+_STATUS_PROGRESS = {"incomplete": 0, "running": 1, "ended_with_gaps": 2, "ended": 2}
+
+
 class EvalService:
     def __init__(self, trace_root: Path, gmo_service: Any = None) -> None:
         self.trace_root = trace_root
@@ -153,6 +157,11 @@ class EvalService:
         if detail:
             for episode in detail["episodes"]:
                 if episode.get("kind") == "unscoped":
+                    continue
+                remote_episode = episodes.get(episode["episode_id"])
+                # A copy fetched while the trial was still running stops there and
+                # later reads as interrupted; GMO's newer state wins until it is refetched.
+                if remote_episode and _STATUS_PROGRESS.get(remote_episode.get("status"), 0) > _STATUS_PROGRESS.get(episode.get("status"), 0):
                     continue
                 episodes[episode["episode_id"]] = {**episode, "local_state": "local"}
         return list(episodes.values()), detail["runner_records"] if detail else []

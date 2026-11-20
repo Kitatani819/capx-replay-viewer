@@ -21,7 +21,9 @@ export function Breadcrumb({ items }: { items: readonly BreadcrumbItem[] }) {
 const EVAL_ID = /^ev-\d{8}T\d{6}Z-[0-9a-f]{4}$/;
 
 export function evaluationTitle(record: EvalRecord): string {
-  return record.baseline_eval_id ? record.changed : `${record.changed || '評価'}（基準）`;
+  if (record.baseline_eval_id) return record.changed;
+  // A baseline whose own name already says so does not get a second 「（基準）」.
+  return record.changed?.includes('基準') ? record.changed : `${record.changed || '評価'}（基準）`;
 }
 
 export function trialBreadcrumbs({ runId, episodeId, evaluation, task, seed, compare = false }: {

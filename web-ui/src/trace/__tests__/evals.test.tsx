@@ -5,6 +5,7 @@ import { EvalComparison, EvalListTable } from '../../evals/EvalPages';
 import { comparisonTable, delta, summaryDiffers } from '../../evals/model';
 import { CELL_LEGEND } from '../../evals/failureReasons';
 import type { EvalDetail, EvalRecord, EvalSummary, EvalTrial } from '../../evals/api';
+import type { EndClassification } from '../types';
 
 const wordLegend = `${Object.entries(CELL_LEGEND).map(([word, explanation]) => word === explanation ? word : `${word}＝${explanation}`).join('　')}　空欄＝記録なし`;
 
@@ -189,4 +190,31 @@ test('rates compare percentage points and no empty denominator is divided', () =
   assert.equal(delta({ success: 14, trials: 20 }, { success: 13, trials: 20 }), '（+5pt）');
   assert.equal(delta({ success: 0, trials: 0 }, summary), '');
   assert.equal(summaryDiffers({ success: 1, trials: 1 }, [trial('x', 1, 'success')]), false);
+});
+
+test('recorded conditions appear once above the table and per task, not inside every cell', () => {
+  const conditions = (steps: number, limit: number, elapsed: number): EndClassification => ({ reason: 'success', label: '成功', evidence: {},
+    conditions: { step_limit: limit, steps_used: steps, evaluation_budget_s: 21000, evaluation_elapsed_s: elapsed, success_policy: 'per_cycle_sticky' as const } });
+  const d = detail(); d.eval = record('baseline'); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
+  d.trials = [trial('a', 401, 'success', { task: 'cube_lifting', end_classification: conditions(94, 1500, 128) }),
+    trial('b', 402, 'success', { task: 'cube_lifting', end_classification: conditions(115, 1500, 4673) }),
+    trial('c', 401, 'failure', { task: 'nut_assembly', end_classification: { ...conditions(1000, 1000, 3839), reason: 'timeout' } })];
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.doesNotMatch(html, /trial-conditions/);
+  assert.equal((html.match(/一度でも成功なら達成/g) || []).length, 1);
+  assert.match(html, /<div class="eval-conditions"><p>評価条件：<span>評価全体の時間 4,673 \/ 21,000 秒<\/span><span>成功判定：制御サイクルごとに判定・一度でも成功なら達成<\/span><\/p><\/div>/);
+  assert.match(html, /cube_lifting<small>ステップ上限 1,500<\/small>/);
+  assert.match(html, /nut_assembly<small>ステップ上限 1,000<\/small>/);
+  assert.ok(html.includes('title="ステップ 94 / 1,500\n試行を開く"'));
+});
+
+test('baseline and current conditions are labelled separately when they differ', () => {
+  const ending = (limit: number, elapsed?: number): EndClassification => ({ reason: 'success', label: '成功', evidence: {},
+    conditions: { step_limit: limit, ...(elapsed == null ? {} : { evaluation_budget_s: 600, evaluation_elapsed_s: elapsed }) } });
+  const d = detail();
+  d.baseline_trials = [trial('b1', 401, 'success', { end_classification: ending(4000) })];
+  d.trials = [trial('c1', 401, 'success', { end_classification: ending(8000, 120) })];
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /<p>基準の評価条件：<span>記録なし<\/span><\/p><p>今回の評価条件：<span>評価全体の時間 120 \/ 600 秒<\/span><\/p>/);
+  assert.match(html, /<small>ステップ上限 基準 4,000 \/ 今回 8,000<\/small>/);
 });

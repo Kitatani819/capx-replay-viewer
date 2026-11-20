@@ -30,7 +30,7 @@
 .eval-comparison .eval-task-start { border-top: 1px solid #d0dacc; }
 .eval-comparison .eval-cell { padding: 7px 14px; min-width: 90px; height: 64px; }
 .eval-cell-actions { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
-.eval-result { display: inline-flex; min-width: 46px; min-height: 44px; align-items: center; justify-content: center; flex-direction: column; border: 2px solid #c3d1bd; background: #f5f8f1; border-radius: 5px; padding: 4px 8px; font-size: 20px; }
+.eval-result { display: inline-flex; flex-shrink: 0; min-width: 46px; min-height: 44px; align-items: center; justify-content: center; flex-direction: column; border: 2px solid #c3d1bd; background: #f5f8f1; border-radius: 5px; padding: 4px 8px; font-size: 20px; }
 .eval-page .eval-result:hover, .eval-page .eval-result:focus-visible { border-color: #467e5c; background: #e6efdf; text-decoration: none; }
 .eval-result small { font-size: 11px; line-height: 1.4; white-space: nowrap; }
 /* Words instead of symbols: tone by outcome, text by how a failure ended (readable without colour). */
@@ -56,7 +56,9 @@
 @media (max-width: 700px) { .eval-page { padding: 24px 16px; } .eval-page th, .eval-page td { padding: 12px; } .eval-score { font-size: 16px; } }
 
 .trial-conditions { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: normal; line-height: 1.5; color: #526158; }
-.eval-cell .trial-conditions { max-width: 190px; padding: 4px; font-size: 11px; }
+.eval-conditions { margin: 0 0 10px; color: #526158; font-size: 13px; }
+.eval-conditions p { margin: 0; line-height: 1.7; }
+.eval-conditions span { display: inline-block; margin-right: 1.2em; }
 .eval-significance { margin: 24px 0; padding: 20px 24px; border: 1px solid #cddbc9; border-radius: 8px; background: #fff; font-size: 14px; }
 .eval-significance h2 { margin: 0 0 8px; font-size: 17px; font-weight: 600; }
 .eval-significance p + p, .eval-significance details, .eval-significance details p { margin-top: 10px; }
