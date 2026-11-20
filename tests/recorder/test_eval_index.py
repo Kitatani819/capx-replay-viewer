@@ -680,3 +680,270 @@ def test_search_only_parent_directories_are_allowed(tmp_path):
         assert (root / "index.html").is_file()
     finally:
         parent.chmod(0o755)
+
+
+def submission_record(eval_id="ev-official", **updates):
+    """Synthetic export with the same optional fields as the route B exporter."""
+    value = {
+        "schema": "capx-eval/1", "eval_id": eval_id, "status": "completed",
+        "end": {"exit_code": 0, "signal": None}, "by": "user_x",
+        "changed": "参照実装のまま（設定変更なし）", "baseline_eval_id": None,
+        "eval_set": "routeB:behavior:bringing_water", "git": None,
+        "started_at": "2026-10-02T16:05:55.766Z",
+        "heartbeat_at": "2026-10-02T16:15:18.098Z",
+        "ended_at": "2026-10-02T16:15:18.098Z",
+        "summary": {
+            "trials": 4, "success": 0, "failure": 4, "unknown": 0, "incomplete": 0,
+            "by_task": {"bringing_water": {"trials": 4, "success": 0}},
+            "tasks": ["bringing_water"], "seeds": [0, 1, 3, 288],
+            "models": {"code_generator": {"model": "Qwen/Qwen3.8-27B"}},
+            "config_flags": {"route": "B", "record": "every", "agent": "sif", "mode": "official"},
+            "mixed": [], "verdict_sources": {"harness_summary": 4},
+        },
+        "job": {"scheduler": "slurm", "job_id": "12345"},
+    }
+    value.update(updates)
+    return value
+
+
+@pytest.mark.parametrize("user", [None, "user_x"])
+def test_default_submission_sibling_includes_real_export_shape_and_labels_rows(tmp_path, user):
+    root = tmp_path / "traces"
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    save(root, record(eval_set="routeB:behavior:bringing_water"))
+    value = submission_record()
+    path = save(submissions, value, user=user)
+    assert eval_index._validate(value, value["eval_id"]) == value
+
+    html = page(root, viewer_url="http://127.0.0.1:8390/?site=gmo")
+    markup = Markup(html)
+    assert "http://127.0.0.1:8390/evals/ev-official?site=gmo" in markup.links
+    group_cells = [cell for cell in markup.cells if "routeB:behavior:bringing_water" in cell]
+    assert len(group_cells) == 2
+    assert sum("提出の形（経路 B）" in cell for cell in group_cells) == 1
+    assert any("0 / 4" in cell for cell in markup.cells)
+    assert "記録なし" in markup.cells
+    assert "読めなかった記録" not in html
+    assert "submission_evals/_viewer" in html and "次" in html and "index" in html
+    assert json.loads(path.read_text(encoding="utf-8")) == value
+
+
+def test_submission_route_label_comes_from_location_even_with_other_eval_set(tmp_path):
+    root = tmp_path / "traces"
+    save(root, record(eval_set="suite-small", _index_route_b=True))
+    save(tmp_path / "submission_evals" / "_viewer",
+         submission_record(eval_set="suite-small", _index_route_b=False))
+    groups = [cell for cell in Markup(page(root)).cells if "suite-small" in cell]
+    assert len(groups) == 2
+    assert sum("提出の形（経路 B）" in cell for cell in groups) == 1
+    assert "提出の形（経路 B）" in groups[0]  # The newer submission row keeps its provenance.
+
+
+@pytest.mark.parametrize("kind", ["absent", "file", "symlink", "broken_symlink"])
+def test_default_submission_sibling_skips_absent_or_non_directory_without_warnings(tmp_path, kind):
+    root = tmp_path / "traces"
+    save(root, record())
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    if kind != "absent":
+        submissions.parent.mkdir()
+        if kind == "file":
+            submissions.write_text("not a directory", encoding="utf-8")
+        else:
+            outside = tmp_path / "outside"
+            if kind == "symlink":
+                save(outside, submission_record())
+            submissions.symlink_to(outside, target_is_directory=True)
+    html = page(root)
+    links = Markup(html).links
+    assert any(link.endswith("/ev-older") for link in links)
+    assert not any(link.endswith("/ev-official") for link in links)
+    assert "読めなかった記録" not in html
+
+
+def test_default_submission_root_is_relative_to_resolved_trace_root(tmp_path):
+    shared = tmp_path / "storage"
+    root = shared / "traces"
+    save(root, record())
+    save(shared / "submission_evals" / "_viewer", submission_record())
+    alias = tmp_path / "trace-alias"
+    alias.symlink_to(root, target_is_directory=True)
+    assert any(link.endswith("/ev-official") for link in Markup(page(alias)).links)
+
+
+def test_default_submission_directory_swap_cannot_follow_a_symlink(tmp_path, monkeypatch):
+    root = tmp_path / "traces"
+    save(root, record())
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    save(submissions, submission_record())
+    outside = tmp_path / "outside"
+    save(outside, submission_record("ev-external"))
+    original_open = os.open
+    swapped = False
+
+    def replace_before_open(name, flags, *args, **kwargs):
+        nonlocal swapped
+        if os.fsdecode(name) == "_viewer" and not swapped:
+            swapped = True
+            submissions.rename(submissions.with_name("old-viewer"))
+            submissions.symlink_to(outside, target_is_directory=True)
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(eval_index.os, "open", replace_before_open)
+    html = page(root)
+    assert swapped
+    links = Markup(html).links
+    assert any(link.endswith("/ev-older") for link in links)
+    assert not any(link.endswith("/ev-external") for link in links)
+    assert not any(link.endswith("/ev-official") for link in links)
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_explicit_submission_root_is_its_own_resolved_trust_boundary(tmp_path, alias):
+    root = tmp_path / "traces"
+    root.mkdir()
+    save(tmp_path / "submission_evals" / "_viewer", submission_record("ev-default"))
+    explicit = tmp_path / "exports"
+    save(explicit, submission_record("ev-explicit"))
+    if alias:
+        linked = tmp_path / "export-alias"
+        linked.symlink_to(explicit, target_is_directory=True)
+        explicit = linked
+    links = Markup(page(root, submission_root=explicit)).links
+    assert any(link.endswith("/ev-explicit") for link in links)
+    assert not any(link.endswith("/ev-default") for link in links)
+
+
+@pytest.mark.parametrize("disabled", [None, ""])
+def test_explicit_submission_root_disable(tmp_path, disabled):
+    root = tmp_path / "traces"
+    save(root, record())
+    save(tmp_path / "submission_evals" / "_viewer", submission_record())
+    links = Markup(page(root, submission_root=disabled)).links
+    assert any(link.endswith("/ev-older") for link in links)
+    assert not any(link.endswith("/ev-official") for link in links)
+
+
+def test_explicit_missing_submission_root_fails_without_replacing_output(tmp_path):
+    root = tmp_path / "traces"
+    save(root, record())
+    out = eval_index.build_index(root)
+    before = out.read_bytes()
+    with pytest.raises(OSError):
+        eval_index.build_index(root, submission_root=tmp_path / "missing")
+    assert out.read_bytes() == before
+
+
+def test_warnings_identify_both_trace_and_submission_sources(tmp_path):
+    root = tmp_path / "traces"
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    for source in (root, submissions):
+        path = save(source, record("ev-broken"), user="user_x")
+        path.write_text("{broken", encoding="utf-8")
+    html = unescape(page(root))
+    assert "読めなかった記録" in html
+    assert "traces/user_x/ev-broken/eval.json" in html
+    assert "submission_evals/_viewer/user_x/ev-broken/eval.json" in html
+
+
+def test_unreadable_submission_record_uses_shared_warning_section(tmp_path, monkeypatch):
+    root = tmp_path / "traces"
+    save(root, record())
+    path = save(tmp_path / "submission_evals" / "_viewer", submission_record(), user="user_x")
+    target = path.parent.stat()
+    original_open = os.open
+
+    def deny_record(name, flags, *args, **kwargs):
+        directory = kwargs.get("dir_fd")
+        if directory is not None and os.fsdecode(name) == "eval.json":
+            info = os.fstat(directory)
+            if (info.st_dev, info.st_ino) == (target.st_dev, target.st_ino):
+                raise PermissionError("synthetic unreadable export")
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(eval_index.os, "open", deny_record)
+    html = page(root)
+    assert html.count('<h2>読めなかった記録</h2>') == 1
+    assert "submission_evals/_viewer/user_x/ev-official/eval.json: PermissionError" in html
+    assert not any(link.endswith("/ev-official") for link in Markup(html).links)
+
+
+def test_submission_entries_never_follow_symlinks_at_any_scan_level(tmp_path):
+    root = tmp_path / "traces"
+    root.mkdir()
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    submissions.mkdir(parents=True)
+    external = save(tmp_path / "outside", submission_record("ev-external"), user="user_x")
+    (submissions / "linked-user").symlink_to(external.parent.parent, target_is_directory=True)
+    (submissions / "ev-external").symlink_to(external.parent, target_is_directory=True)
+    local_user = submissions / "user_y"
+    local_user.mkdir()
+    (local_user / "ev-external").symlink_to(external.parent, target_is_directory=True)
+    file_dir = submissions / "user_z" / "ev-external"
+    file_dir.mkdir(parents=True)
+    (file_dir / "eval.json").symlink_to(external)
+    save(submissions, submission_record("ev-local"), user="user_x")
+    html = page(root)
+    links = Markup(html).links
+    assert any(link.endswith("/ev-local") for link in links)
+    assert not any(link.endswith("/ev-external") for link in links)
+    assert "submission_evals/_viewer/user_z/ev-external/eval.json" in html
+
+
+def test_submission_record_size_limit_is_unchanged(tmp_path):
+    root = tmp_path / "traces"
+    root.mkdir()
+    value = submission_record(changed="x" * (eval_index.MAX_EVAL_BYTES + 1))
+    save(tmp_path / "submission_evals" / "_viewer", value, user="user_x")
+    html = page(root)
+    assert "submission_evals/_viewer/user_x/ev-official/eval.json" in html
+    assert "invalid file size" in html
+    assert not any(link.endswith("/ev-official") for link in Markup(html).links)
+
+
+def test_mixed_source_sorting_baseline_delta_and_duplicate_ids(tmp_path):
+    root = tmp_path / "traces"
+    submissions = tmp_path / "submission_evals" / "_viewer"
+    save(root, record("ev-baseline"))
+    value = submission_record(baseline_eval_id="ev-baseline")
+    save(submissions, value)
+    markup = Markup(page(root))
+    eval_links = [link for link in markup.links if "/evals/" in link]
+    assert eval_links[0].endswith("/ev-official")
+    assert any("ev-baseline" in cell and "-2" in cell for cell in markup.cells)
+    save(submissions, submission_record("ev-baseline"))
+    markup = Markup(page(root))
+    assert not any("成功数" in cell for cell in markup.cells if "ev-baseline" in cell)
+    assert sum(link.endswith("/ev-baseline") for link in markup.links) == 2
+
+
+@pytest.mark.parametrize("selection", ["default", "explicit", "disabled"])
+def test_index_cli_submission_root_selection(tmp_path, selection):
+    root = tmp_path / "traces"
+    root.mkdir()
+    save(tmp_path / "submission_evals" / "_viewer", submission_record("ev-default"))
+    explicit = tmp_path / "exports"
+    save(explicit, submission_record("ev-explicit"))
+    args = ["--root", str(root)]
+    if selection != "default":
+        args.extend(["--submission-root", str(explicit) if selection == "explicit" else ""])
+    assert eval_index.main(args) == 0
+    links = Markup((root / "index.html").read_text(encoding="utf-8")).links
+    expected = {"default": "ev-default", "explicit": "ev-explicit", "disabled": None}[selection]
+    eval_links = [link for link in links if "/evals/" in link]
+    assert len(eval_links) == (0 if expected is None else 1)
+    if expected:
+        assert eval_links[0].endswith("/" + expected)
+
+
+def test_recorder_rebuild_picks_up_submission_evaluations_on_next_rebuild(tmp_path, monkeypatch):
+    from capx_trace_recorder.eval import _rebuild_index
+
+    monkeypatch.delenv("CAPX_EVAL_INDEX", raising=False)
+    root = tmp_path / "traces"
+    trace_root = save(root, record(), user="user_x").parent.parent
+    _rebuild_index(trace_root, enabled=True)
+    output = root / "index.html"
+    assert not any(link.endswith("/ev-official") for link in Markup(output.read_text()).links)
+    save(tmp_path / "submission_evals" / "_viewer", submission_record(), user="user_x")
+    _rebuild_index(trace_root, enabled=True)
+    assert any(link.endswith("/ev-official") for link in Markup(output.read_text()).links)
