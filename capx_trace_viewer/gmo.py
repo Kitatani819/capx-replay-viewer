@@ -40,6 +40,9 @@ LISTING_TIMEOUT_S = 60
 # The background import lists every file of every own trial, which takes over a
 # minute once a few large evaluations have run; it runs off the request path.
 FILE_LISTING_TIMEOUT_S = 600
+# The team listing refreshes in the background behind a cached copy. On a shared
+# folder with large evaluations it takes one to three minutes.
+TEAM_LISTING_TIMEOUT_S = 600
 CONNECTION_ERROR = (
     "GMOに接続できません。公式GENIACチュートリアルの Host gmo をSSH設定に追加するか、"
     "接続設定で接続先を指定してください。"

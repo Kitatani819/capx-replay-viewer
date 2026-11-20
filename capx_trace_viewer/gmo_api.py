@@ -1,6 +1,7 @@
 """Loopback-only GMO configuration, discovery and queued import API."""
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import threading
@@ -458,7 +459,10 @@ class GmoService:
                         return rows, settings, generation
 
         def fetch(previous):
-            with self._refresh_lock:
+            # A single run's metadata is small and is what an open trial waits on
+            # (Live, fetch). It must not queue behind a team listing or the
+            # background import, which can each hold the lock for over a minute.
+            with self._refresh_lock if kind != "run" else contextlib.nullcontext():
                 if kind == "evals":
                     rows = gmo.list_remote_evals(self.runner, settings)
                 else:
@@ -466,6 +470,8 @@ class GmoService:
                     if run_ids:
                         kwargs["run_ids"] = run_ids
                         kwargs["metadata_only"] = True
+                    else:
+                        kwargs["timeout"] = gmo.TEAM_LISTING_TIMEOUT_S
                     rows = gmo.list_remote_episodes(self.runner, settings, **kwargs)
                 with self._lock:
                     if self._closed:
@@ -493,29 +499,39 @@ class GmoService:
         rows = self.remote_rows(refresh=refresh, wait=wait)
         with self._lock:
             pending = set(self._pending)
-        result = []
-        for row in rows:
-            if scope != "all" and row["mine"] != (scope == "mine"):
-                continue
-            summary = reader.episode_summary_from_metadata(
-                row["run_id"], row["episode_id"], row["episode_json"],
-                episode_json_error=row["episode_json_error"],
-                episode_mtime=row["episode_mtime"],
-                heartbeat_mtime=row["heartbeat_mtime"],
-                events_mtime=row["events_mtime"],
-                events_bytes=row["events_bytes"], now=row["remote_now"],
-                first_event=row["first_event"],
-            )
-            summary.update({
-                "owner": row["owner"], "mine": row["mine"],
-                "size_bytes": row["size_bytes"],
-                **({"size_approximate": True} if row.get("size_approximate") else {}),
-                "local_state": "fetching" if (row["run_id"], row["episode_id"]) in pending
-                else gmo.local_state(row, self.dest),
-                "conflict": row["conflict"],
-            })
-            result.append(summary)
-        return result
+        return [self._episode_view(row, pending) for row in rows
+                if scope == "all" or row["mine"] == (scope == "mine")]
+
+    def episode(self, run_id: str, episode_id: str, *, refresh: bool = False) -> dict[str, Any]:
+        """One trial's GMO state from a listing of its own run only.
+
+        The team listing walks every run and can take minutes on a busy shared
+        folder; an open trial must not wait for it to decide whether to go Live.
+        """
+        row, _, _ = self._episode_row(run_id, episode_id, refresh=refresh)
+        with self._lock:
+            pending = set(self._pending)
+        return self._episode_view(row, pending)
+
+    def _episode_view(self, row: dict[str, Any], pending: set[tuple[str, str]]) -> dict[str, Any]:
+        summary = reader.episode_summary_from_metadata(
+            row["run_id"], row["episode_id"], row["episode_json"],
+            episode_json_error=row["episode_json_error"],
+            episode_mtime=row["episode_mtime"],
+            heartbeat_mtime=row["heartbeat_mtime"],
+            events_mtime=row["events_mtime"],
+            events_bytes=row["events_bytes"], now=row["remote_now"],
+            first_event=row["first_event"],
+        )
+        summary.update({
+            "owner": row["owner"], "mine": row["mine"],
+            "size_bytes": row["size_bytes"],
+            **({"size_approximate": True} if row.get("size_approximate") else {}),
+            "local_state": "fetching" if (row["run_id"], row["episode_id"]) in pending
+            else gmo.local_state(row, self.dest),
+            "conflict": row["conflict"],
+        })
+        return summary
 
     def enqueue(self, run_id: str, episode_id: str) -> str:
         key = (run_id, episode_id)
@@ -534,10 +550,11 @@ class GmoService:
                 raise HTTPException(409, "This episode is already queued or running")
             return self._enqueue_locked(row, settings)
 
-    def _episode_row(self, run_id: str, episode_id: str) -> tuple[dict[str, Any], gmo.GmoSettings, int]:
+    def _episode_row(self, run_id: str, episode_id: str, *, refresh: bool = False
+                     ) -> tuple[dict[str, Any], gmo.GmoSettings, int]:
         """One shared lookup for manual fetches and live followers."""
         key = (run_id, episode_id)
-        listing, settings, generation = self._remote_snapshot(kind="run", run_ids=(run_id,))
+        listing, settings, generation = self._remote_snapshot(kind="run", run_ids=(run_id,), refresh=refresh)
         matches = [row for row in listing["episodes"] if (row["run_id"], row["episode_id"]) == key]
         if not matches:
             raise HTTPException(404, "Episode not found on GMO")
@@ -741,6 +758,15 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False) -> APIR
             raise HTTPException(400, "scope must be all, mine or team; refresh must be 0 or 1")
         try:
             return json_response(service.episodes(scope, refresh=bool(refresh), wait=False))
+        except (gmo.FetchError, OSError) as exc:
+            raise HTTPException(502, str(exc)[-300:]) from exc
+
+    @router.get("/episode")
+    def episode(run_id: str, episode_id: str, refresh: int = 0):
+        if not reader.is_valid_id(run_id) or not reader.is_valid_id(episode_id) or refresh not in (0, 1):
+            raise HTTPException(400, "Valid run_id and episode_id are required; refresh must be 0 or 1")
+        try:
+            return json_response(service.episode(run_id, episode_id, refresh=bool(refresh)))
         except (gmo.FetchError, OSError) as exc:
             raise HTTPException(502, str(exc)[-300:]) from exc
 

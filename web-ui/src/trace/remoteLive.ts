@@ -1,6 +1,6 @@
 /** Renew only the open remote trial's lease. Cleanup lets the server's lease expire. */
 import { useEffect, useState } from 'react';
-import { ApiError, errorText, gmoApi, type GmoLiveStatus } from './api';
+import { ApiError, errorText, gmoApi, type GmoEpisodeSummary, type GmoLiveStatus } from './api';
 
 export const REMOTE_LIVE_STATUS_MS = 2000;
 export const REMOTE_LIVE_RENEW_MS = 10_000;
@@ -43,22 +43,24 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
           }
           if (signal.aborted) return;
           if (!config.enabled || !config.configured) { again = false; return; }
-          let rows = await gmoApi.episodes('all', false, signal);
+          // Ask only about this trial's run: the team listing can take minutes.
+          const lookup = async (refresh: boolean) => {
+            try { return await gmoApi.episode(runId, episodeId, refresh, signal); }
+            catch (error) {
+              // Not on GMO, or in more than one GMO location: nothing to follow.
+              if (error instanceof ApiError && (error.status === 404 || error.status === 409)) return null;
+              throw error;
+            }
+          };
+          const followable = (row: GmoEpisodeSummary | null) => !!row && !row.conflict
+            && (row.status === 'running' || !!row.episode?.video_copy_pending);
+          let row = await lookup(false);
           if (signal.aborted) return;
-          let matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
-          const followable = () => matches.length === 1 && !matches[0].conflict
-            && (matches[0].status === 'running' || matches[0].episode?.video_copy_pending);
-          if (!followable()) {
-            const listing = await gmoApi.listingStatus(signal);
-            if (signal.aborted) return;
-            // A cold/stale listing cannot decide that the open trial ended.
-            if (listing.refreshing) return;
-            if (listing.error) throw new Error(listing.error);
-            rows = await gmoApi.episodes('all', false, signal);
-            if (signal.aborted) return;
-            matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
-          }
-          if (!followable()) {
+          // A cached listing can predate a trial that started since; ask GMO
+          // again before deciding that the open trial is not running there.
+          if (!followable(row)) row = await lookup(true);
+          if (signal.aborted) return;
+          if (!followable(row)) {
             again = false;
             return;
           }
