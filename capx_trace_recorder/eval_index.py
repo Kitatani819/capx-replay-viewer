@@ -104,12 +104,21 @@ def _validate(value: Any, eval_id: str) -> dict[str, Any]:
 
 @contextlib.contextmanager
 def _directory(path: Path):
-    """Pin a directory, rejecting symlinks in every component of its path."""
+    """Pin a directory, rejecting symlinks in every component of its path.
+
+    Callers resolve the operator's root first (``~/shared-storage`` is itself
+    a symlink on GMO). Parents such as ``/home`` may be search-only (``--x``),
+    so intermediate components use ``O_PATH`` where the platform has it; only
+    the final directory needs read permission.
+    """
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    fd = os.open(path.anchor, flags)
+    search = getattr(os, "O_PATH", 0)
+    walk = (search | os.O_DIRECTORY | os.O_NOFOLLOW) if search else flags
+    parts = path.parts[1:]
+    fd = os.open(path.anchor, walk if parts else flags)
     try:
-        for part in path.parts[1:]:
-            child = os.open(part, flags, dir_fd=fd)
+        for index, part in enumerate(parts):
+            child = os.open(part, flags if index == len(parts) - 1 else walk, dir_fd=fd)
             os.close(fd)
             fd = child
         yield fd
