@@ -331,6 +331,12 @@ export const gmoApi = {
     return gmoJson(`/episodes?${params.toString()}`, signal);
   },
 
+  /** One trial's GMO state, read from a listing of its own run only. */
+  episode(runId: string, episodeId: string, refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary> {
+    const params = new URLSearchParams({ run_id: runId, episode_id: episodeId, refresh: refresh ? '1' : '0' });
+    return gmoJson(`/episode?${params.toString()}`, signal);
+  },
+
   listingStatus(signal?: AbortSignal): Promise<RemoteListingStatus> {
     return gmoJson('/listing-status', signal);
   },
