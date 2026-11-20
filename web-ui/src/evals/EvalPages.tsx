@@ -1,7 +1,8 @@
 /** Calm, read-only evaluation list and baseline comparison. */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
 import { useAsync, useInterval } from '../trace/hooks';
+import { remoteListingText } from '../trace/remoteListing';
 import { evalApi, type EvalCounts, type EvalDetail, type EvalDifference, type EvalListEntry, type EvalRecord, type EvaluationFailure } from './api';
 import { comparisonTable, delta, isRegression, rate, summaryDiffers, type TrialCell } from './model';
 import { FailureBreakdown } from './FailureBreakdown';
@@ -80,9 +81,15 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
   </table></div>;
 }
 export function EvalListPage() {
-  const listing = useAsync(s => evalApi.list(s), []);
+  const refreshNext = useRef(false);
+  const listing = useAsync(s => {
+    const refresh = refreshNext.current;
+    refreshNext.current = false;
+    return evalApi.list(s, refresh);
+  }, []);
   useEffect(() => { document.title = '評価一覧 · CaP-X'; }, []);
-  useInterval(listing.poll, 30_000, true);
+  useInterval(listing.poll, listing.data?.remote_status?.refreshing ? 2000 : 30_000, true);
+  const status = listing.data?.remote_status;
   return <main className="eval-page"><div className="eval-content">
     <Breadcrumb items={[{ label: '評価一覧' }]} />
     <header className="eval-header"><h1>評価一覧</h1><a href="/traces">試行を見る</a></header>
@@ -90,6 +97,7 @@ export function EvalListPage() {
     {listing.loading && !listing.data && <p role="status">評価を読み込み中…</p>}
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>GMO の一覧を更新</button></div>}
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
@@ -170,13 +178,20 @@ function ComparisonRows({ row, seeds, record, baseline, showConditions }: {
     <tr className={baseline ? '' : 'eval-task-start'}>{!baseline && <th scope="row">{row.task || '未記録'}{showConditions && <small>{row.condition || '未記録'}</small>}</th>}<th scope="row">今回</th>{seeds.map(seed => <Cell key={String(seed)} cell={row.current.get(seed)} evalId={record.eval_id} regression={isRegression(row, seed)} baselineCell={row.baseline.get(seed)} baselineId={baseline?.eval_id} compact={seeds.length > MAX_SEEDS_FOR_WORDS} />)}</tr></>;
 }
 export function EvalDetailPage({ evalId }: { evalId: string }) {
-  const detail = useAsync(s => evalApi.detail(evalId, s), [evalId]);
+  const refreshNext = useRef(false);
+  const detail = useAsync(s => {
+    const refresh = refreshNext.current;
+    refreshNext.current = false;
+    return evalApi.detail(evalId, s, refresh);
+  }, [evalId]);
   useEffect(() => { document.title = '評価の比較 · CaP-X'; }, []);
-  useInterval(detail.poll, 30_000, detail.data?.eval?.status === 'running');
+  const status = detail.data?.remote_status;
+  useInterval(detail.poll, status?.refreshing ? 2000 : 30_000, status?.refreshing === true || detail.data?.eval?.status === 'running');
   return <main className="eval-page"><div className="eval-content">
     <Breadcrumb items={[{ label: '評価一覧', href: '/evals' }, { label: detail.data?.eval ? evaluationTitle(detail.data.eval) : evalId }]} />
     {detail.loading && !detail.data && <p role="status">評価を読み込み中…</p>}
     {detail.error && <p role="alert" className="eval-error">評価を読み込めません：{detail.error}</p>}
-    {detail.data && <EvalComparison detail={detail.data} />}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={detail.loading || status.refreshing} onClick={() => { refreshNext.current = true; detail.reload(); }}>GMO の一覧を更新</button></div>}
+    {detail.data?.loading_remote ? <p role="status">GMO の評価を取得中…</p> : detail.data && <EvalComparison detail={detail.data} />}
   </div></main>;
 }

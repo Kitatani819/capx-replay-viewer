@@ -226,6 +226,7 @@ export interface GmoEpisodeSummary extends EpisodeSummary {
   owner: string;
   mine: boolean;
   size_bytes: number;
+  size_approximate?: boolean;
   local_state: 'remote' | 'local' | 'stale' | 'fetching';
   conflict: boolean;
 }
@@ -246,6 +247,12 @@ export interface GmoCheckResponse {
   ok: boolean;
   mine_episodes: number;
   team_episodes: number;
+  error: string | null;
+}
+
+export interface RemoteListingStatus {
+  fetched_at: string | null;
+  refreshing: boolean;
   error: string | null;
 }
 
@@ -322,6 +329,10 @@ export const gmoApi = {
   episodes(scope: GmoScope = 'all', refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary[]> {
     const params = new URLSearchParams({ scope, refresh: refresh ? '1' : '0' });
     return gmoJson(`/episodes?${params.toString()}`, signal);
+  },
+
+  listingStatus(signal?: AbortSignal): Promise<RemoteListingStatus> {
+    return gmoJson('/listing-status', signal);
   },
 
   fetch(runId: string, episodeId: string, signal?: AbortSignal): Promise<{ job_id: string }> {

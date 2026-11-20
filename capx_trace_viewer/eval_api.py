@@ -21,21 +21,51 @@ class EvalService:
         self.trace_root = trace_root
         self.gmo_service = gmo_service
 
-    def _remote(self) -> tuple[dict[str, list[dict[str, Any]]], str | None]:
+    @staticmethod
+    def _remote_error() -> str:
+        return "GMOの一覧を取得できません。接続設定を確認してください。手元の記録を表示しています。"
+
+    def _merge_status(self, statuses: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not statuses:
+            return None
+        stamps = [status["fetched_at"] for status in statuses if status["fetched_at"]]
+        return {"fetched_at": min(stamps) if stamps else None,
+                "refreshing": any(status["refreshing"] for status in statuses),
+                "error": self._remote_error() if any(status["error"] for status in statuses) else None}
+
+    def _status(self, run_ids: tuple[str, ...] = ()) -> dict[str, Any] | None:
+        if self.gmo_service is None or not hasattr(self.gmo_service, "listing_status"):
+            return None
+        statuses = [self.gmo_service.listing_status("evals")]
+        statuses.extend(self.gmo_service.listing_status("run", (run_id,)) for run_id in run_ids)
+        return self._merge_status(statuses)
+
+    def _remote(self, *, refresh: bool = False) -> tuple[dict[str, list[dict[str, Any]]], str | None, dict[str, Any] | None]:
         empty: dict[str, list[dict[str, Any]]] = {"episodes": [], "evals": []}
         if self.gmo_service is None:
-            return empty, None
+            return empty, None, None
         from capx_trace_viewer import gmo
 
         try:
             if not gmo.load_settings().configured:
-                return empty, None
-            return self.gmo_service.remote_listing(), None
+                return empty, None, None
+            if hasattr(self.gmo_service, "remote_eval_snapshot"):
+                listing, status = self.gmo_service.remote_eval_snapshot(refresh=refresh)
+                status = self._merge_status([status])
+            elif hasattr(self.gmo_service, "remote_eval_listing"):
+                listing = self.gmo_service.remote_eval_listing(refresh=refresh)
+                status = self._status()
+            else:
+                listing = self.gmo_service.remote_listing()
+                status = self._status()
+            remote = {"evals": list(listing["evals"]), "episodes": list(listing["episodes"]),
+                      "_statuses": [status] if status else []}
+            return remote, status["error"] if status else None, status
         except (gmo.FetchError, OSError):
-            return empty, "GMOの一覧を取得できません。接続設定を確認してください。手元の記録を表示しています。"
+            return empty, self._remote_error(), None
 
-    def _snapshot(self) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]], str | None]:
-        remote, error = self._remote()
+    def _snapshot(self, *, refresh: bool = False):
+        remote, error, status = self._remote(refresh=refresh)
         candidates: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for location, rows in (("local", evals.read_local_evals(self.trace_root)), ("gmo", remote["evals"])):
             for row in rows:
@@ -76,7 +106,29 @@ class EvalService:
                 "_mtime": sources[0][1].get("eval_mtime") or 0,
                 "_conflict": conflict,
             }
-        return entries, remote, error
+        return entries, remote, error, status
+
+    def _load_episodes(self, remote: dict[str, Any], run_ids: tuple[str, ...], *, refresh: bool = False) -> None:
+        """Only the comparisons being opened need remote episode metadata."""
+        if self.gmo_service is None or not hasattr(self.gmo_service, "eval_episode_listing"):
+            return
+        from capx_trace_viewer import gmo
+        for run_id in dict.fromkeys(run_ids):
+            requested = remote.setdefault("_requested_runs", set())
+            if run_id in requested:
+                continue
+            requested.add(run_id)
+            try:
+                if hasattr(self.gmo_service, "eval_episode_snapshot"):
+                    listing, status = self.gmo_service.eval_episode_snapshot(run_id, refresh=refresh)
+                    remote.setdefault("_statuses", []).append(status)
+                else:
+                    listing = self.gmo_service.eval_episode_listing(run_id, refresh=refresh)
+            except (gmo.FetchError, OSError):
+                remote.setdefault("_statuses", []).append(
+                    {"fetched_at": None, "refreshing": False, "error": self._remote_error()})
+                continue
+            remote["episodes"].extend(listing["episodes"])
 
     def _episodes(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False
                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -123,8 +175,8 @@ class EvalService:
     def _public(entry: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in entry.items() if not key.startswith("_")}
 
-    def listing(self) -> dict[str, Any]:
-        entries, remote, error = self._snapshot()
+    def listing(self, *, refresh: bool = False) -> dict[str, Any]:
+        entries, remote, error, status = self._snapshot(refresh=refresh)
         for entry in entries.values():
             entry["summary"] = self._summary(entry, remote)
         for entry in entries.values():
@@ -135,7 +187,8 @@ class EvalService:
             datetime.fromisoformat(entry["eval"]["started_at"].replace("Z", "+00:00")).timestamp()
             if entry["eval"] else entry["_mtime"], entry["eval_id"],
         ), reverse=True)
-        return {"evals": [self._public(entry) for entry in ordered], "error": error}
+        return {"evals": [self._public(entry) for entry in ordered], "error": error,
+                "remote_status": status}
 
     def _trials(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False,
                 evaluation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -191,6 +244,7 @@ class EvalService:
             if settings is None or len(episodes) != entry["eval"]["summary"]["trials"]:
                 continue
             for candidate in matching:
+                self._load_episodes(remote, (candidate["eval_id"],))
                 other, _records = self._episodes(candidate["eval_id"], remote)
                 if len(other) != candidate["eval"]["summary"]["trials"] or repeat_reference.episode_settings(other) != settings:
                     continue
@@ -200,15 +254,23 @@ class EvalService:
                 break
         return references
 
-    def detail(self, eval_id: str) -> dict[str, Any] | None:
-        entries, remote, error = self._snapshot()
+    def detail(self, eval_id: str, *, refresh: bool = False) -> dict[str, Any] | None:
+        entries, remote, error, status = self._snapshot(refresh=refresh)
         entry = entries.get(eval_id)
         if entry is None:
+            if status and status["refreshing"]:
+                return {"eval_id": eval_id, "eval": None, "error": None, "location": "gmo",
+                        "display_status": None, "summary": None, "baseline_summary": None,
+                        "baseline": None, "baseline_error": None, "trials": [], "baseline_trials": [],
+                        "differences": [], "repeat_references": [], "remote_error": error,
+                        "remote_status": status, "loading_remote": True}
             return None
-        entry["summary"] = self._summary(entry, remote)
         record = entry["eval"]
         baseline_id = record["baseline_eval_id"] if record else None
         baseline = entries.get(baseline_id) if baseline_id else None
+        run_ids = tuple(row["eval_id"] for row in (entry, baseline) if row and not row["_conflict"])
+        self._load_episodes(remote, run_ids, refresh=refresh)
+        entry["summary"] = self._summary(entry, remote)
         baseline_record = baseline["eval"] if baseline else None
         baseline_error = None
         if baseline_id and baseline_record is None:
@@ -216,6 +278,8 @@ class EvalService:
         elif baseline and baseline["error"]:
             baseline_error = baseline["error"]
         entry["baseline_summary"] = self._summary(baseline, remote) if baseline else None
+        references = self._repeat_references(entries, remote, entry, baseline)
+        status = self._merge_status(remote.get("_statuses", []))
         return {
             **self._public(entry), "baseline": baseline_record, "baseline_error": baseline_error,
             "baseline_evaluation_failure": evaluation_failure(baseline_record),
@@ -225,12 +289,13 @@ class EvalService:
                 {**record, "summary": entry["summary"]},
                 {**baseline_record, "summary": entry["baseline_summary"]},
             ) if record and baseline_record else [],
-            "remote_error": error,
-            "repeat_references": self._repeat_references(entries, remote, entry, baseline),
+            "remote_error": (status["error"] if status else None) or error,
+            "remote_status": status,
+            "repeat_references": references,
         }
 
     def code_changes(self, eval_id: str) -> dict[str, Any] | None:
-        entries, _remote, _error = self._snapshot()
+        entries, _remote, _error, _status = self._snapshot()
         entry = entries.get(eval_id)
         if entry is None:
             return None
@@ -282,17 +347,21 @@ def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: A
     router = APIRouter(prefix="/api/evals", dependencies=[Depends(gate)])
 
     @router.get("")
-    def listing():
-        return json_response(service.listing())
+    def listing(refresh: int = 0):
+        if refresh not in (0, 1):
+            raise HTTPException(status_code=400, detail="refresh must be 0 or 1")
+        return json_response(service.listing(refresh=bool(refresh)))
 
     @router.get("/{eval_id}")
-    def detail(eval_id: str):
+    def detail(eval_id: str, refresh: int = 0):
         if not reader.is_valid_id(eval_id):
             raise HTTPException(status_code=400, detail="invalid eval ID")
-        record = service.detail(eval_id)
+        if refresh not in (0, 1):
+            raise HTTPException(status_code=400, detail="refresh must be 0 or 1")
+        record = service.detail(eval_id, refresh=bool(refresh))
         if record is None:
             raise HTTPException(status_code=404, detail="eval not found")
-        return json_response(record)
+        return json_response(record, status_code=202 if record.get("loading_remote") else 200)
 
     @router.get("/{eval_id}/code-changes")
     def code_changes(eval_id: str):

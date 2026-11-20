@@ -43,11 +43,22 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
           }
           if (signal.aborted) return;
           if (!config.enabled || !config.configured) { again = false; return; }
-          const rows = await gmoApi.episodes('all', false, signal);
+          let rows = await gmoApi.episodes('all', false, signal);
           if (signal.aborted) return;
-          const matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
-          if (matches.length !== 1 || matches[0].conflict ||
-            (matches[0].status !== 'running' && !matches[0].episode?.video_copy_pending)) {
+          let matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
+          const followable = () => matches.length === 1 && !matches[0].conflict
+            && (matches[0].status === 'running' || matches[0].episode?.video_copy_pending);
+          if (!followable()) {
+            const listing = await gmoApi.listingStatus(signal);
+            if (signal.aborted) return;
+            // A cold/stale listing cannot decide that the open trial ended.
+            if (listing.refreshing) return;
+            if (listing.error) throw new Error(listing.error);
+            rows = await gmoApi.episodes('all', false, signal);
+            if (signal.aborted) return;
+            matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
+          }
+          if (!followable()) {
             again = false;
             return;
           }

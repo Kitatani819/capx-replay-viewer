@@ -1,6 +1,7 @@
 """Loopback-only GMO configuration, discovery and queued import API."""
 from __future__ import annotations
 
+import json
 import queue
 import threading
 import time
@@ -13,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from capx_trace_viewer import gmo, reader
+from capx_trace_viewer.remote_cache import RemoteCacheError, RemoteListingCache
 from capx_trace_viewer.trace_api import (
     client_is_local, host_is_loopback, json_response, origin_is_loopback,
 )
@@ -38,6 +40,10 @@ class GmoService:
         self._cache: dict[str, list[dict[str, Any]]] | None = None
         self._cache_settings: gmo.GmoSettings | None = None
         self._cache_until = 0.0
+        self._listings = RemoteListingCache(
+            gmo.config_path().parent / "cache" / "remote-listings", ttl=CACHE_SECONDS,
+            validate=lambda value: gmo.validate_remote_listing(value),
+        )
         self._generation = 0
         self._jobs: list[dict[str, Any]] = []
         self._pending: set[tuple[str, str]] = set()
@@ -79,6 +85,7 @@ class GmoService:
         self._cache = None
         self._cache_settings = None
         self._cache_until = 0
+        self._listings.invalidate()
 
     def update_settings(self, settings: gmo.GmoSettings) -> None:
         # Publication of settings and invalidation must be atomic with respect to
@@ -345,9 +352,7 @@ class GmoService:
                     if generation != self._generation or settings != gmo.load_settings():
                         raise gmo.FetchError("GMO settings changed during listing; please retry")
                     # A mine-only scan must not pretend to be a complete team listing.
-                    self._cache = None
-                    self._cache_settings = None
-                    self._cache_until = 0
+                    self._listings.invalidate()
                     reserved: set[tuple[str, str]] = set()
                     budget = 0
                     for row, run, files in plans:
@@ -381,17 +386,47 @@ class GmoService:
             self._auto_wake.set()
         return self.auto_status()
 
-    def remote_rows(self, *, refresh: bool = False) -> list[dict[str, Any]]:
-        return self.remote_listing(refresh=refresh)["episodes"]
+    @staticmethod
+    def _listing_key(settings: gmo.GmoSettings, kind: str, run_ids: tuple[str, ...] = ()) -> str:
+        return json.dumps({"version": 2, "settings": settings.as_dict(), "kind": kind,
+                           "run_ids": run_ids}, sort_keys=True, separators=(",", ":"))
+
+    def remote_rows(self, *, refresh: bool = False, wait: bool = True) -> list[dict[str, Any]]:
+        return self.remote_listing(refresh=refresh, wait=wait)["episodes"]
 
     def remote_evals(self, *, refresh: bool = False) -> list[dict[str, Any]]:
-        return self.remote_listing(refresh=refresh)["evals"]
+        return self.remote_eval_listing(refresh=refresh, wait=True)["evals"]
 
-    def remote_listing(self, *, refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
-        return self._remote_snapshot(refresh=refresh)[0]
+    def remote_listing(self, *, refresh: bool = False, wait: bool = True) -> dict[str, list[dict[str, Any]]]:
+        return self._remote_snapshot(refresh=refresh, wait=wait)[0]
+
+    def remote_eval_listing(self, *, refresh: bool = False, wait: bool = False) -> dict[str, list[dict[str, Any]]]:
+        return self._remote_snapshot(kind="evals", refresh=refresh, wait=wait)[0]
+
+    def remote_eval_snapshot(self, *, refresh: bool = False):
+        status: dict[str, Any] = {}
+        listing = self._remote_snapshot(kind="evals", refresh=refresh, wait=False, status_out=status)[0]
+        return listing, status
+
+    def eval_episode_listing(self, run_id: str, *, refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
+        if not reader.is_valid_id(run_id):
+            raise gmo.FetchError("Invalid run ID")
+        return self._remote_snapshot(kind="run", run_ids=(run_id,), refresh=refresh, wait=False)[0]
+
+    def eval_episode_snapshot(self, run_id: str, *, refresh: bool = False):
+        if not reader.is_valid_id(run_id):
+            raise gmo.FetchError("Invalid run ID")
+        status: dict[str, Any] = {}
+        listing = self._remote_snapshot(kind="run", run_ids=(run_id,), refresh=refresh,
+                                        wait=False, status_out=status)[0]
+        return listing, status
+
+    def listing_status(self, kind: str = "episodes", run_ids: tuple[str, ...] = ()) -> dict[str, Any]:
+        settings = gmo.load_settings()
+        return self._listings.status(self._listing_key(settings, kind, run_ids))
 
     def read_code_changes(self, eval_id: str) -> bytes:
-        listing, settings, generation = self._remote_snapshot()
+        listing, settings, generation = self._remote_snapshot(kind="evals")
         rows = [row for row in listing["evals"] if row["run_id"] == eval_id]
         if len(rows) != 1 or rows[0].get("conflict"):
             raise gmo.FetchError("Evaluation is missing or ambiguous")
@@ -401,26 +436,61 @@ class GmoService:
                 raise gmo.FetchError("GMO settings changed; please retry")
         return data
 
-    def _remote_snapshot(self, *, refresh: bool = False) -> tuple[dict[str, list[dict[str, Any]]],
-                                                               gmo.GmoSettings, int]:
-        with self._refresh_lock:
+    def _remote_snapshot(self, *, refresh: bool = False, wait: bool = True,
+                         kind: str = "episodes", run_ids: tuple[str, ...] = (),
+                         status_out: dict[str, Any] | None = None
+                         ) -> tuple[dict[str, list[dict[str, Any]]], gmo.GmoSettings, int]:
+        with self._lock:
+            if self._closed:
+                raise gmo.FetchError("GMO service is shutting down")
+            settings = gmo.load_settings()
+            generation = self._generation
+        key = self._listing_key(settings, kind, run_ids)
+        # Fetch/live actions may follow a picker lookup immediately. Reuse that
+        # complete snapshot instead of making another remote trip for the run.
+        if kind == "run" and wait:
             with self._lock:
-                settings = gmo.load_settings()
-                generation = self._generation
                 if (not refresh and self._cache is not None and self._cache_settings == settings
                         and time.monotonic() < self._cache_until):
-                    return self._cache, settings, generation
-            rows = gmo.list_remote_episodes(self.runner, settings)
-            with self._lock:
-                if generation != self._generation or settings != gmo.load_settings():
-                    raise gmo.FetchError("GMO settings changed during listing; please retry")
-                self._cache = rows
-                self._cache_settings = settings
-                self._cache_until = time.monotonic() + CACHE_SECONDS
-            return rows, settings, generation
+                    rows = {"episodes": [row for row in self._cache["episodes"] if row["run_id"] in run_ids],
+                            "evals": [row for row in self._cache["evals"] if row["run_id"] in run_ids]}
+                    if rows["episodes"]:
+                        return rows, settings, generation
 
-    def episodes(self, scope: str, *, refresh: bool = False) -> list[dict[str, Any]]:
-        rows = self.remote_rows(refresh=refresh)
+        def fetch(previous):
+            with self._refresh_lock:
+                if kind == "evals":
+                    rows = gmo.list_remote_evals(self.runner, settings)
+                else:
+                    kwargs = {"previous": previous} if previous is not None else {}
+                    if run_ids:
+                        kwargs["run_ids"] = run_ids
+                        kwargs["metadata_only"] = True
+                    rows = gmo.list_remote_episodes(self.runner, settings, **kwargs)
+                with self._lock:
+                    if self._closed:
+                        raise gmo.FetchError("GMO service is shutting down")
+                    if generation != self._generation or settings != gmo.load_settings():
+                        raise gmo.FetchError("GMO settings changed during listing; please retry")
+                return rows
+
+        try:
+            rows, status = self._listings.snapshot_with_status(key, fetch, refresh=refresh, wait=wait)
+            if status_out is not None:
+                status_out.update(status)
+        except RemoteCacheError as exc:
+            raise gmo.FetchError(str(exc)) from exc
+        with self._lock:
+            if generation != self._generation or settings != gmo.load_settings():
+                raise gmo.FetchError("GMO settings changed during listing; please retry")
+            if kind == "episodes" and status["fetched_at"] is not None:
+                self._cache, self._cache_settings = rows, settings
+                fetched = datetime.fromisoformat(status["fetched_at"]).timestamp()
+                self._cache_until = time.monotonic() + max(0, CACHE_SECONDS - (time.time() - fetched))
+        return rows, settings, generation
+
+    def episodes(self, scope: str, *, refresh: bool = False, wait: bool = True) -> list[dict[str, Any]]:
+        rows = self.remote_rows(refresh=refresh, wait=wait)
         with self._lock:
             pending = set(self._pending)
         result = []
@@ -439,6 +509,7 @@ class GmoService:
             summary.update({
                 "owner": row["owner"], "mine": row["mine"],
                 "size_bytes": row["size_bytes"],
+                **({"size_approximate": True} if row.get("size_approximate") else {}),
                 "local_state": "fetching" if (row["run_id"], row["episode_id"]) in pending
                 else gmo.local_state(row, self.dest),
                 "conflict": row["conflict"],
@@ -466,7 +537,7 @@ class GmoService:
     def _episode_row(self, run_id: str, episode_id: str) -> tuple[dict[str, Any], gmo.GmoSettings, int]:
         """One shared lookup for manual fetches and live followers."""
         key = (run_id, episode_id)
-        listing, settings, generation = self._remote_snapshot()
+        listing, settings, generation = self._remote_snapshot(kind="run", run_ids=(run_id,))
         matches = [row for row in listing["episodes"] if (row["run_id"], row["episode_id"]) == key]
         if not matches:
             raise HTTPException(404, "Episode not found on GMO")
@@ -572,6 +643,7 @@ class GmoService:
         if stopped is not None:
             stopped.close()
         self.runner.close()
+        self._listings.close()
         if self._live_thread is not None:
             self._live_thread.join(timeout=5)
         if self._live_cycle_thread is not None:
@@ -668,7 +740,14 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False) -> APIR
         if scope not in ("all", "mine", "team") or refresh not in (0, 1):
             raise HTTPException(400, "scope must be all, mine or team; refresh must be 0 or 1")
         try:
-            return json_response(service.episodes(scope, refresh=bool(refresh)))
+            return json_response(service.episodes(scope, refresh=bool(refresh), wait=False))
+        except (gmo.FetchError, OSError) as exc:
+            raise HTTPException(502, str(exc)[-300:]) from exc
+
+    @router.get("/listing-status")
+    def listing_status():
+        try:
+            return json_response(service.listing_status())
         except (gmo.FetchError, OSError) as exc:
             raise HTTPException(502, str(exc)[-300:]) from exc
 
