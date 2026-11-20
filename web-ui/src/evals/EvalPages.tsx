@@ -1,3 +1,4 @@
+import { remoteName } from '../navigation/site';
 import { siteHref } from '../navigation/site';
 import { SiteTabs } from '../navigation/SiteTabs';
 /** Calm, read-only evaluation list and baseline comparison. */
@@ -99,7 +100,7 @@ export function EvalListPage() {
     {listing.loading && !listing.data && <p role="status">評価を読み込み中…</p>}
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
-    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>GMO の一覧を更新</button></div>}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>{remoteName()} の一覧を更新</button></div>}
     {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
   </div></main>;
 }
@@ -169,7 +170,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     <p className="eval-legend">{table.seeds.length > MAX_SEEDS_FOR_WORDS
       ? `○ ${END_LABELS.success}　× 失敗　– ${CATEGORY_CELL_WORDS.unjudged}＝${UNJUDGED_LABEL}　… ${CATEGORY_CELL_WORDS.running}　空欄＝記録なし（seed が多いため記号で表示しています）`
       : WORD_LEGEND}</p>
-    {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。GMO の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
+    {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。{remoteName()} の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
     <EvalCodeChanges record={record} />
     <FailureBreakdown detail={detail} />
   </>;
@@ -211,7 +212,7 @@ export function EvalDetailPage({ evalId }: { evalId: string }) {
     <div className="site-page-navigation"><Breadcrumb items={[{ label: '評価一覧', href: '/evals' }, { label: detail.data?.eval ? evaluationTitle(detail.data.eval) : evalId }]} /><SiteTabs /></div>
     {detail.loading && !detail.data && <p role="status">評価を読み込み中…</p>}
     {detail.error && <p role="alert" className="eval-error">評価を読み込めません：{detail.error}</p>}
-    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={detail.loading || status.refreshing} onClick={() => { refreshNext.current = true; detail.reload(); }}>GMO の一覧を更新</button></div>}
-    {detail.data?.loading_remote ? <p role="status">GMO の評価を取得中…</p> : detail.data && <EvalComparison detail={detail.data} />}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={detail.loading || status.refreshing} onClick={() => { refreshNext.current = true; detail.reload(); }}>{remoteName()} の一覧を更新</button></div>}
+    {detail.data?.loading_remote ? <p role="status">{remoteName()} の評価を取得中…</p> : detail.data && <EvalComparison detail={detail.data} />}
   </div></main>;
 }

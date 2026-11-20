@@ -4,6 +4,7 @@ export interface Site { name: string; label: string; primary: boolean }
 export const SITE_STORAGE_KEY = 'capx-replay-site';
 const SITE_NAME = /^[a-z0-9-]{1,32}$/;
 let primaryName = 'b300';
+let labels = new Map<string, string>();
 
 export function primarySiteName(): string { return primaryName; }
 
@@ -33,6 +34,7 @@ export function currentSiteName(): string {
 
 /** Returns true when a removed site was reset and the page's data must be reloaded. */
 export function configureSites(sites: readonly Site[]): boolean {
+  labels = new Map(sites.map(site => [site.name, site.label]));
   const primary = sites.find(site => site.primary);
   if (primary && SITE_NAME.test(primary.name)) primaryName = primary.name;
   const selected = currentSiteName();
@@ -68,4 +70,9 @@ export function siteSwitchTarget(site: Site, pathname: string): string {
   // An explicit primary also overrides cloned sessionStorage when opened in a new tab.
   if (site.primary) target.searchParams.set('site', site.name);
   return `${target.pathname}${target.search}`;
+}
+
+/** The remote machine in messages: GMO for the primary (B300) site, else the site's label (RTX). */
+export function remoteName(name = currentSiteName()): string {
+  return name === primaryName ? 'GMO' : labels.get(name) ?? name.toUpperCase();
 }

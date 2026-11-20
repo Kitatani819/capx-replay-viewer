@@ -24,7 +24,7 @@ import type {
   ViserResponse,
 } from './types';
 
-import { apiRoot } from '../navigation/site';
+import { apiRoot, remoteName } from '../navigation/site';
 
 const traceRoot = () => `${apiRoot()}/traces`;
 
@@ -310,7 +310,7 @@ async function gmoJson<T>(path: string, signal?: AbortSignal, method: 'GET' | 'P
     throw new ApiError(resp.status, e.message, url, e.body);
   }
   if (!(resp.headers.get('content-type') ?? '').includes('json')) {
-    throw new ApiError(resp.status, 'GMO から JSON ではない応答が返りました', url);
+    throw new ApiError(resp.status, `${remoteName()} から JSON ではない応答が返りました`, url);
   }
   return (await resp.json()) as T;
 }

@@ -1,3 +1,4 @@
+import { remoteName } from '../navigation/site';
 /**
  * The /traces page of the web UI (docs/trace-format.md 9.1, 9.3).
  *
@@ -612,7 +613,7 @@ export default function TraceViewerPage() {
         <div className="flex-1 min-h-0">{picker}</div>
       ) : missing ? (
         <section className="p-8 space-y-4" aria-label="手元にない試行">
-          <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? '手元にないため、GMO の記録を確認中…'}</p>
+          <p role={episodeImport?.busy === false ? 'alert' : 'status'}>{episodeImport?.message ?? `手元にないため、${remoteName()} の記録を確認中…`}</p>
           {episodeImport?.retry && <button type="button" className="underline text-accent" onClick={episodeImport.retry}>もう一度読み込む</button>}
           <a className="underline text-accent" href={siteHref(`/evals/${encodeURIComponent(runId!)}`)}>比較ページへ戻る</a>
         </section>

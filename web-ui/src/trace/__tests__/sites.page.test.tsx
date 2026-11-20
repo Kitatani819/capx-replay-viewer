@@ -155,3 +155,16 @@ test('query edits, breadcrumbs, failure links, evaluation links and comparisons 
   assert.ok(failureLinks.length > 0);
   assert.ok(failureLinks.every(link => String(link.props.href).includes('site=rtx'))); failures.unmount();
 });
+
+test('messages name the current remote machine: GMO for B300, the site label elsewhere', async () => {
+  const { configureSites, remoteName } = await import('../../navigation/site');
+  const { remoteListingText } = await import('../remoteListing');
+  resetBrowser();
+  configureSites(sites);
+  const status = { fetched_at: '2026-11-20T12:00:00Z', refreshing: false, error: null };
+  assert.equal(remoteName(), 'GMO');
+  assert.match(remoteListingText(status), /^GMO の一覧：/);
+  setLocation('/evals?site=rtx');
+  assert.equal(remoteName(), 'RTX');
+  assert.match(remoteListingText(status), /^RTX の一覧：/);
+});
