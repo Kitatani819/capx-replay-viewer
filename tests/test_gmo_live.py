@@ -31,7 +31,7 @@ def _until(predicate, timeout=4):
 def source(remote):
     episode = remote["mine"] / "run_a" / "ep_1"
     (episode / "episode.json").write_text('{"status":"running"}\n')
-    (episode / "events.jsonl").write_text('{"seq":1,"type":"episode_start"}\n')
+    (episode / "events.jsonl").write_text('{"seq":1,"event_type":"episode_start"}\n')
     service = GmoService(remote["dest"])
     service.update_settings(gmo.GmoSettings(host="fakehost", mine=(str(remote["mine"]),),
                                            team=(str(remote["team"]),), shared_root="", interval_s=0))
@@ -66,7 +66,7 @@ def test_start_renew_replace_and_changed_files(manual, monkeypatch):
     assert first["following"] and first["copied_bytes"] > 0 and first["last_ok_at"]
     assert _cycle(service)["copied_bytes"] == first["copied_bytes"]
     with (episode / "events.jsonl").open("a") as stream:
-        stream.write('{"seq":2,"type":"stdout","data":{"text":"new output"}}\n')
+        stream.write('{"seq":2,"event_type":"stdout","data":{"text":"new output"}}\n')
     (episode / "frames" / "front").mkdir(parents=True)
     (episode / "frames" / "front" / "e0_1.jpg").write_bytes(b"new frame")
     assert _cycle(service)["copied_bytes"] > first["copied_bytes"]
@@ -95,10 +95,10 @@ def test_episode_end_requires_copied_event_and_final_quiet_cycle(manual):
     _cycle(service)
     assert _cycle(service)["following"]  # metadata alone is not episode_end
     with (episode / "events.jsonl").open("a") as stream:
-        stream.write('{"seq":2,"type":"episode_end"}\n')
+        stream.write('{"seq":2,"event_type":"episode_end"}\n')
     assert _cycle(service)["following"]
     with (episode / "events.jsonl").open("a") as stream:
-        stream.write('{"seq":3,"type":"stdout","data":{"text":"late"}}\n')
+        stream.write('{"seq":3,"event_type":"stdout","data":{"text":"late"}}\n')
     assert _cycle(service)["following"]
     state = _cycle(service)
     assert not state["following"] and state["stopped_reason"] == "episode_ended"
@@ -107,10 +107,51 @@ def test_episode_end_requires_copied_event_and_final_quiet_cycle(manual):
     assert service.follow("run_a", "ep_1") == state
 
 
+def test_real_shaped_episode_end_stops_following_and_cannot_be_renewed(manual, monkeypatch):
+    service, episode, _ = manual
+    live = service._live
+    # Match the recorder's EventSink.emit envelope, including event_type rather
+    # than the unrelated ASGI request field named type.
+    events = [
+        {
+            "schema_version": "capx-trace/1", "run_id": "run_a", "episode_id": "ep_1",
+            "event_id": f"ev_{seq:020d}", "parent_event_id": None, "seq": seq,
+            "wall_time": 1_700_000_000.0 + seq, "monotonic_time": float(seq),
+            "pid": 1234, "thread": "MainThread", "sim_step": seq - 1,
+            "sim_time": (seq - 1) * 0.02, "sim_epoch": 0, "event_type": event_type,
+            "status": "ok", "late": False, "refs": {}, "artifacts": [], "data": data,
+        }
+        for seq, event_type, data in (
+            (1, "episode_start", {}),
+            (2, "episode_end", {"end_reason": "completed", "trace_complete": True}),
+        )
+    ]
+    (episode / "events.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events))
+    (episode / "episode.json").write_text(
+        '{"status":"ended","trace_complete":true,"video_copy_pending":false}\n')
+
+    assert _cycle(service)["following"]  # Copy the final event before the quiet cycle.
+    local_events = service.dest / "run_a" / "ep_1" / "events.jsonl"
+    assert [json.loads(line) for line in local_events.read_text().splitlines()] == events
+    state = _cycle(service)
+    assert state["following"] is False
+    assert state["stopped_reason"] == "episode_ended"
+    assert state["last_error"] is None
+    assert service._live is None and live["runner"]._closed
+
+    # Stale page renewals and an already queued cycle cannot restart SSH copies.
+    monkeypatch.setattr(service, "_episode_row", lambda *_: pytest.fail("ended trial was listed again"))
+    monkeypatch.setattr(gmo, "fetch_episode", lambda *_args, **_kwargs: pytest.fail("ended trial was copied again"))
+    for _ in range(3):
+        assert service.follow("run_a", "ep_1") == state
+        service._run_live_cycle(live)
+        assert service.live_status() == state and service._live is None
+
+
 def test_pending_mp4_keeps_following_until_video_is_copied(manual):
     service, episode, _ = manual
     with (episode / "events.jsonl").open("a") as stream:
-        stream.write('{"seq":2,"type":"episode_end"}\n')
+        stream.write('{"seq":2,"event_type":"episode_end"}\n')
     (episode / "episode.json").write_text('{"status":"ended","video_copy_pending":true}\n')
     assert _cycle(service)["following"] and _cycle(service)["following"]
     (episode / "videos").mkdir()
@@ -124,7 +165,7 @@ def test_pending_mp4_keeps_following_until_video_is_copied(manual):
 def test_empty_changed_heartbeat_is_not_a_quiet_final_cycle(manual):
     service, episode, _ = manual
     with (episode / "events.jsonl").open("a") as stream:
-        stream.write('{"seq":2,"type":"episode_end"}\n')
+        stream.write('{"seq":2,"event_type":"episode_end"}\n')
     _cycle(service)
     heartbeat = episode / "heartbeat"
     mtime = int(heartbeat.stat().st_mtime) + 5

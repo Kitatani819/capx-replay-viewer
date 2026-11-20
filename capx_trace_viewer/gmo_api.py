@@ -214,7 +214,7 @@ class GmoService:
                     live.update(generation=generation, offset=0, end_seen=False)
                 while True:
                     page = reader.read_events_page(fd, live["offset"])
-                    if any(event.get("type") == "episode_end" for event in page.events()):
+                    if any(event.get("event_type") == "episode_end" for event in page.events()):
                         live["end_seen"] = True
                     previous = live["offset"]
                     live["offset"] = page.next_offset
