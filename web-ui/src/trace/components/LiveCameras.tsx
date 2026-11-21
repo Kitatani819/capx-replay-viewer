@@ -18,6 +18,8 @@ export const LIVE_DELAY_S = 3;
 /** Falling further behind than this (a long pause, then a burst) jumps back to near-live. */
 export const MAX_LAG_S = 10;
 export const PLAYBACK_TICK_MS = 200;
+/** A red frame marks live camera frames, so they are not mistaken for the saved video. */
+export const LIVE_FRAME_CLASS = 'rounded ring-2 ring-red-500';
 /** Frames requested ahead of the one shown, so switching does not wait for a download. */
 const PREFETCH = 3;
 
@@ -116,7 +118,7 @@ export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
               provenance="debug_frame"
               compact
               retryMs={2000}
-              className="aspect-[4/3] w-full"
+              className={`aspect-[4/3] w-full ${LIVE_FRAME_CLASS}`}
               meta={<span>{camera} · {age} · e{frame?.epoch ?? '?'} #{frame?.bufferIndex ?? '?'}</span>}
             />
           </figure>;

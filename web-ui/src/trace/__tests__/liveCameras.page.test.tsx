@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { advance, clock, findAll, propsOf, resetBrowser } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import { buildEpisodeModel } from '../model';
-import { LIVE_DELAY_S, MAX_LAG_S, LiveCameras, PLAYBACK_TICK_MS } from '../components/LiveCameras';
+import { LIVE_DELAY_S, LIVE_FRAME_CLASS, MAX_LAG_S, LiveCameras, PLAYBACK_TICK_MS } from '../components/LiveCameras';
 import { MediaPane } from '../components/MediaPane';
 import { SmallButton } from '../components/common';
 import { ImageModal, TraceImage } from '../components/TraceImage';
@@ -47,6 +47,8 @@ test('LiveCameras shows every camera, keeping debug provenance and enlarge behav
     assert.match(images[0].src!, /frames\/front\/e0_11.jpg\?g=generation-1$/);
     assert.match(images[1].src!, /frames\/wrist\/e0_2.jpg/);
     assert.equal(images[0].provenance, 'debug_frame');
+    // Every live camera frame has the red frame, so it can't be mistaken for the saved video.
+    for (const item of images) assert.ok(item.className!.includes(LIVE_FRAME_CLASS), item.className);
     const image = mount(TraceImage, images[0]);
     try {
       (findAll(image.output, 'img')[0].props.onClick as Function)({ stopPropagation() {} });
