@@ -17,11 +17,13 @@ import type { EpisodeRef } from './ValueView';
 export const LIVE_DELAY_S = 3;
 /** Falling further behind than this (a long pause, then a burst) jumps back to near-live. */
 export const MAX_LAG_S = 10;
-export const PLAYBACK_TICK_MS = 200;
+/** Playback steps 20 times a second, so a fast burst (a GPU-rendered motion saves ~30 frames/s) plays smoothly. */
+export const PLAYBACK_TICK_MS = 50;
 /** A red frame marks live camera frames, so they are not mistaken for the saved video. */
 export const LIVE_FRAME_CLASS = 'rounded ring-2 ring-red-500';
+const PLAYHEAD_EPSILON_S = 1e-3;
 /** Frames requested ahead of the one shown, so switching does not wait for a download. */
-const PREFETCH = 3;
+const PREFETCH = 6;
 
 const wallOf = (frame: FrameRec) => {
   const wall = frame.event.wall_time;
@@ -40,7 +42,9 @@ export function nextPlayhead(previous: number | null, elapsedS: number, newest: 
 export function frameAt(frames: FrameRec[], playhead: number | null): FrameRec | undefined {
   const timed = frames.filter(frame => wallOf(frame) !== null);
   if (playhead === null || timed.length === 0) return frames.at(-1);
-  return timed.findLast(frame => wallOf(frame)! <= playhead) ?? timed[0];
+  // The playhead adds many short steps to an epoch time (~1.7e9 s), whose rounding
+  // grows to microseconds, so allow a millisecond (frames are >= ~33 ms apart).
+  return timed.findLast(frame => wallOf(frame)! <= playhead + PLAYHEAD_EPSILON_S) ?? timed[0];
 }
 
 export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
