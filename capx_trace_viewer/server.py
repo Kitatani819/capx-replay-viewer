@@ -293,9 +293,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument('--gmo', action='store_true', help='Enable the loopback-only GMO import API')
     parser.add_argument('--site', type=parse_site, action='append', default=[], metavar='NAME=LABEL,CONFIG,TRACE_ROOT',
                         help='Add a remote site with its own settings and local traces (repeatable)')
+    parser.add_argument('--site-fields', nargs=4, action='append', default=[],
+                        metavar=('NAME', 'LABEL', 'CONFIG', 'TRACE_ROOT'),
+                        help='Add a remote site using separate fields, including paths containing commas (repeatable)')
     parser.add_argument('--frontend-dist', help='Directory containing the built frontend index.html and assets')
     args = parser.parse_args(argv)
     try:
+        args.site.extend(Site(name, label, Path(config), Path(root))
+                         for name, label, config, root in args.site_fields)
         _validate_sites(args.site)
     except ValueError as exc:
         parser.error(str(exc))

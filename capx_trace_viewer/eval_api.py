@@ -273,7 +273,8 @@ class EvalService:
         references = []
         seen_pairs: set[frozenset[str]] = set()
         candidates = sorted(entries.values(), key=lambda item: (
-            (item["eval"] or {}).get("started_at", ""), item["eval_id"]), reverse=True)
+            datetime.fromisoformat(item["eval"]["started_at"].replace("Z", "+00:00")).timestamp()
+            if item["eval"] else item["_mtime"], item["eval_id"]), reverse=True)
         for side, entry in (("current", current), ("baseline", baseline)):
             if not entry or entry["error"] or entry["_conflict"]:
                 continue

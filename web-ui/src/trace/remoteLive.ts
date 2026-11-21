@@ -50,6 +50,7 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
     let timer: number | undefined;
     let discovered = false;
     let nextRenewAt = 0;
+    let leaseToken: string | null = null;
     let previous: GmoLiveStatus | null = null;
     setState({ key, status: null, error: null });
 
@@ -91,15 +92,42 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
         }
         if (signal.aborted) return;
         const renew = Date.now() >= nextRenewAt;
-        const status = await remoteRequest(requestSignal => renew
-          ? gmoApi.follow(runId, episodeId, requestSignal) : gmoApi.live(requestSignal), signal);
+        let status: GmoLiveStatus;
+        try {
+          status = await remoteRequest(requestSignal => renew
+            ? leaseToken === null ? gmoApi.follow(runId, episodeId, requestSignal)
+              : gmoApi.renew(runId, episodeId, leaseToken, requestSignal)
+            : gmoApi.live(requestSignal), signal);
+        } catch (error) {
+          if (leaseToken === null) {
+            // Acquisition may have succeeded before its response was lost.
+            // Only an explicit Live restart may attempt another acquisition.
+            again = false;
+            previous = { following: false, run_id: runId, episode_id: episodeId, last_ok_at: null,
+              last_error: null, interval_s: REMOTE_LIVE_STATUS_MS / 1000, copied_bytes: 0,
+              stopped_reason: 'acquisition_failed' };
+          }
+          const body = error instanceof ApiError && error.status === 409
+            ? error.body as { error?: string; status?: GmoLiveStatus } | null : null;
+          if (body?.error !== 'lease_replaced' || !body.status) throw error;
+          if (signal.aborted) return;
+          previous = { ...body.status, following: false, stopped_reason: 'replaced' };
+          setState({ key, status: previous, error: null });
+          again = false;
+          return;
+        }
         if (signal.aborted) return;
+        if (leaseToken === null) {
+          if (!status.lease_token) {
+            again = false;
+            throw new Error('リモートの追従権限を確認できません。');
+          }
+          leaseToken = status.lease_token;
+        }
         if (renew) nextRenewAt = Date.now() + REMOTE_LIVE_RENEW_MS;
         // Another open page can replace the single follower. Do not take it back.
-        previous = status.run_id === runId && status.episode_id === episodeId ? status : {
-          following: false, run_id: runId, episode_id: episodeId, last_ok_at: previous?.last_ok_at ?? null,
-          last_error: null, interval_s: REMOTE_LIVE_STATUS_MS / 1000, copied_bytes: previous?.copied_bytes ?? 0,
-          stopped_reason: 'replaced',
+        previous = status.run_id === runId && status.episode_id === episodeId && status.lease_token === leaseToken ? status : {
+          ...status, following: false, stopped_reason: 'replaced',
         };
         setState({ key, status: previous, error: null });
         if (!previous.following) {

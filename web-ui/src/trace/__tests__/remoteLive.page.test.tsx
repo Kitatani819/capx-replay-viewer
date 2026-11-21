@@ -8,7 +8,7 @@ import { Picker } from '../components/Picker';
 import { addEpisode, ev, makeRun, serve } from './pageServer';
 import type { GmoLiveStatus, RemoteListingStatus } from '../api';
 
-const LIVE = /^\/api\/gmo\/live$/;
+const LIVE = /^\/api\/gmo\/live(?:\/renew)?$/;
 type Bar = Parameters<typeof TopBar>[0];
 const bar = (page: Mounted<Record<string, never>>) => propsOf<Bar>(page.output, TopBar);
 
@@ -26,13 +26,14 @@ function setup(localStatus = 'running') {
     status: {
       following: true, run_id: 'r1', episode_id: 'e1', last_ok_at: '2026-11-20T00:00:00Z',
       last_error: null, interval_s: 2, copied_bytes: 100, stopped_reason: null,
+      lease_token: 'lease-1',
     } as GmoLiveStatus,
   };
-  const leases: { at: number; body: { run_id: string; episode_id: string } }[] = [];
+  const leases: { at: number; body: { run_id: string; episode_id: string; lease_token?: string } }[] = [];
   const lookups: { episode: string | null; refresh: string | null }[] = [];
   const savedFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {
-    if (String(input) === '/api/gmo/live' && init?.method === 'POST') {
+    if (LIVE.test(String(input)) && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
       leases.push({ at: Date.now(), body });
       state.status = { ...state.status, run_id: body.run_id, episode_id: body.episode_id };
@@ -51,7 +52,7 @@ function setup(localStatus = 'running') {
       return { json: { run_id: 'r1', episode_id: req.query.get('episode_id'), status: state.remoteStatus, conflict: false } };
     }
     if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
-    if (req.path === '/api/gmo/live') return state.error
+    if (LIVE.test(req.path)) return state.error
       ? { status: 502, json: { detail: '接続できません' }, latency: state.latency }
       : { json: state.status, latency: state.latency };
     return traceHandler(req);
@@ -269,11 +270,11 @@ for (const phase of ['config', 'episode', 'status', 'renewal'] as const) {
     let stalled = false;
     let liveReads = 0;
     net.handler = req => {
-      if (req.path === '/api/gmo/live') liveReads += 1;
+      if (LIVE.test(req.path)) liveReads += 1;
       const matches = phase === 'config' ? req.path === '/api/gmo/config'
         : phase === 'episode' ? req.path === '/api/gmo/episode'
         : phase === 'status' ? req.path === '/api/gmo/live' && liveReads === 2
-        : req.path === '/api/gmo/live' && remote.leases.length === 2;
+        : LIVE.test(req.path) && remote.leases.length === 2;
       const answer = handler(req);
       if (!stalled && matches) {
         stalled = true;

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,7 +99,8 @@ def test_rtx_expands_quoted_home_path(launcher):
     assert forwarded(run_launcher(project, env, "--rtx", "~/settings/rtx.json"))[-1] == str(config)
 
 
-def test_serve_passes_rtx_site_to_server(tmp_path):
+@pytest.mark.parametrize("config_name", ["rtx.json", "rtx,extra.json"])
+def test_serve_passes_rtx_site_to_server(tmp_path, monkeypatch, config_name):
     project = tmp_path / "viewer"
     (project / "scripts").mkdir(parents=True)
     (project / "web-ui" / "dist").mkdir(parents=True)
@@ -110,7 +112,7 @@ def test_serve_passes_rtx_site_to_server(tmp_path):
         '#!/usr/bin/env bash\n'
         'if [[ "$1" == "-m" ]]; then printf "%s\\0" "$@"; fi\n', encoding="utf-8")
     fake_python.chmod(0o755)
-    config = tmp_path / "settings" / "rtx.json"
+    config = tmp_path / "settings" / config_name
     result = subprocess.run(["bash", str(project / "scripts" / "serve_replay.sh"), "8393",
                              "outputs/gmo/traces", "outputs/gmo/runner", str(fake_python),
                              "1", "", str(config)], capture_output=True, text=True, timeout=30)
@@ -118,4 +120,12 @@ def test_serve_passes_rtx_site_to_server(tmp_path):
     args = result.stdout.split("\n", 1)[1].rstrip("\0").split("\0")
     assert args[:2] == ["-m", "capx_trace_viewer.server"]
     assert "--gmo" in args
-    assert args[-2:] == ["--site", f"rtx=RTX,{config},{project}/outputs/rtx/traces"]
+    from capx_trace_viewer import server
+
+    sites = []
+    monkeypatch.setattr(server, "create_app", lambda **kwargs: (
+        sites.extend(kwargs["sites"]) or SimpleNamespace(state=SimpleNamespace(gmo_services={}))
+    ))
+    monkeypatch.setattr(server.uvicorn, "run", lambda *args, **kwargs: None)
+    server.main(args[2:])
+    assert sites == [server.Site("rtx", "RTX", config, project / "outputs/rtx/traces")]

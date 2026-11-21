@@ -195,6 +195,33 @@ def test_r1pro_dict_frames_are_saved_per_camera(recorder):
     assert (ep.base_dir / "frames/rgb/e0_0.jpg").is_file() and (ep.base_dir / "frames/ego/e0_0.jpg").is_file()
 
 
+@pytest.mark.parametrize("dict_frames", [False, True])
+def test_frame_tap_keeps_distinct_camera_labels_and_storage(recorder, dict_frames):
+    store, ep = recorder
+    low = ListLow()
+    images = [np.full((8, 8, 3), value, dtype=np.uint8) for value in (0, 255)]
+    if dict_frames:
+        low._frame_buffer.append(dict(zip(("a b", "a/b"), images)))
+    else:
+        low.save_camera_name = "a b"
+        low._wrist_camera_name = "a/b"
+        low._frame_buffer.append(images[0])
+        low._wrist_frame_buffer = [images[1]]
+    ep.low_env = low
+    tap, _ = install_tap(low)
+    tap.attach(ep)
+    _, refs = tap.keyframe(None)
+    assert {ref["camera"] for ref in refs} == {"a b", "a/b"}
+    assert len({ref["path"] for ref in refs}) == 2
+    assert store.flush(20)
+    events, _, _ = read_events(ep.events_path)
+    frames = by_type(events, "frame")
+    assert {event["data"]["camera"] for event in frames} == {"a b", "a/b"}
+    paths = [ep.base_dir / ref["path"] for ref in refs]
+    assert all(path.is_file() for path in paths)
+    assert paths[0].read_bytes() != paths[1].read_bytes()
+
+
 class FakeModel:
     nbody = 3
 

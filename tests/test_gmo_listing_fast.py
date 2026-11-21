@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from capx_trace_viewer import gmo
+from capx_trace_viewer.gmo_api import GmoService
 
 
 class LocalRunner:
@@ -272,3 +274,23 @@ os.scandir = guarded
     assert row["events_bytes"] == (episode / "events.jsonl").stat().st_size
     # The same metadata row remains suitable for the exact fetch preflight.
     assert len(gmo._episode_files(LocalRunner(), settings, row).files) == 24
+
+
+def test_metadata_only_episode_has_unknown_size_and_does_not_compare_dummy_digest(tree, tmp_path):
+    episode, settings = tree
+    listing = gmo.list_remote_episodes(LocalRunner(), settings,
+                                      run_ids=("evaluation",), metadata_only=True)
+    row, = listing["episodes"]
+    service = GmoService(tmp_path / "dest", config_path=tmp_path / "config.json")
+    try:
+        remote = service._episode_view(row, set())
+        assert remote["local_state"] == "remote"
+        shutil.copytree(episode, service.dest / "evaluation" / "trial")
+        local = service._episode_view(row, set())
+        assert local["local_state"] == "local"
+        assert remote["size_bytes"] is None
+        assert remote["metadata_only"] is True
+        assert local["size_bytes"] is None
+        assert service._episode_view(row, {("evaluation", "trial")})["local_state"] == "fetching"
+    finally:
+        service.close()

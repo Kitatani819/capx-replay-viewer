@@ -397,6 +397,7 @@ export default function TraceViewerPage() {
     if (events.replaced && events.loading) return { text: 'events.jsonl が置き換えられたため読み直し中', tone: 'amber' };
     if (events.loading) return { text: '読み込み中', tone: 'gold' };
     if (remoteLive.status?.stopped_reason === 'replaced') return { text: '別の試行を追従しているため、リモートの更新を停止しました', tone: 'neutral' };
+    if (remoteLive.status?.stopped_reason === 'acquisition_failed') return { text: 'リモートの更新を開始できませんでした。Liveを入れ直すと再試行します', tone: 'amber' };
     if (remoteLive.status?.stopped_reason === 'settings_changed') return { text: '接続設定が変わったため、リモートの更新を停止しました', tone: 'neutral' };
     const remoteError = remoteLive.error || remoteLive.status?.last_error;
     if (remoteError) return { text: `リモートの更新を再試行中：${remoteError}`, tone: 'amber' };

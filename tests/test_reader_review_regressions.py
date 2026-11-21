@@ -41,6 +41,22 @@ def test_oversized_event_line_has_bounded_scan(tmp_path: Path, monkeypatch, term
             output.write(b"x")
 
 
+@pytest.mark.parametrize("max_bytes", [100, 4096])
+def test_event_line_limit_is_independent_of_page_budget(tmp_path: Path, monkeypatch, max_bytes):
+    path = tmp_path / "events.jsonl"
+    oversized = b'{"pad":"' + b"x" * 1500 + b'"}\n'
+    valid = b'{"seq":2}\n'
+    path.write_bytes(oversized + valid)
+    monkeypatch.setattr(reader, "MAX_LINE_BYTES", 1000)
+    page = reader.read_events_page(path, max_bytes=max_bytes)
+    assert page.corrupt_lines == 1
+    assert page.corrupt_offsets == (0,)
+    assert all("pad" not in event for event in page.events())
+    if not page.eof:
+        page = reader.read_events_page(path, page.next_offset, max_bytes=max_bytes)
+    assert page.events() == [{"seq": 2}]
+
+
 @pytest.mark.parametrize("prefix", [b'"x":NaN,', b""])
 def test_overflowing_event_numbers_are_valid_json_strings(tmp_path: Path, prefix):
     path = tmp_path / "events.jsonl"

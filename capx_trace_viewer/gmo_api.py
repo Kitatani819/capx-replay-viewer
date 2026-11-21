@@ -32,6 +32,12 @@ def _timestamp(value: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if value is None else value, timezone.utc).isoformat()
 
 
+class LiveLeaseConflict(Exception):
+    def __init__(self, status: dict[str, Any]) -> None:
+        super().__init__("Live lease was replaced")
+        self.status = status
+
+
 class GmoService:
     def __init__(self, dest: Path, config_path: str | Path | None = None) -> None:
         self.dest = dest
@@ -77,6 +83,8 @@ class GmoService:
         self._auto_confirmed: set[tuple[str, str]] = set()
         self._auto_last_full_check: float | None = None
         self._live: dict[str, Any] | None = None
+        # Retain only the latest lease after expiry, so its owner can resume it.
+        self._live_lease: dict[str, Any] | None = None
         self._live_settings: gmo.GmoSettings | None = None
         self._live_thread: threading.Thread | None = None
         self._live_cycle_thread: threading.Thread | None = None
@@ -85,6 +93,7 @@ class GmoService:
             "following": False, "run_id": None, "episode_id": None,
             "last_ok_at": None, "last_error": None, "interval_s": LIVE_INTERVAL_S,
             "copied_bytes": 0, "stopped_reason": None,
+            "lease_token": None,
         }
 
     @property
@@ -133,7 +142,7 @@ class GmoService:
             return dict(self._live_status)
 
     def follow(self, run_id: str, episode_id: str) -> dict[str, Any]:
-        """Start one remote follower, or renew its lease without another listing."""
+        """Acquire one remote follower; legacy callers may acquire repeatedly."""
         key = (run_id, episode_id)
         with self._lock:
             if self._closed:
@@ -141,6 +150,8 @@ class GmoService:
             settings = self.load_settings()
             if self._live and self._live["key"] == key and self._live["settings"] == settings:
                 self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
+                self._live["settings_generation"] = self._generation
+                self._live["lease_token"] = self._live_status["lease_token"] = uuid.uuid4().hex
                 self._live_wake.set()
                 return dict(self._live_status)
             if (self._live_status["stopped_reason"] == "episode_ended"
@@ -155,6 +166,8 @@ class GmoService:
                 raise gmo.FetchError("GMO settings changed during listing; please retry")
             if self._live and self._live["key"] == key and self._live["settings"] == settings:
                 self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
+                self._live["settings_generation"] = self._generation
+                self._live["lease_token"] = self._live_status["lease_token"] = uuid.uuid4().hex
                 return dict(self._live_status)
             stopped = self._stop_live_locked("replaced")
             self._live_settings = settings
@@ -162,11 +175,14 @@ class GmoService:
                 "key": key, "row": row, "settings": settings, "runner": gmo.ProcessRunner(),
                 "lease_until": time.monotonic() + LIVE_LEASE_S, "next": time.monotonic(),
                 "failures": 0, "end_seen": False, "offset": 0, "generation": None,
+                "lease_token": uuid.uuid4().hex, "settings_generation": generation,
             }
+            self._live_lease = self._live
             self._live_status = {
                 "following": True, "run_id": run_id, "episode_id": episode_id,
                 "last_ok_at": None, "last_error": None, "interval_s": LIVE_INTERVAL_S,
                 "copied_bytes": 0, "stopped_reason": None,
+                "lease_token": self._live["lease_token"],
             }
             if self._live_thread is None:
                 self._live_thread = threading.Thread(target=self._live_loop, name="capx-gmo-live", daemon=True)
@@ -176,6 +192,27 @@ class GmoService:
             stopped.close()
         self._live_wake.set()
         return status
+
+    def renew(self, run_id: str, episode_id: str, lease_token: str) -> dict[str, Any]:
+        """Extend or resume only this lease, with ownership checked under the lock."""
+        with self._lock:
+            lease = self._live_lease
+            if (self._closed or lease is None or lease["lease_token"] != lease_token
+                    or lease["key"] != (run_id, episode_id)
+                    or lease["settings_generation"] != self._generation
+                    or lease["settings"] != self.load_settings()):
+                raise LiveLeaseConflict(dict(self._live_status))
+            if self._live is None:
+                if self._live_status["stopped_reason"] != "lease_expired":
+                    return dict(self._live_status)
+                # The expired runner may still be closing outside the lock.
+                # A fresh runner resumes the saved lease without any acquisition.
+                self._live = dict(lease, runner=gmo.ProcessRunner(), failures=0, next=time.monotonic())
+                self._live_lease = self._live
+                self._live_status.update(following=True, stopped_reason=None)
+            self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
+            self._live_wake.set()
+            return dict(self._live_status)
 
     def _live_loop(self) -> None:
         # This monitor stays responsive while a manifest/rsync is in flight. A
@@ -189,7 +226,8 @@ class GmoService:
                 live = self._live
                 if live is not None:
                     try:
-                        changed = live["settings"] != self.load_settings()
+                        changed = (live["settings_generation"] != self._generation
+                                   or live["settings"] != self.load_settings())
                     except (gmo.FetchError, OSError) as exc:
                         changed = True
                         self._live_status["last_error"] = str(exc)[-300:]
@@ -601,7 +639,8 @@ class GmoService:
         )
         summary.update({
             "owner": row["owner"], "mine": row["mine"],
-            "size_bytes": row["size_bytes"],
+            "size_bytes": None if row.get("metadata_only") else row["size_bytes"],
+            **({"metadata_only": True} if row.get("metadata_only") else {}),
             **({"size_approximate": True} if row.get("size_approximate") else {}),
             "local_state": "fetching" if (row["run_id"], row["episode_id"]) in pending
             else gmo.local_state(row, self.dest),
@@ -887,6 +926,24 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False,
             raise HTTPException(400, "Valid run_id and episode_id are required")
         try:
             return json_response(await run_in_threadpool(service.follow, data["run_id"], data["episode_id"]))
+        except (gmo.FetchError, OSError) as exc:
+            raise HTTPException(502, str(exc)[-300:]) from exc
+
+    @router.post("/live/renew")
+    async def renew_live(request: Request):
+        try:
+            data = await request.json()
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid JSON body") from exc
+        if (not isinstance(data, dict) or set(data) != {"run_id", "episode_id", "lease_token"}
+                or not reader.is_valid_id(data.get("run_id")) or not reader.is_valid_id(data.get("episode_id"))
+                or not isinstance(data.get("lease_token"), str) or not 0 < len(data["lease_token"]) <= 128):
+            raise HTTPException(400, "Valid run_id, episode_id and lease_token are required")
+        try:
+            return json_response(await run_in_threadpool(
+                service.renew, data["run_id"], data["episode_id"], data["lease_token"]))
+        except LiveLeaseConflict as exc:
+            return json_response({"error": "lease_replaced", "status": exc.status}, status_code=409)
         except (gmo.FetchError, OSError) as exc:
             raise HTTPException(502, str(exc)[-300:]) from exc
 

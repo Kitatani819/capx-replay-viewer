@@ -238,19 +238,20 @@ def main(argv: list[str] | None = None) -> int:
             runs = [r for r in runs if r.run_id in wanted]
         check_runs(runs)
         traces = args.dest.resolve()
-        plan = [(run, pending_bytes(run, traces / run.run_id)) for run in runs]
-        total = sum(n for _, n in plan)
+        plan = [(run, changed_files(run, traces / run.run_id)) for run in runs]
+        total = sum(size for _, files in plan for _, size, _ in files)
         print(f"{len(runs)} run(s) on {args.host}; {human(total)} to copy into {traces}")
-        for run, n in plan:
-            state = "up to date" if n == 0 else f"copy {human(n)}"
+        for run, files in plan:
+            n = sum(size for _, size, _ in files)
+            state = f"copy {human(n)}" if files else "up to date"
             print(f"  {run.run_id}  episodes={run.n_episodes}  size={human(run.size)}  {state}")
         if args.list:
             return 0
         if total > args.max_gb * 1024**3:
             raise FetchError(f"{human(total)} exceeds --max-gb {args.max_gb:g}; choose runs with --run "
                              "(GMO forbids transfers of 1 GB or more through the login node)")
-        for run, n in plan:
-            if n:
+        for run, files in plan:
+            if files:
                 rsync_run(args.ssh, args.host, run, traces / run.run_id)
         print(f"Done. Open with: bash Start-Replay.sh --trace-root {traces}")
         return 0
@@ -1082,6 +1083,10 @@ def local_state(row: dict[str, Any], dest: Path) -> str:
     stats = local_episode_stats(dest / row["run_id"] / row["episode_id"])
     if stats is None:
         return "remote"
+    if row.get("metadata_only"):
+        # This lookup did not measure remote files; its placeholder digest
+        # cannot establish that an existing local copy is stale.
+        return "local"
     return "local" if stats[3] == row["files_digest"] else "stale"
 
 

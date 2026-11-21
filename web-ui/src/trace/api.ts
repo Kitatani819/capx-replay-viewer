@@ -228,8 +228,9 @@ export interface GmoEpisodeSummary extends EpisodeSummary {
   run_id: string;
   owner: string;
   mine: boolean;
-  size_bytes: number;
+  size_bytes: number | null;
   size_approximate?: boolean;
+  metadata_only?: boolean;
   local_state: 'remote' | 'local' | 'stale' | 'fetching';
   conflict: boolean;
 }
@@ -280,6 +281,7 @@ export interface GmoLiveStatus {
   interval_s: number;
   copied_bytes: number;
   stopped_reason: string | null;
+  lease_token?: string | null;
 }
 
 /** A server started without --gmo has no GMO routes. */
@@ -358,6 +360,10 @@ export const gmoApi = {
 
   follow(runId: string, episodeId: string, signal?: AbortSignal): Promise<GmoLiveStatus> {
     return gmoJson('/live', signal, 'POST', { run_id: runId, episode_id: episodeId });
+  },
+
+  renew(runId: string, episodeId: string, leaseToken: string, signal?: AbortSignal): Promise<GmoLiveStatus> {
+    return gmoJson('/live/renew', signal, 'POST', { run_id: runId, episode_id: episodeId, lease_token: leaseToken });
   },
 
   auto(signal?: AbortSignal): Promise<GmoAutoStatus> {

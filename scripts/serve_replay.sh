@@ -102,6 +102,6 @@ if [[ -n "$from_gmo" ]]; then
     server_args+=(--gmo)
 fi
 if [[ -n "$rtx_config" ]]; then
-    server_args+=(--site "rtx=RTX,$rtx_config,$project_dir/outputs/rtx/traces")
+    server_args+=(--site-fields rtx RTX "$rtx_config" "$project_dir/outputs/rtx/traces")
 fi
 exec "$python_bin" -m capx_trace_viewer.server "${server_args[@]}"
