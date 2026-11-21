@@ -97,3 +97,39 @@ test('competition API details show the inherited definition and their own record
   assert.match(details, /RECORDED_JOINTS/);
   assert.doesNotMatch(details, /説明未登録/);
 });
+
+test('unregistered API details show the recorded definition, optional doc, and recording note', () => {
+  for (const doc of ['Grasp the requested widget.', null]) {
+    const r = new Rec(); r.episodeStart();
+    const block = r.blockStart(null, 'grasp_widget(label)');
+    const api = r.apiStart(block, 'grasp_widget', { label: 'widget-value' }, null, {
+      signature: '(label: str) -> bool', doc,
+    });
+    r.apiEnd(api, true);
+    const model = buildEpisodeModel(r.events);
+    const html = renderToStaticMarkup(<RecordedApiDetails ep={ep} node={model.nodeOfEvent.get(api.event_id)!}/>);
+    assert.match(html, /<pre>grasp_widget\(label: str\) -&gt; bool<\/pre>/);
+    assert.match(html, /class="api-python-muted">この試行で記録された定義です。<\/p>/);
+    if (doc) assert.ok(html.includes(`<p>${doc}</p>`));
+    else assert.doesNotMatch(html, /Grasp the requested widget/);
+    assert.doesNotMatch(html, /説明未登録|参照実装/);
+    assert.match(html, /widget-value/);
+  }
+});
+
+test('registered API details retain the reference definition and add the recorded definition below it', () => {
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null, 'goto_pose(target)');
+  const api = r.apiStart(block, 'goto_pose', {}, null, {
+    signature: '(target: str) -> bool', doc: 'Move to the widget target.',
+  });
+  const model = buildEpisodeModel(r.events);
+  const html = renderToStaticMarkup(<RecordedApiDetails ep={ep} node={model.nodeOfEvent.get(api.event_id)!}/>);
+  assert.match(html, /Go to pose using Inverse Kinematics/);
+  assert.match(html, /<pre>goto_pose\(position: np\.ndarray/);
+  assert.match(html, /実装・バージョンとの一致は未確認/);
+  assert.match(html, /<pre>goto_pose\(target: str\) -&gt; bool<\/pre>/);
+  assert.match(html, /<p>Move to the widget target\.<\/p>/);
+  assert.match(html, /この試行で記録された定義です。/);
+  assert.ok(html.indexOf('実装・バージョンとの一致は未確認') < html.indexOf('goto_pose(target: str)'));
+});

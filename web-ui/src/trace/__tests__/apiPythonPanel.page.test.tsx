@@ -52,6 +52,28 @@ test('hover and focus preview an API without selecting it; clicks and block navi
   } finally { panel.unmount(); }
 });
 
+test('API hover previews prefer the registered summary and then recorded doc before the missing description', async () => {
+  resetBrowser();
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null, 'grasp_widget(label)');
+  r.apiStart(block, 'grasp_widget', {}, null, { doc: 'Grasp the requested widget.' });
+  r.apiStart(block, 'goto_pose', {}, null, { doc: 'Move to the widget target.' });
+  r.apiStart(block, 'inspect_widget');
+  const model = buildEpisodeModel(r.events);
+  const panel = mount(ApiPythonPanel, { model, ep: { runId: 'run', episodeId: 'ep' },
+    apiCues: [], selectedKey: null, onSelect() {} });
+  const target = { getBoundingClientRect: () => ({ left: 40, bottom: 80 }) };
+  try {
+    const expected = ['Grasp the requested widget.', '逆運動学を使ってロボットの手先を指定した位置・姿勢へ移動します。', '説明未登録'];
+    for (let i = 0; i < expected.length; i++) {
+      const rows = findAll(panel.output, 'button').filter(row => row.props['data-api-event']);
+      (rows[i].props.onMouseEnter as Function)({ currentTarget: target }); await advance(0);
+      const tooltip = findAll(panel.output, 'div').find(item => item.props.role === 'tooltip')!;
+      assert.equal(tooltip.props.children, expected[i]);
+    }
+  } finally { panel.unmount(); }
+});
+
 test('resizing the API and Python panes preserves manual scroll and keeps a visible selection in view on shrink', () => {
   resetBrowser();
   const r = new Rec();

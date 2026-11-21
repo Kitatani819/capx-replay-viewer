@@ -586,13 +586,17 @@ never happen; it also counts a gap.
 `stdout`, `stderr`: one of each per code block, holding exactly what `step()` returned:
 `code_block_id`, `text` (inline up to 4000 characters, else a text asset) and `length`.
 
-`api_call_start`: `api_call_id`, `name`, `qualname`, `api_class`, `depth` (0 for a call
-from the generated code, 1 and more for an API called by another API), `privileged`,
+`api_call_start`: `api_call_id`, `name`, `signature` (the called function's parameters
+and return annotation without `self`, capped at 500 characters, or null), `doc` (the
+first non-empty docstring line, capped at 300 characters, or null), `qualname`,
+`api_class`, `depth` (0 for a call from the generated code, 1 and more for an API
+called by another API), `privileged`,
 `args`, `units` (section 5.3), `call_site`, `stdout_offset`, `stderr_offset`, `frame_ref`
 and `state_ref`. For depth 0, `call_site` is the line of the generated code that led to
 the call, `{code_block_id, line, source_line}`, plus `function`, `function_line` and
 `function_source_line` when the call came from a function the code defined
 (`function_defined_in_earlier_block` when that function came from an earlier block).
+Traces recorded before these definition fields were added do not have `signature` or `doc`.
 
 `api_call_end`, `api_call_error`: `api_call_id`, `name`, `depth`, `duration_s`,
 `stdout_slice` and `stderr_slice` (`{start, end, text}`: what this call printed),

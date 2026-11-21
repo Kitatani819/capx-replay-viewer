@@ -70,6 +70,8 @@ MAX_SLICE_BUFFER_CHARS = 8 * 1024 * 1024
 _INSTALLED: dict[int, tuple[Any, list[str]]] = {}
 _INSTALL_LOCK = threading.Lock()
 _SIGNATURES: dict[int, inspect.Signature | None] = {}
+_DEFINITIONS: dict[int, tuple[str | None, str | None]] = {}
+_DEFINITION_LOCK = threading.RLock()
 _WRAPPED_FUNCS: dict[tuple[int, str], Any] = {}
 
 
@@ -81,11 +83,76 @@ _WRAPPED_FUNCS: dict[tuple[int, str], Any] = {}
 def _signature(func: Any) -> inspect.Signature | None:
     key = id(func)
     if key not in _SIGNATURES:
-        try:
-            _SIGNATURES[key] = inspect.signature(func)
-        except (TypeError, ValueError):
-            _SIGNATURES[key] = None
+        with _DEFINITION_LOCK:
+            if key not in _SIGNATURES:
+                try:
+                    _SIGNATURES[key] = inspect.signature(func)
+                except Exception as exc:  # noqa: BLE001
+                    if is_trial_alarm(exc):
+                        raise
+                    _SIGNATURES[key] = None
     return _SIGNATURES[key]
+
+
+class _DefinitionRepr:
+    """Already-formatted text for inspect's parameter/signature rendering."""
+
+    __slots__ = ("text",)
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __repr__(self) -> str:
+        return self.text
+
+
+def _cap_definition(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _definition_annotation(annotation: Any) -> Any:
+    if annotation is inspect.Signature.empty:
+        return annotation
+    text = annotation if isinstance(annotation, str) else inspect.formatannotation(annotation)
+    return _DefinitionRepr(text)
+
+
+def _recorded_definition(func: Any) -> tuple[str | None, str | None]:
+    key = id(func)
+    if key not in _DEFINITIONS:
+        # _signature uses the same reentrant lock, including when argument
+        # binding and the first definition read happen on different threads.
+        with _DEFINITION_LOCK:
+            if key not in _DEFINITIONS:
+                signature = doc = None
+                try:
+                    sig = _signature(func)
+                    if sig is not None:
+                        params = []
+                        for param in list(sig.parameters.values())[1:]:  # drop self
+                            default = param.default
+                            if default is not inspect.Parameter.empty:
+                                default = _DefinitionRepr(_cap_definition(repr(default), 80))
+                            params.append(param.replace(
+                                default=default, annotation=_definition_annotation(param.annotation)))
+                        rendered = sig.replace(
+                            parameters=params,
+                            return_annotation=_definition_annotation(sig.return_annotation))
+                        signature = _cap_definition(str(rendered), 500)
+                except Exception as exc:  # noqa: BLE001
+                    if is_trial_alarm(exc):
+                        raise
+                try:
+                    text = inspect.getdoc(func)
+                    if text:
+                        doc = next((line.strip() for line in text.splitlines() if line.strip()), None)
+                        if doc is not None:
+                            doc = _cap_definition(doc, 300)
+                except Exception as exc:  # noqa: BLE001
+                    if is_trial_alarm(exc):
+                        raise
+                _DEFINITIONS[key] = signature, doc
+    return _DEFINITIONS[key]
 
 
 def bind_arguments(func: Any, self_obj: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
@@ -313,6 +380,7 @@ def _api_before(api: Any, func: Any, name: str, args: tuple, kwargs: dict, calle
     budget = ArrayBudget(ep.config.array_call_bytes, ep)
     bound = bind_arguments(func, api, args, kwargs)
     arg_summary = summarize_arguments(bound, pending, budget, label="value")
+    signature, doc = _recorded_definition(func)
     api_class = type(api).__name__
     rec = C.ApiCallCtx(event_id, ep, name, depth)
     rec.api = api
@@ -324,6 +392,8 @@ def _api_before(api: Any, func: Any, name: str, args: tuple, kwargs: dict, calle
     data: dict[str, Any] = {
         "api_call_id": event_id,
         "name": name,
+        "signature": signature,
+        "doc": doc,
         "qualname": getattr(func, "__qualname__", name),
         "api_class": api_class,
         "depth": depth,
