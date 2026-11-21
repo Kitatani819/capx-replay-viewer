@@ -127,8 +127,8 @@ def test_local_logical_scores_match_header_and_include_retry_counts(tmp_path, st
     summary = header["summary"]
     assert (summary["success"], summary["trials"], summary["attempts"]) == (1, 2, 3)
     assert eval_index._score(summary) in html
-    assert "1 / 2（やり直しを含めると 3 回）" in html
-    assert "task-a: 1 / 1（やり直しを含めると 2 回）" in html
+    assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
+    assert 'task-a: 1 / 1<span class="attempts">（やり直しを含めると 2 回）</span>' in html
     assert "task-b: 0 / 1<span" in html
     for task, counts in summary["by_task"].items():
         assert f"{task}: {eval_index._score(counts)}" in html
@@ -159,7 +159,7 @@ def test_unavailable_episodes_keep_stored_summary(tmp_path, monkeypatch, problem
     html = page(tmp_path)
     assert eval_index._score(value["summary"]) in html
     if stored == "logical_with_attempts":
-        assert "1 / 2（やり直しを含めると 3 回）" in html
+        assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
     else:
         assert "やり直しを含めると" not in html
 
@@ -185,9 +185,9 @@ def test_optional_episode_reads_never_follow_symlinks(tmp_path, target):
         (path.parent / "runner_records.jsonl").symlink_to(runner)
     html = page(root)
     if target == "runner_records":
-        assert "1 / 2（やり直しを含めると 3 回）" in html
+        assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
     else:
-        assert "1 / 2（やり直しを含めると 3 回）" not in html
+        assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' not in html
     assert any(link.endswith("/ev-retried") for link in Markup(html).links)
 
 

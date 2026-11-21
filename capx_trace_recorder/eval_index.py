@@ -311,7 +311,7 @@ caption {
   color: var(--text);
   border-bottom: 1px solid var(--line-subtle);
 }
-th, td { text-align: left; vertical-align: top; padding: 15px 20px; }
+th, td { text-align: left; vertical-align: top; padding: 15px 14px; }
 th {
   font-weight: 600;
   font-size: 12px;
@@ -323,7 +323,7 @@ th {
 }
 tbody + tbody { border-top: 1px solid var(--line-subtle); }
 tbody:hover { background: var(--hover); }
-td { overflow-wrap: anywhere; max-width: 320px; min-width: 100px; }
+td { overflow-wrap: anywhere; max-width: 320px; min-width: 80px; }
 .date, .score, .duration, .commit, .open { white-space: nowrap; }
 .date, .duration, .commit, .eval-id {
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -339,6 +339,7 @@ td { overflow-wrap: anywhere; max-width: 320px; min-width: 100px; }
   font-variant-numeric: tabular-nums;
 }
 .rate { display: block; font-size: 12px; font-weight: 500; margin-top: 2px; }
+.attempts { display: block; white-space: normal; font-size: 12px; font-weight: 500; margin-top: 2px; }
 .eval-id { display: block; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
 .route-tag {
   display: block;
@@ -419,7 +420,8 @@ def _score(summary: dict[str, Any] | None) -> str:
     trials, success = summary["trials"], summary["success"]
     rate = f"{success / trials * 100:.1f}%" if trials else "—"
     attempts = summary.get("attempts", trials)
-    note = f'（やり直しを含めると {_escape(attempts)} 回）' if attempts > trials else ""
+    # On its own line, so the count column stays narrow enough for the table to fit a laptop screen.
+    note = f'<span class="attempts">（やり直しを含めると {_escape(attempts)} 回）</span>' if attempts > trials else ""
     return f'{_escape(success)} / {_escape(trials)}{note}<span class="rate">{_escape(rate)}</span>'
 
 
