@@ -52,3 +52,33 @@ test('an episode exception stays visible while collapsed even when its status is
   assert.match(html, /text-red-300[^>]*>RuntimeError: episode exception marker/);
   assert.doesNotMatch(html, /end_reason=exception/);
 });
+
+test('an opened API card shows the definition first and keeps argument values in a closed toggle', () => {
+  const r = new Rec();
+  r.episodeStart();
+  const block = r.blockStart(null, 'goto_pose(p, q)');
+  const known = r.apiStart(block, 'goto_pose', { position: [0.1, 0.2, 0.3], quaternion_wxyz: [1, 0, 0, 0] });
+  r.apiEnd(known, null);
+  const unknown = r.apiStart(block, 'custom_move', { target: 'value-marker', '<truncated>': 'node_limit' });
+  r.apiError(unknown, 'RuntimeError', 'error-marker');
+  r.blockEnd(block, 0, 0);
+  const model = buildEpisodeModel(r.events);
+  const render = (event: { event_id: string }) => {
+    const node = model.allNodes.find(n => n.primary.event_id === event.event_id)!;
+    return renderToStaticMarkup(<Timeline model={model} ep={{ runId: 'run', episodeId: 'ep' }} running={false}
+      selectedKey={node.key} selectedEventId={event.event_id} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  };
+  const html = render(known);
+  const signature = html.indexOf('goto_pose(position: np.ndarray, quaternion_wxyz: np.ndarray, z_approach: float = 0.0) -&gt; None');
+  const toggle = html.indexOf('<details class="text-[11px]" data-api-values="">');
+  assert.ok(signature > 0 && toggle > signature, 'definition comes before the closed toggle');
+  assert.match(html, /<summary[^>]*>引数と戻り値<\/summary>/);
+  assert.match(html.slice(toggle), /position = \[0\.1, 0\.2, 0\.3\]/);
+  assert.match(html.slice(toggle), /quaternion_wxyz = \[1, 0, 0, 0\]/);
+  const other = render(unknown);
+  assert.match(other, /data-api-signature="">custom_move\(target\)<span[^>]*>定義は未登録（記録された引数名）/);
+  assert.match(other, /target = &quot;value-marker&quot;/);
+  assert.match(other, /…（記録上限のため、ほかの引数は省略）/);
+  // The error stays visible outside the folded values.
+  assert.match(other, /<\/details><div class="text-\[11px\] font-mono text-red-300[^>]*>✕ RuntimeError: error-marker/);
+});

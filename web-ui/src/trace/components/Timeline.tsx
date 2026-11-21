@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { episodeArrayImageUrl, episodeFileUrl } from '../api';
+import { apiDefinition } from '../apiDefinitions';
 import { dataAssetRef, isOversize } from '../dataAsset';
 import { firstLines, fmtDuration, fmtNum, truncate } from '../format';
 import { useFullText, useStoredState } from '../hooks';
@@ -898,6 +899,34 @@ function CodeBlockBody({ node, onSelect }: BodyProps) {
   );
 }
 
+/** One line per recorded argument (`name = value`); a positional or unnamed record is one line. */
+function apiArgumentLines(args: unknown): string[] {
+  if (args === undefined || args === null) return ['引数は未記録'];
+  if (typeof args !== 'object' || Array.isArray(args)) return [`引数 = ${argsSummary(args, 240)}`];
+  const entries = Object.entries(args as Record<string, unknown>);
+  if (entries.length === 0) return ['引数なし'];
+  return entries.map(([key, value]) => (key === '<truncated>' ? '…（記録上限のため、ほかの引数は省略）' : `${key} = ${valueSummary(value, 240)}`));
+}
+
+/** The API's definition: the registered CaP-X signature, else the name with the recorded argument names. */
+function ApiSignature({ node }: { node: TNode }) {
+  const d = dataOf(node.primary, 'api_call_start');
+  const definition = apiDefinition(node);
+  if (definition) {
+    return <div className="text-[12px] font-mono text-text-primary break-all" data-api-signature="" title={definition.summaryJa}>{definition.signature}</div>;
+  }
+  const args = d.args;
+  const names = args && typeof args === 'object' && !Array.isArray(args)
+    ? Object.keys(args as Record<string, unknown>).filter((key) => key !== '<truncated>')
+    : [];
+  return (
+    <div className="text-[12px] font-mono text-text-primary break-all" data-api-signature="">
+      {d.name ?? d.qualname ?? 'API'}({names.join(', ')})
+      <span className="ml-1.5 font-sans text-[10px] text-text-muted">定義は未登録（記録された引数名）</span>
+    </div>
+  );
+}
+
 function ApiCallBody({ node, model, ep }: BodyProps) {
   const d = dataOf(node.primary, 'api_call_start');
   const endEv = node.end;
@@ -923,8 +952,15 @@ function ApiCallBody({ node, model, ep }: BodyProps) {
         {d.privileged === true && <Badge tone="amber">privileged</Badge>}
         {d.call_site?.line ? <span className="text-text-tertiary">行 {d.call_site.line}</span> : null}
       </div>
-      <div className="text-[11px] font-mono text-text-secondary break-all">({argsSummary(d.args, 140)})</div>
-      {endEv && !isErr && <div className="text-[11px] font-mono text-emerald-300/90 break-all">→ {valueSummary(ed?.return, 140)}</div>}
+      <ApiSignature node={node} />
+      <details className="text-[11px]" data-api-values="">
+        <summary className="cursor-pointer select-none text-text-tertiary hover:text-text-secondary">引数と戻り値</summary>
+        <div className="mt-0.5 space-y-0.5 pl-3 font-mono break-all">
+          {apiArgumentLines(d.args).map((line, i) => <div key={i} className="text-text-secondary">{line}</div>)}
+          {endEv && !isErr && <div className="text-emerald-300/90">→ {valueSummary(ed?.return, 240)}</div>}
+          {!endEv && <div className="text-text-muted">戻り値は未記録（終了イベントなし）</div>}
+        </div>
+      </details>
       {isErr && (
         <div className="text-[11px] font-mono text-red-300 break-all">
           ✕ {ed?.error_type ?? 'Error'}: {truncate(textOf(ed?.message), 160)}
