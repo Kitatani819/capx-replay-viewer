@@ -69,7 +69,7 @@ test('LiveCameras plays every saved frame in recorded order a few seconds behind
   const cameras = mount(LiveCameras, { model: buildEpisodeModel(rec.events), ep });
   try {
     const seen: string[] = [];
-    for (let step = 0; step <= 30; step++) {
+    for (let step = 0; step <= Math.ceil(6000 / PLAYBACK_TICK_MS); step++) {
       const front = shownSources(cameras)[0];
       if (seen.at(-1) !== front) seen.push(front);
       await advance(PLAYBACK_TICK_MS);
@@ -78,6 +78,26 @@ test('LiveCameras plays every saved frame in recorded order a few seconds behind
     assert.ok(shownSources(cameras)[1].endsWith('wrist/e0_4.jpg'), 'each camera reaches its newest frame');
     await advance(10_000);
     assert.ok(shownSources(cameras)[0].endsWith('front/e0_4.jpg'), 'playback never runs past the record');
+  } finally { cameras.unmount(); }
+});
+
+test('a fast burst (30 frames in one second) plays smoothly, not as a few jumps', async () => {
+  resetBrowser();
+  const rec = new Rec(); rec.episodeStart();
+  for (let i = 0; i < 30; i++) frame(rec, 'front', i, 1 - i / 30);
+  const cameras = mount(LiveCameras, { model: buildEpisodeModel(rec.events), ep });
+  try {
+    const seen: string[] = [];
+    for (let step = 0; step <= Math.ceil((LIVE_DELAY_S + 2) * 1000 / PLAYBACK_TICK_MS); step++) {
+      const front = shownSources(cameras)[0];
+      if (seen.at(-1) !== front) seen.push(front);
+      await advance(PLAYBACK_TICK_MS);
+    }
+    // At 20 steps a second, a one-second burst shows about 20 distinct frames in order.
+    assert.ok(seen.length >= 18, `only ${seen.length} distinct frames shown`);
+    const order = seen.map(src => Number(/e0_(\d+)\.jpg$/.exec(src)![1]));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b));
+    assert.equal(order.at(-1), 29);
   } finally { cameras.unmount(); }
 });
 
