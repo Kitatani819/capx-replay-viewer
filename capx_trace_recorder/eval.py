@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import copy
 import datetime as dt
 import getpass
@@ -15,7 +14,7 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -26,6 +25,8 @@ from capx_trace_recorder import eval_resume
 
 HEARTBEAT_INTERVAL_S = 60.0
 WORKER_WAIT_TIMEOUT_S = 60.0
+INDEX_REBUILD_TIMEOUT_S = 5.0
+_INDEX_REBUILD_LOCK = threading.Lock()
 # Unused extension point for objects with publish(eval_record).
 SINKS: list[Any] = []
 
@@ -46,12 +47,32 @@ def _rebuild_index(trace_root: Path, *, enabled: bool) -> None:
     """Publish the shared list without changing the evaluation's outcome."""
     if not enabled or os.environ.get("CAPX_EVAL_INDEX", "").strip() == "0":
         return
-    try:
-        from capx_trace_recorder.eval_index import build_index
+    # A blocked shared-storage scan must not delay command launch or shutdown.
+    # Keep at most one automatic builder alive in this supervisor, including
+    # after its caller's deadline. A daemon never holds up supervisor exit.
+    if not _INDEX_REBUILD_LOCK.acquire(blocking=False):
+        return
 
-        build_index(trace_root.parent)
+    def rebuild() -> None:
+        try:
+            from capx_trace_recorder.eval_index import build_index
+
+            build_index(trace_root.parent, lock_timeout=0.0)
+        except Exception as exc:
+            print(f"eval: warning: index rebuild failed ({type(exc).__name__})", file=sys.stderr)
+        finally:
+            _INDEX_REBUILD_LOCK.release()
+
+    worker = threading.Thread(target=rebuild, name="capx-eval-index", daemon=True)
+    try:
+        worker.start()
     except Exception as exc:
+        _INDEX_REBUILD_LOCK.release()
         print(f"eval: warning: index rebuild failed ({type(exc).__name__})", file=sys.stderr)
+        return
+    worker.join(timeout=INDEX_REBUILD_TIMEOUT_S)
+    if worker.is_alive():
+        print("eval: warning: index rebuild deadline exceeded", file=sys.stderr)
 
 
 def _git_commit(repo: Path) -> str | None:
@@ -97,21 +118,15 @@ def git_revision(repo: Path, *, trust_repo: bool = False) -> dict[str, Any] | No
         return result.stdout
 
     try:
-        with contextlib.ExitStack() as stack:
-            if trust_repo:
-                temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="capx-eval-git-")))
-                config = temporary / "config"
-                value = (str(repo.resolve()).replace("\\", "\\\\").replace('"', '\\"')
-                         .replace("\n", "\\n").replace("\t", "\\t").replace("\b", "\\b"))
-                config.write_text(f'[safe]\n\tdirectory = "{value}"\n', encoding="utf-8")
-                git_env["GIT_CONFIG_GLOBAL"] = str(config)
+        from capx_trace_recorder.code_changes import trusted_git_environment
+        with trusted_git_environment(repo, trust_repo, git_env) as git_env:
             commit = git("rev-parse", "HEAD").decode("ascii").strip()
             from capx_trace_recorder.code_changes import without_git_filters
             git_env.update(without_git_filters(git_env, git("config", "--null", "--name-only", "--list")))
-            dirty = bool(git("status", "--porcelain", "--ignore-submodules=all"))
+            dirty = bool(git("status", "--porcelain", "--ignore-submodules=none"))
             revision: dict[str, Any] = {"commit": commit, "dirty": dirty}
             if dirty:
-                revision["diff_sha256"] = hashlib.sha256(git("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "HEAD")).hexdigest()
+                revision["diff_sha256"] = hashlib.sha256(git("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "HEAD")).hexdigest()
             return revision
     except (OSError, UnicodeError, ValueError, subprocess.TimeoutExpired):
         commit = _git_commit(repo)
@@ -187,6 +202,7 @@ def finalize_trial_outcomes(trace_root: Path, run_id: str) -> int:
     """
     count = 0
     with reader.Dir.open_below(trace_root, [run_id]) as run:
+        runner_records = reader.runner_records_at(run)["records"]
         for name in run.names():
             if not reader.is_valid_id(name):
                 continue
@@ -207,7 +223,7 @@ def finalize_trial_outcomes(trace_root: Path, run_id: str) -> int:
                     continue
                 context = raw.get("stop_context") or {}
                 recovered = reader.trial_end_classification_at(
-                    directory, reader.episode_summary_from_metadata(run_id, name, raw))
+                    directory, reader.episode_summary_from_metadata(run_id, name, raw), runner_records)
                 known = recovered.get("verdict") in ("success", "failure")
                 success = (isinstance(harness, dict) and harness.get("task_completed") is True
                            or isinstance(context, dict) and context.get("success_policy") == "per_cycle_sticky"
@@ -264,16 +280,26 @@ def job_end_main(words: Sequence[str] | None = None) -> int:
         parser.error("invalid job metadata")
     # Reject symlinks beneath the requested root, as the viewer does.
     try:
-        with reader.Dir.open_root(args.trace_root) as root, root.subdir(args.run_id) as run:
+        with reader.Dir.open_root(args.trace_root) as root, root.subdir(args.run_id) as run, eval_resume.lock(run):
             record, error, _stat = reader.read_json_at(run, "eval.json", evals.MAX_EVAL_BYTES)
-        if error:
-            raise ValueError("cannot read eval.json")
-        evals.validate_eval_record(record, eval_id=args.run_id)
-        previous = record.get("job") or {}
-        if previous.get("job_id") not in (None, args.job_id):
-            raise ValueError("job id differs from the recorded job")
-        record["job"] = {**previous, **job}
-        _write_record(args.trace_root / args.run_id / "eval.json", record)
+            if error:
+                raise ValueError("cannot read eval.json")
+            evals.validate_eval_record(record, eval_id=args.run_id)
+            previous = record.get("job") or {}
+            segments = record.get("segments") or []
+            matching = [segment for segment in segments
+                        if (segment.get("job") or {}).get("job_id") == args.job_id]
+            if previous.get("job_id") not in (None, args.job_id) and not matching:
+                raise ValueError("job id differs from the recorded job")
+            if not matching and previous.get("job_id") in (None, args.job_id) and segments:
+                # Old records may only have the current top-level job context.
+                if (segments[-1].get("job") or {}).get("job_id") in (None, args.job_id):
+                    matching = [segments[-1]]
+            for segment in matching:
+                segment["job"] = {**(segment.get("job") or {}), **job}
+            if previous.get("job_id") == args.job_id or (not previous and (not matching or matching[-1] is segments[-1])):
+                record["job"] = {**previous, **job}
+            _write_record(args.trace_root / args.run_id / "eval.json", record, directory=run)
     except (OSError, ValueError) as exc:
         parser.error(str(exc))
     return 0
@@ -345,11 +371,19 @@ def run_eval(command: Sequence[str], *, trace_root: Path, changed: str = "",
                     raise ValueError("invalid completed trial inventory")
                 if not {eval_resume.trial_key(item) for item in saved_done} <= {eval_resume.trial_key(item) for item in completed}:
                     raise ValueError("a previously completed tuple is missing from the recording")
+                flags = (previous.get("summary") or {}).get("config_flags") or {}
+                if (flags.get("resume_inventory_incomplete") is True
+                        and {eval_resume.trial_key(item) for item in saved_done} != {eval_resume.trial_key(item) for item in completed}):
+                    raise ValueError("completed trial inventory is incomplete; restore it before resuming")
             history = copy.deepcopy(previous.get("segments") or [{
                 "index": 1, "status": previous["status"], "started_at": previous["started_at"],
                 "ended_at": previous["ended_at"], "end": previous["end"], "completed_before": 0,
                 "completed_after": len(completed), **({"job": previous["job"]} if "job" in previous else {}),
             }])
+            previous_job = previous.get("job")
+            if previous_job and (history[-1].get("job") or {}).get("job_id") in (None, previous_job["job_id"]):
+                # Older job-end versions imported facts only at the top level.
+                history[-1]["job"] = {**(history[-1].get("job") or {}), **previous_job}
             cumulative_used = 0.0
             for prior_segment in history:
                 if "budget" not in prior_segment:
@@ -483,7 +517,12 @@ def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, reco
         details = reader.run_detail(trace_root, eval_id) or {}
         completed_after = eval_resume.completed_trials(details.get("episodes", []))
         segment["completed_after"] = len(completed_after)
-        eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed_after)
+        try:
+            eval_resume.write_json(directory, eval_resume.COMPLETED_FILE, completed_after)
+        except (OSError, ValueError) as exc:
+            record["summary"]["config_flags"]["resume_inventory_incomplete"] = True
+            print(f"eval: completed trial inventory write failed ({type(exc).__name__}); resume evidence is incomplete",
+                  file=sys.stderr)
         try:
             _write_record(path, record, directory=directory)
         except (OSError, ValueError) as exc:

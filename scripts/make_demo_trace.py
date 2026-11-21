@@ -3187,6 +3187,35 @@ def keep_live(run_dir: Path, episode: EpisodeBuilder, scene: Scene, seconds: flo
     print("stopped; the episode will show as incomplete once its heartbeat is 30 s old")
 
 
+def write_root_unscoped(root: Path) -> None:
+    """Exclusively create the root log without following destination links.
+
+    Root logs already present belong to earlier runs and are left untouched.
+    Pin both directories so replacing a path cannot redirect the write.
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_fd = os.open(root, directory_flags)
+    try:
+        try:
+            os.mkdir("_unscoped", dir_fd=root_fd)
+        except FileExistsError:
+            pass
+        unscoped_fd = os.open("_unscoped", directory_flags, dir_fd=root_fd)
+        try:
+            try:
+                fd = os.open("unscoped.412301.jsonl", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o644, dir_fd=unscoped_fd)
+            except FileExistsError:
+                return
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps({"schema_version": SCHEMA, "run_id": None, "episode_id": None, "event_id": "ev_" + sha256_hex(b"orphan")[:20], "seq": 0, "event_type": "trace_warning", "status": "warning", "data": {"code": "ambiguous_episode", "message": "synthetic example", "related_event_id": None}}) + "\n")
+        finally:
+            os.close(unscoped_fd)
+    finally:
+        os.close(root_fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--out", default="outputs/traces_demo", help="trace root to write into")
@@ -3201,6 +3230,12 @@ def main(argv: list[str] | None = None) -> int:
         if not (run_dir / MARKER).exists():
             print(f"{run_dir} exists and was not written by this script; refusing to replace it", file=sys.stderr)
             return 2
+    try:
+        write_root_unscoped(root)
+    except OSError as exc:
+        print(f"cannot create root unscoped log: {exc}", file=sys.stderr)
+        return 2
+    if run_dir.exists():
         shutil.rmtree(run_dir)
     run_dir.mkdir(parents=True)
     (run_dir / MARKER).write_text("written by scripts/make_demo_trace.py\n")
@@ -3209,11 +3244,6 @@ def main(argv: list[str] | None = None) -> int:
     b, b_scene = build_episode_b(run_dir, now)
     c = build_episode_c(run_dir, now)
     write_run_files(run_dir, now, a, c)
-    unscoped = root / "_unscoped"
-    unscoped.mkdir(exist_ok=True)
-    (unscoped / "unscoped.412301.jsonl").write_text(
-        json.dumps({"schema_version": SCHEMA, "run_id": None, "episode_id": None, "event_id": "ev_" + sha256_hex(b"orphan")[:20], "seq": 0, "event_type": "trace_warning", "status": "warning", "data": {"code": "ambiguous_episode", "message": "synthetic example", "related_event_id": None}}) + "\n"
-    )
     for ep in (a, b, c):
         print(f"{ep.episode_id}: {len(ep.events)} events -> {ep.dir.relative_to(Path.cwd()) if ep.dir.is_relative_to(Path.cwd()) else ep.dir}")
     if args.live > 0:

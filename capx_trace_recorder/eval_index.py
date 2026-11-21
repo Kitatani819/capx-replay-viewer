@@ -15,10 +15,12 @@ import errno
 import fcntl
 import html
 import json
+import math
 import os
 import re
 import stat
 import sys
+import time
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -159,25 +161,156 @@ def _submission_directory(root: Path, submission_root):
         os.close(directory)
 
 
-def _logical_summary(directory: int, eval_id: str) -> dict[str, Any] | None:
-    """Use readable local episodes, retaining the scan's pinned no-symlink root."""
+def _covers_saved_population(summary: dict[str, Any], saved: dict[str, Any] | None) -> bool:
+    if saved is None:
+        return True
+    # Legacy summaries may count attempts in trials, or contain logical trials
+    # without attempts. Require every population size they do record.
+    attempts = saved.get("attempts")
+    if (attempts is not None and summary["attempts"] != attempts
+            or attempts is None and summary["attempts"] < saved["trials"]):
+        return False
+    for task, counts in saved.get("by_task", {}).items():
+        actual = summary["by_task"].get(task, {})
+        if actual.get("attempts", 0) < counts.get("attempts", counts["trials"]):
+            return False
+    seeds = saved.get("seeds")
+    if isinstance(seeds, list):
+        if not {seed for seed in seeds if type(seed) is int}.issubset(summary["seeds"]):
+            return False
+    return True
+
+
+def _standalone_logical_summary(directory: int, eval_id: str,
+                                saved: dict[str, Any] | None) -> tuple[dict[str, Any] | None, bool]:
+    """Correct complete, terminal episode-only records without viewer packages.
+
+    Runner matching and event fallbacks belong to the viewer reader. If those
+    inputs are needed, retain the recorded score rather than guess a verdict.
+    """
+    if saved is None:
+        return None, False
+    try:
+        os.stat("runner_records.jsonl", dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        pass
+    else:
+        return None, True
+    episodes = []
+    for name in sorted(os.listdir(directory)):
+        info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}", name):
+            continue
+        episode_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        try:
+            try:
+                fd = os.open("episode.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=episode_fd)
+            except FileNotFoundError:
+                # Ignore asset directories, but never treat events-only trials
+                # as a complete population of readable episode metadata.
+                try:
+                    os.stat("events.jsonl", dir_fd=episode_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                return None, True
+            with os.fdopen(fd, "rb") as stream:
+                info = os.fstat(stream.fileno())
+                _require(stat.S_ISREG(info.st_mode) and info.st_size <= MAX_EVAL_BYTES, "episode file")
+                data = stream.read(MAX_EVAL_BYTES + 1)
+            _require(len(data) <= MAX_EVAL_BYTES, "episode file size")
+            episode = json.loads(data, parse_constant=_invalid_constant)
+            _require(isinstance(episode, dict), "episode metadata")
+            _require(episode.get("episode_id", name) == name
+                     and episode.get("run_id", eval_id) == eval_id, "episode identity")
+        finally:
+            os.close(episode_fd)
+        task, condition, seed = (episode.get(key) for key in ("task", "condition", "seed"))
+        if (not isinstance(task, str) or not task or type(seed) is not int
+                or condition is not None and not isinstance(condition, str)
+                or episode.get("status") not in ("ended", "ended_with_gaps")):
+            return None, True
+        explicit = episode.get("trial_outcome")
+        harness = episode.get("harness_summary")
+        if (isinstance(explicit, dict) and explicit.get("source") in ("recorder_terminal", "evaluation_finalizer")
+                and type(explicit.get("task_success")) is bool):
+            success = explicit["task_success"]
+        elif (isinstance(harness, dict) and episode.get("end_reason") == "completed"
+              and type(harness.get("task_completed")) is bool):
+            success = harness["task_completed"]
+        else:
+            return None, True
+        episode = {**episode, "_index_success": success}
+        if episode.get("start_wall_time") is None:
+            episode["start_wall_time"] = episode.get("started_wall_time")
+        episodes.append(episode)
+    if not episodes:
+        return None, bool(saved["trials"])
+    selected = {}
+    for episode in episodes:
+        key = (episode["task"], episode.get("condition"), episode["seed"])
+        previous = selected.get(key)
+        later = True
+        if previous is not None:
+            for field in ("eval_segment", "start_wall_time", "runner_invocation", "attempt_index"):
+                left, right = episode.get(field), previous.get(field)
+                if field == "eval_segment":
+                    left = left if type(left) is int and 0 <= left <= 1000 else 0
+                    right = right if type(right) is int and 0 <= right <= 1000 else 0
+                numeric_left = type(left) is int or type(left) is float and math.isfinite(left)
+                numeric_right = type(right) is int or type(right) is float and math.isfinite(right)
+                if numeric_left and numeric_right and left != right:
+                    later = left > right
+                    break
+        if previous is None or later:
+            selected[key] = episode
+    trials = list(selected.values())
+    success = sum(episode["_index_success"] for episode in trials)
+    by_task = {}
+    for episode in trials:
+        counts = by_task.setdefault(episode["task"], {"trials": 0, "success": 0, "attempts": 0})
+        counts["trials"] += 1
+        counts["success"] += episode["_index_success"]
+    for episode in episodes:
+        by_task[episode["task"]]["attempts"] += 1
+    summary = {**saved, "trials": len(trials), "attempts": len(episodes), "success": success,
+               "failure": len(trials) - success, "unknown": 0,
+               "incomplete": sum(episode.get("trace_complete") is False for episode in trials),
+               "by_task": by_task, "tasks": sorted(by_task),
+               "seeds": sorted({episode["seed"] for episode in trials})}
+    return (summary, False) if _covers_saved_population(summary, saved) else (None, True)
+
+
+def _logical_summary(directory: int, eval_id: str,
+                     saved: dict[str, Any] | None) -> tuple[dict[str, Any] | None, bool]:
+    """Rebuild only when the readable population covers the saved summary."""
     try:
         from capx_trace_viewer import evals, reader
 
         with reader.Dir(os.dup(directory)) as run:
             details = reader.run_detail_at(eval_id, run)
         episodes = details["episodes"] if details else []
+        inputs = details.get("runner_records_info", {}) if details else {}
+        if any(inputs.get(key) for key in ("error", "corrupt_lines", "torn_tail", "truncated")):
+            return None, True
         if not episodes or any(episode.get("episode_json_error") for episode in episodes):
-            return None
+            return None, bool(episodes or saved and saved["trials"])
         summary = evals.aggregate_episodes(episodes, details["runner_records"], logical=True)
+        if not _covers_saved_population(summary, saved):
+            return None, True
         # Keep the same display bounds as stored summaries, including Unicode.
         json.dumps(summary, ensure_ascii=False, allow_nan=False).encode("utf-8")
         _counts(summary, "summary")
         for counts in summary["by_task"].values():
             _counts(counts, "summary.by_task")
-        return summary
-    except (ImportError, OSError, ValueError, UnicodeError, RecursionError):  # timeout-ok: optional supervisor/CLI summary
-        return None
+        return summary, False
+    except ImportError:
+        try:
+            return _standalone_logical_summary(directory, eval_id, saved)
+        except (OSError, ValueError, UnicodeError, RecursionError):  # timeout-ok: optional supervisor/CLI summary
+            return None, True
+    except (OSError, ValueError, UnicodeError, RecursionError):  # timeout-ok: optional supervisor/CLI summary
+        return None, True
 
 
 def _scan(root_fd: int) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
@@ -212,9 +345,11 @@ def _scan(root_fd: int) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
             _require(len(data) <= MAX_EVAL_BYTES, "file size (maximum 256 KiB)")
             value = json.loads(data, parse_constant=_invalid_constant)
             value = _validate(value, eval_id)
-            summary = _logical_summary(directory, eval_id)
+            summary, incomplete = _logical_summary(directory, eval_id, value.get("summary"))
             if summary is not None:
                 value = {**value, "summary": preserve_evaluation_failure(summary, value)}
+            if incomplete:
+                value = {**value, "_index_incomplete_inputs": True}
             records.append(value)
         except FileNotFoundError:
             pass  # A newly created evaluation directory may not have its record yet.
@@ -484,6 +619,8 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
             _escape(_duration(record, now)), _escape(commit), baseline_html,
             f'<a href="{link}">Viewerで開く</a>',
         ]
+        if record.get("_index_incomplete_inputs"):
+            cells[5] += '<span class="attempts">記録が揃っていないため、保存された集計を表示します。</span>'
         classes = ("date", "by", "changed", "eval-set", "status", "score", "duration", "commit", "baseline", "open")
         row = "".join(f'<td class="{cls}">{cell}</td>' for cls, cell in zip(classes, cells))
         tasks = (summary or {}).get("by_task", {})
@@ -523,7 +660,7 @@ def _shared_mode(fd: int, group: int) -> None:
 
 def build_index(root: Path, out: Path | None = None,
                 viewer_url: str = "http://127.0.0.1:8390",
-                submission_root=_DEFAULT_SUBMISSION_ROOT) -> Path:
+                submission_root=_DEFAULT_SUBMISSION_ROOT, *, lock_timeout: float = 10.0) -> Path:
     """Scan both user/ev-* and flat ev-* layouts and atomically publish one page.
 
     Callers must create the output directory first. Neither its permissions nor
@@ -531,6 +668,8 @@ def build_index(root: Path, out: Path | None = None,
     The default submission root is the resolved root's sibling
     ``submission_evals/_viewer``, if it is a real directory. An explicit path
     must exist; ``None`` or an empty string disables submission records.
+    Lock acquisition is bounded; zero skips a rebuild when another builder is
+    busy. Automatic callers also bound their wait for the scan itself.
     """
     # The explicitly supplied root is the trust boundary (shared-storage may
     # itself be an alias). Every descendant is still opened with O_NOFOLLOW.
@@ -547,7 +686,16 @@ def build_index(root: Path, out: Path | None = None,
                           0o664, dir_fd=output_fd)
         try:
             _shared_mode(lock_fd, group)
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            deadline = time.monotonic() + max(0.0, lock_timeout)
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("index builder is busy") from None
+                    time.sleep(min(0.05, remaining))
             try:
                 with _directory(root) as root_fd:
                     records, errors = _scan(root_fd)

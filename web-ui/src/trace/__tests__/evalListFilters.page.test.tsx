@@ -69,7 +69,7 @@ test('evaluation filters start at all with dynamic people and task options and a
   assert.deepEqual(findAll(control(page.output, 'タスク'), 'option').map(item => item.props.value), ['all', 'cube', 'drawer', 'stack']);
   assert.match(text(page.output), /6 件/);
   assert.doesNotMatch(text(page.output), /件中|絞り込みを解除/);
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   page.unmount();
 });
 
@@ -224,7 +224,7 @@ test('evaluation URL rejects unknown enums, people, tasks and dates and removes 
   for (const label of ['期間', '実行者', '種類', 'タスク', '状態']) assert.equal(control(page.output, label).props.value, 'all');
   page.unmount();
   const defaults = await open('/evals?period=all&by=all&kind=all&task=all&status=all');
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   defaults.unmount();
 });
 
@@ -239,7 +239,7 @@ test('evaluation invalid custom dates become open bounds and reversed dates rese
   page.unmount();
   const reversed = await open('/evals?period=custom&from=2026-11-21&to=2026-11-20');
   assert.equal(control(reversed.output, '期間').props.value, 'all');
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   assert.equal(ids(reversed).length, 6);
   reversed.unmount();
 });
@@ -266,14 +266,14 @@ test('evaluation invalid person and task defaults remain cleared when a later po
   const page = await open(`/evals?${params}`);
   assert.equal(control(page.output, '実行者').props.value, 'all');
   assert.equal(control(page.output, 'タスク').props.value, 'all');
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   const entries = [...fixtures(), entry('later-evaluation', 21, '実行者D', ['new-task'])];
   net.handler = req => req.path.endsWith('/evals') ? { json: { evals: entries } } : null;
   await advance(30_000);
   assert.equal(ids(page).length, 7, 'a formerly invalid URL filter must not silently reactivate');
   assert.equal(control(page.output, '実行者').props.value, 'all');
   assert.equal(control(page.output, 'タスク').props.value, 'all');
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   assert.match(text(page.output), /7 件/);
   assert.doesNotMatch(text(page.output), /件中/);
   page.unmount();
@@ -292,7 +292,7 @@ test('evaluation shared person and task filters survive an empty refreshing list
     } } : null;
     const page = mount(EvalListPage, {});
     await advance(100);
-    assert.deepEqual([...currentParams()], [...params], 'cold remote placeholders cannot validate dynamic options');
+    assert.deepEqual([...currentParams()], [['site', 'b300'], ...params], 'cold remote placeholders cannot validate dynamic options');
     assert.equal(control(page.output, '実行者').props.value, params.get('by'));
     assert.equal(control(page.output, 'タスク').props.value, params.get('task'));
     ready = true;
@@ -300,13 +300,13 @@ test('evaluation shared person and task filters survive an empty refreshing list
     assert.equal(net.log.filter(req => req.path === '/api/evals').length, 2, 'refreshing remote listings use the short poll');
     if (valid) {
       assert.deepEqual(ids(page), ['today-team']);
-      assert.deepEqual([...currentParams()], [...params]);
+      assert.deepEqual([...currentParams()], [['site', 'b300'], ...params]);
       assert.match(text(page.output), /6 件中 1 件/);
     } else {
       assert.equal(ids(page).length, 6);
       assert.equal(control(page.output, '実行者').props.value, 'all');
       assert.equal(control(page.output, 'タスク').props.value, 'all');
-      assert.equal(window.location.search, '', 'invalid dynamic options default once the remote listing settles');
+      assert.equal(window.location.search, '?site=b300', 'invalid dynamic options default once the remote listing settles');
     }
     page.unmount();
   }

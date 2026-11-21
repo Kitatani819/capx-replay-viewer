@@ -136,8 +136,8 @@ test('single camera summary and comparison omit camera switches and links retain
   try {
     assert.equal(findAll(summary.output, 'select').length, 0);
     assert.equal(findAll(compared.output, 'select').length, 0);
-    assert.equal(comparisonUrl('r', 'e', 'b', 'be', 'left_wrist'), '/traces/compare?run=r&episode=e&baseline_run=b&baseline_episode=be&camera=left_wrist');
-    assert.equal(trialEventUrl('r', 'e', 'event', 'left_wrist'), '/traces?run=r&episode=e&event=event&camera=left_wrist');
+    assert.equal(comparisonUrl('r', 'e', 'b', 'be', 'left_wrist'), '/traces/compare?run=r&episode=e&baseline_run=b&baseline_episode=be&camera=left_wrist&site=b300');
+    assert.equal(trialEventUrl('r', 'e', 'event', 'left_wrist'), '/traces?run=r&episode=e&event=event&camera=left_wrist&site=b300');
   } finally { summary.unmount(); compared.unmount(); }
 });
 

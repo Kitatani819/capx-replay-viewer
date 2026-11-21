@@ -390,9 +390,16 @@ REGISTRY = Registry()
 
 def reset_registry_after_fork() -> None:
     global REGISTRY, _THREAD, _HTTP_CONTEXT_GENERATION
+    inherited = REGISTRY
     REGISTRY = Registry()
+    # Wrappers survive fork; their installation diagnostics must survive too.
+    REGISTRY.hooks_installed = list(inherited.hooks_installed)
+    REGISTRY.hooks_failed = [dict(failure) for failure in inherited.hooks_failed]
+    REGISTRY.hooks_skipped = [dict(skipped) for skipped in inherited.hooks_skipped]
     _THREAD = threading.local()
     _HTTP_CONTEXT_GENERATION = object()
+    WEB_EPISODE.set(None)
+    _AMBIGUOUS_NOTED.clear()
 
 
 if hasattr(os, "register_at_fork"):
@@ -634,13 +641,24 @@ def unique_episode_id(store: TraceStore, run_id: str, episode_id: str, tail: str
     candidate = base
     n = 1
     with REGISTRY.lock:
-        while candidate in REGISTRY.used_ids or (run_dir / candidate).exists():
-            n += 1
-            if n > MAX_DUP + 16:
-                break  # 16 random suffixes collided too: use the last one
-            suffix = f"__dup{n}" if n <= MAX_DUP else f"__dup{random_hex(12)}"
-            candidate = with_suffix(base, suffix, tail)
-        REGISTRY.used_ids.add(candidate)
+        directory = store.open_directory(run_dir)
+        try:
+            while True:
+                if candidate not in REGISTRY.used_ids and not (run_dir / candidate).exists():
+                    try:
+                        os.mkdir(candidate, dir_fd=directory)
+                    except FileExistsError:
+                        pass  # another process claimed this candidate
+                    else:
+                        REGISTRY.used_ids.add(candidate)
+                        break
+                n += 1
+                if n > MAX_DUP + 16:
+                    raise OSError("cannot reserve a unique episode directory")
+                suffix = f"__dup{n}" if n <= MAX_DUP else f"__dup{random_hex(12)}"
+                candidate = with_suffix(base, suffix, tail)
+        finally:
+            os.close(directory)
     return candidate
 
 

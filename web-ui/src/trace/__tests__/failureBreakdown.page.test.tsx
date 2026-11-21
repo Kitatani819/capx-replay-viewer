@@ -25,11 +25,11 @@ test('cause comparisons stay in a named keyboard-focusable scroll region when th
     assert.equal(causeRegion().props['aria-label'], 'エラーで停止の原因別比較（横にスクロールできます）');
     assert.equal(findAll(causeRegion(), 'table').length, 1);
     assert.equal(findAll(causeRegion(), 'td').length, hasBaseline ? 3 : 1);
-    assert.deepEqual(currentLinks(causeRegion()), ['/traces?run=current&episode=c2', '/traces?run=current&episode=c3']);
+    assert.deepEqual(currentLinks(causeRegion()), ['/traces?run=current&episode=c2&site=b300', '/traces?run=current&episode=c3&site=b300']);
     const button = findAll(page.output, 'button').find(b => text(b).startsWith('「終わった」と答えたが未達成'))!;
     (button.props.onClick as () => void)(); await advance(0);
     assert.equal(causeRegion().props['aria-label'], '「終わった」と答えたが未達成の原因別比較（横にスクロールできます）');
-    assert.deepEqual(currentLinks(causeRegion()), ['/traces?run=current&episode=c1']);
+    assert.deepEqual(currentLinks(causeRegion()), ['/traces?run=current&episode=c1&site=b300']);
     page.unmount();
   }
 });
@@ -37,13 +37,13 @@ test('clicking a breakdown button selects its category and lists its current tri
   resetBrowser();
   const page = mount(FailureBreakdown, { detail: breakdownDetail() });
   assert.match(text(page.output), /エラーで停止：今回 2件/);
-  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=c2', '/traces?run=current&episode=c3']);
+  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=c2&site=b300', '/traces?run=current&episode=c3&site=b300']);
   const button = findAll(page.output, 'button').find(b => text(b).includes('「終わった」と答えたが未達成'))!;
   (button.props.onClick as () => void)(); await advance(0);
   assert.match(text(page.output), /「終わった」と答えたが未達成：今回 1件/);
   assert.match(text(page.output), /基準：成功/);
   assert.match(text(page.output), /悪化/);
-  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=c1']);
+  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=c1&site=b300']);
   assert.equal(findAll(page.output, 'button').filter(b => b.props['aria-pressed'] === true).length, 1);
   (findAll(page.output, 'button').find(b => text(b).includes('書き直しの上限'))!.props.onClick as () => void)(); await advance(0);
   assert.match(text(page.output), /この分類の試行はありません/);
@@ -59,19 +59,19 @@ test('trial list uses the same unjudged and unknown-ending categories for both e
     classifiedTrial('baseline-error', 2, 'error'),
     classifiedTrial('baseline-unknown-ending', 3, 'unknown', { verdict: 'failure' })];
   const page = mount(FailureBreakdown, { detail });
-  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-error']);
+  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-error&site=b300']);
   assert.match(text(page.output), /基準：未判定（成否が記録から分からない）/);
   assert.match(text(page.output), /今回：エラーで停止/);
   assert.match(text(page.output), /比較なし/);
   const unjudged = findAll(page.output, 'button').find(b => text(b).startsWith('未判定（成否が記録から分からない）'))!;
   (unjudged.props.onClick as () => void)(); await advance(0);
-  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-unjudged']);
+  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-unjudged&site=b300']);
   assert.match(text(page.output), /基準：エラーで停止/);
   assert.match(text(page.output), /今回：未判定（成否が記録から分からない）/);
   assert.match(text(page.output), /比較なし/);
   const unknownEnding = findAll(page.output, 'button').find(b => text(b).startsWith('終わり方が不明'))!;
   (unknownEnding.props.onClick as () => void)(); await advance(0);
-  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-unknown-ending']);
+  assert.deepEqual(currentLinks(page.output), ['/traces?run=current&episode=current-unknown-ending&site=b300']);
   assert.match(text(page.output), /基準：終わり方が不明/);
   assert.match(text(page.output), /今回：終わり方が不明/);
   assert.match(text(page.output), /変わらず/);
@@ -87,7 +87,7 @@ test('baseline trials of a category can be opened even when this run has none', 
   assert.match(text(page.output), /エラーで停止：今回 0件・基準 2件/);
   const baselineRun = detail.baseline!.eval_id;
   const links = findAll(page.output, 'a').filter(a => text(a) === '基準の試行を開く').map(a => String(a.props.href));
-  assert.deepEqual(links, [`/traces?run=${baselineRun}&episode=baseline-error`, `/traces?run=${baselineRun}&episode=baseline-error-2`]);
+  assert.deepEqual(links, [`/traces?run=${baselineRun}&episode=baseline-error&site=b300`, `/traces?run=${baselineRun}&episode=baseline-error-2&site=b300`]);
   assert.doesNotMatch(text(page.output), /この分類の試行はありません/);
   page.unmount();
 });

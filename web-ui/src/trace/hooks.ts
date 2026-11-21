@@ -226,16 +226,14 @@ export function useEpisodeEvents(runId: string | null, episodeId: string | null,
       return;
     }
     const key = `${runId}\u0000${episodeId}`;
-    const ctrl = new AbortController();
     const pager = new EventsPager(
-      (after, generation) => traceApi.events(runId, episodeId, after, { generation }, ctrl.signal),
+      (after, generation, signal) => traceApi.events(runId, episodeId, after, { generation }, signal),
       (snap) => setState({ key, snap }),
     );
     pagerRef.current = pager;
     setState({ key, snap: pager.snapshot });
     void pager.pump();
     return () => {
-      ctrl.abort();
       pager.dispose();
       if (pagerRef.current === pager) pagerRef.current = null;
     };

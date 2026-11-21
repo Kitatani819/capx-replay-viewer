@@ -43,7 +43,7 @@ test('summary renders available facts, baseline regression and exact event/file 
     'ターン0：エラー', 'ターン1：「終わった」と答えたが未達成', '最初のエラー', 'move_to_pose', 'IK did not converge', '最後の観察', 'キューブは机の上', '最後の判断', 'FINISH', '最後の画像', '基準と並べて見る']) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /traceback line|second line|終了（未達成）/);
   for (const event of [f.error, f.observation, f.decision, f.frame]) assert.ok(html.includes(`event=${event.event_id}`), event.event_id);
-  assert.match(html, /href="\/traces\?run=baseline&amp;episode=base&amp;event=base_frame"/);
+  assert.match(html, /href="\/traces\?run=baseline&amp;episode=base&amp;event=base_frame&amp;site=b300"/);
   assert.match(html, /src="\/api\/traces\/runs\/current\/episodes\/trial\/file\/frames\/last.png\?g=g2"/);
   assert.match(html, /baseline_run=baseline&amp;baseline_episode=base/);
 });
@@ -144,4 +144,48 @@ test('a running trial says it is still running instead of naming a partial recor
   assert.doesNotMatch(html, /記録が欠けています|根拠を見る/);
   assert.match(html, /最新（今回）/);
   assert.doesNotMatch(html, /終了時（今回）/);
+});
+
+
+test('parser fallback is shown as harness termination rather than a model FINISH answer', () => {
+  const r = new Rec();
+  r.episodeStart();
+  const request = r.request('code_generator', 'indecisive');
+  const response = r.response(request, 200, 'I am not sure what to do next.');
+  const parsed = r.parsed(response, { parser: '_parse_multi_turn_decision', decision: 'finish',
+    model_said_finish: false, harness_reading: 'no REGENERATE -> finish' });
+  const model = buildEpisodeModel(r.events);
+  const facts = trialSummaryFacts(model, { episode_id: 'trial' });
+  assert.equal(facts.decision?.text, '終了扱い');
+  assert.deepEqual(facts.flow[0].labels, ['終了扱い']);
+  const html = renderToStaticMarkup(<TrialSummaryCard ep={ep} model={model} summary={{ episode_id: 'trial' }} verdict="failure" />);
+  assert.match(html, /ハーネスの読み取り.*終了扱い.*I am not sure/);
+  assert.doesNotMatch(html, /FINISH|コードを書くモデルの答え/);
+  assert.match(html, new RegExp(`event=${parsed.event_id}`));
+});
+
+test('last recorded frame considers newer written references alongside earlier frame events', () => {
+  const r = new Rec();
+  r.add('frame', { camera: 'front', epoch: 0, buffer_index: 2 },
+    { artifacts: [{ path: 'frames/front/e0_2.jpg', mime: 'image/jpeg', written: true }] });
+  const block = r.blockStart(null);
+  const api = r.apiStart(block, 'move');
+  const end = r.apiEnd(api);
+  end.data = { ...end.data as Record<string, unknown>, frame_refs: [
+    { camera: 'front', epoch: 0, buffer_index: 3, path: 'frames/front/e0_3.jpg', written: true },
+    { camera: 'wrist', epoch: 0, buffer_index: 8, path: 'frames/wrist/e0_8.jpg', written: true },
+  ] };
+  const model = buildEpisodeModel(r.events);
+  assert.equal(lastRecordedFrame(model, 'front')?.path, 'frames/front/e0_3.jpg');
+  assert.equal(lastRecordedFrame(model, 'front')?.event.event_id, end.event_id);
+  assert.equal(lastRecordedFrame(model, 'wrist')?.path, 'frames/wrist/e0_8.jpg');
+});
+
+test('last recorded frame keeps a newer saved frame when a later event references an older buffer entry', () => {
+  const r = new Rec();
+  const latest = r.add('frame', { camera: 'front', epoch: 1, buffer_index: 2 },
+    { artifacts: [{ path: 'frames/front/e1_2.jpg', mime: 'image/jpeg', written: true }] });
+  r.blockStart(null, 'move()', { frame_ref: { camera: 'front', epoch: 0, buffer_index: 50,
+    path: 'frames/front/e0_50.jpg', written: true } });
+  assert.equal(lastRecordedFrame(buildEpisodeModel(r.events), 'front')?.event.event_id, latest.event_id);
 });

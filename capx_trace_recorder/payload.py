@@ -122,11 +122,13 @@ def strip_query(url: str) -> str:
     try:
         parts = urlsplit(url)
         netloc = parts.hostname or ""
+        if ":" in netloc:
+            netloc = f"[{netloc}]"
         if parts.port is not None:
             netloc = f"{netloc}:{parts.port}"
         return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
     except Exception:  # noqa: BLE001 - timeout-ok: writer thread
-        return url.split("?", 1)[0]
+        return "[invalid URL removed]"
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +409,15 @@ def raw_pixel_sha256(arr: Any) -> str | None:
 
 def parse_response_body(data: bytes | None) -> tuple[Any, dict[str, Any]]:
     """Parsed JSON (or ``None``) and the fields of ``model_response``."""
+    try:
+        obj = json.loads(data) if data else None
+    except Exception:  # noqa: BLE001 - timeout-ok: writer thread
+        obj = None
+    return obj, response_fields(obj)
+
+
+def response_fields(obj: Any) -> dict[str, Any]:
+    """Extract summaries from an already sanitized response object."""
     fields: dict[str, Any] = {
         "content": None,
         "reasoning": None,
@@ -415,14 +426,8 @@ def parse_response_body(data: bytes | None) -> tuple[Any, dict[str, Any]]:
         "response_model": None,
         "response_id": None,
     }
-    if not data:
-        return None, fields
-    try:
-        obj = json.loads(data)
-    except Exception:  # noqa: BLE001 - timeout-ok: writer thread
-        return None, fields
     if not isinstance(obj, dict):
-        return obj, fields
+        return fields
     choices = obj.get("choices")
     if isinstance(choices, list) and choices and isinstance(choices[0], dict):
         first = choices[0]
@@ -446,7 +451,7 @@ def parse_response_body(data: bytes | None) -> tuple[Any, dict[str, Any]]:
         fields["response_model"] = obj["model"]
     if isinstance(obj.get("id"), (str, int)):
         fields["response_id"] = obj["id"]
-    return obj, fields
+    return fields
 
 
 # ---------------------------------------------------------------------------

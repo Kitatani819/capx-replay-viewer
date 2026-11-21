@@ -261,3 +261,38 @@ test('an open Live page renews again after its lease expired during browser susp
     assert.match(bar(page).poll.text, /リモートからライブ更新中/);
   } finally { page.unmount(); remote.restore(); }
 });
+
+for (const phase of ['config', 'episode', 'status', 'renewal'] as const) {
+  test(`Live aborts a stalled ${phase} request and retries without losing its polling loop`, async () => {
+    const remote = setup();
+    const handler = net.handler;
+    let stalled = false;
+    let liveReads = 0;
+    net.handler = req => {
+      if (req.path === '/api/gmo/live') liveReads += 1;
+      const matches = phase === 'config' ? req.path === '/api/gmo/config'
+        : phase === 'episode' ? req.path === '/api/gmo/episode'
+        : phase === 'status' ? req.path === '/api/gmo/live' && liveReads === 2
+        : req.path === '/api/gmo/live' && remote.leases.length === 2;
+      const answer = handler(req);
+      if (!stalled && matches) {
+        stalled = true;
+        return { ...answer, latency: 120_000 };
+      }
+      return answer;
+    };
+    const page = open();
+    try {
+      await advance(45_000);
+      assert.equal(stalled, true);
+      const aborted = net.log.filter(req => req.path.startsWith('/api/gmo/') && req.aborted);
+      assert.equal(aborted.length, 1, 'the request deadline cancels the stalled request');
+      assert.ok(remote.leases.length >= 2, 'the loop retries and continues renewing');
+      assert.match(bar(page).poll.text, /リモートからライブ更新中/);
+      const before = requests(LIVE).sent;
+      page.unmount();
+      await advance(35_000);
+      assert.equal(requests(LIVE).sent, before, 'unmount cancels the retry timer');
+    } finally { page.unmount(); remote.restore(); }
+  });
+}

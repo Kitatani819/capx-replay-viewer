@@ -115,7 +115,7 @@ export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOption
         {facts.firstError && <div><dt>最初のエラー</dt><dd>{facts.firstError.turn !== null && <>ターン{facts.firstError.turn} · </>}{facts.firstError.text}
           {firstErrorMessage && <p className="trial-summary-error">{firstErrorMessage}</p>}</dd><span>{link(facts.firstError.event.event_id)}</span></div>}
         {facts.observation && observation && <div><dt>最後の観察</dt><dd><small>実行前後の画像を見たモデル（VDM）の説明</small><p>{observation}</p></dd><span>{link(facts.observation.event.event_id)}</span></div>}
-        {facts.decision && <div><dt>最後の判断</dt><dd><small>コードを書くモデルの答え</small><p>{facts.decision.text}{answer && <> — {answer}</>}</p></dd><span>{link(facts.decision.event.event_id)}</span></div>}
+        {facts.decision && <div><dt>最後の判断</dt><dd><small>{facts.decision.text === '終了扱い' ? 'ハーネスの読み取り' : 'コードを書くモデルの答え'}</small><p>{facts.decision.text}{answer && <> — {answer}</>}</p></dd><span>{link(facts.decision.event.event_id)}</span></div>}
         {(currentFrame || baselineFrame || currentFrameMissing || baselineFrameMissing) && <div><dt>最後の画像</dt><dd className="trial-summary-frames">
           {currentFrame && frame(currentFrame, ep, verdict === 'running' ? '最新（今回）' : '終了時（今回）')}{currentFrameMissing && <p>今回：このカメラの画像は記録されていません。</p>}{baselineFrame && baseline && frame(baselineFrame, baseline.ep, '終了時（基準）')}{baselineFrameMissing && <p>基準：このカメラの画像は記録されていません。</p>}
           {baselineFallback && <small className="trial-summary-camera-note">基準に同じカメラがないため、<span title={baselineCamera!}>{cameraLabel(baselineCamera!)}</span>を表示しています。</small>}

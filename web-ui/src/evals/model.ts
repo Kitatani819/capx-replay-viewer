@@ -31,7 +31,10 @@ export function comparisonTable(current: EvalTrial[], baseline: EvalTrial[]) {
   const rows = new Map<string, ComparisonRow>();
   for (const [side, trials] of [['baseline', baseline], ['current', current]] as const) {
     for (const trial of trials) {
-      const key = JSON.stringify([trial.task, showConditions ? trial.condition : null]);
+      // Unknown task/seed values cannot establish retries or cross-evaluation pairs.
+      const key = JSON.stringify(trial.task && typeof trial.seed === 'number' && Number.isInteger(trial.seed)
+        ? [trial.task, showConditions ? trial.condition : null]
+        : [trial.task, showConditions ? trial.condition : null, side, trial.episode_id]);
       let row = rows.get(key);
       if (!row) {
         row = { key, task: trial.task, condition: showConditions ? trial.condition : null, baseline: new Map(), current: new Map() };

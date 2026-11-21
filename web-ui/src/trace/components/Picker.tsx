@@ -55,6 +55,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
   const [taskFilter, setTaskFilter] = useState('all');
   const [runFilter, setRunFilter] = useState('all');
   const [visibleCount, setVisibleCount] = useState(100);
+  const [localRefresh, setLocalRefresh] = useState(0);
   const runs = useAsync((s) => traceApi.runs(s), []);
   const legacyRuns = useAsync((s) => traceApi.legacyRuns(s), []);
   const gmoConfig = useAsync(async (signal) => {
@@ -85,8 +86,9 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
     runs.reload();
     // The legacy tab may be hidden after an empty or failed initial read.
     legacyRuns.reload();
+    setLocalRefresh(previous => previous + 1);
   };
-  const detail = useAsync(runSel && mode === 'traced' ? (s) => traceApi.run(runSel, s) : null, [runSel, mode]);
+  const detail = useAsync(runSel && mode === 'traced' ? (s) => traceApi.run(runSel, s) : null, [runSel, mode, localRefresh]);
   useEffect(() => setVisibleCount(100), [dateFilter, taskFilter, runFilter, filter, resultFilter, runSel]);
   const filterNow = Date.now();
   const tasks = [...new Set((detail.data?.episodes ?? []).map(episode => episode.task).filter((task): task is string => !!task))].sort();
@@ -138,7 +140,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
         {mode === 'traced' && config?.exists === false && <span role="status" className="text-xs text-text-secondary">トレースの保存先が見つかりません</span>}
         {configError && <div role="alert"><ErrorText>{configError}</ErrorText></div>}
         <div className="ml-auto flex gap-2">
-          {mode !== null && mode !== 'gmo' && <SmallButton onClick={mode === 'legacy' ? legacyRuns.reload : reloadLocalLists}>一覧を更新</SmallButton>}
+          {mode !== null && mode !== 'gmo' && <SmallButton onClick={reloadLocalLists}>一覧を更新</SmallButton>}
           {onClose && <SmallButton onClick={onClose}>閉じる</SmallButton>}
         </div>
       </div>
@@ -154,7 +156,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
           onPick={onPick}
         />
       ) : mode === 'legacy' ? (
-        <LegacyPicker runs={legacyRuns} onPickLegacy={onPickLegacy} />
+        <LegacyPicker runs={legacyRuns} refreshKey={localRefresh} onPickLegacy={onPickLegacy} />
       ) : (
         <div className="trial-picker-local flex-1 min-h-0 min-w-0 flex">
           <div className="trial-picker-runs w-80 flex-shrink-0 border-r border-surface-border overflow-y-auto">
@@ -390,10 +392,10 @@ export function UnscopedFileList({
   );
 }
 
-function LegacyPicker({ runs, onPickLegacy }: { runs: AsyncState<unknown>; onPickLegacy: (runId: string, trial: LegacyTrialRef) => void }) {
+function LegacyPicker({ runs, refreshKey, onPickLegacy }: { runs: AsyncState<unknown>; refreshKey: number; onPickLegacy: (runId: string, trial: LegacyTrialRef) => void }) {
   const [runSel, setRunSel] = useState<LegacyRunRef | null>(null);
   const [filter, setFilter] = useState('');
-  const detail = useAsync(runSel ? (s) => traceApi.legacyRun(runSel.runId, runSel.root, s) : null, [runSel?.runId, runSel?.root]);
+  const detail = useAsync(runSel ? (s) => traceApi.legacyRun(runSel.runId, runSel.root, s) : null, [runSel?.runId, runSel?.root, refreshKey]);
   const runList = useMemo(() => legacyRunsOf(runs.data), [runs.data]);
   const roots = useMemo(() => legacyRootsOf(runs.data), [runs.data]);
   const trials = useMemo(() => {

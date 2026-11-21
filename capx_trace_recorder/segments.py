@@ -33,6 +33,7 @@ from capx_trace_recorder.timeout import is_trial_alarm
 MIN_SEGMENT_CHARS = 8
 MAX_OCCURRENCES = 20
 MAX_UNATTRIBUTED = 200
+MAX_HISTORY_BYTES = 4 * 1024 * 1024
 APIS_MARKER = "\nAPIs:\n"
 # The one harness literal shorter than MIN_SEGMENT_CHARS that is still matched:
 # the separator CodeExecutionEnvBase._get_complete_prompt puts between the task
@@ -58,6 +59,16 @@ class Segment(NamedTuple):
     text: str
     source_event_ids: tuple[str, ...] = ()
     origin: str = ""
+
+
+class SegmentSnapshot(tuple):
+    """Immutable segments plus bounded-history attribution diagnostics."""
+
+    def __new__(cls, segments: Any, omitted: int, byte_limit: int) -> Any:
+        value = super().__new__(cls, segments)
+        value.omitted_segments = omitted
+        value.byte_limit = byte_limit
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -202,21 +213,43 @@ def find_task_text(prompt: Any) -> tuple[str | None, str | None]:
 class SegmentRegistry:
     """Dynamic segments of one episode (appends from any thread)."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_bytes: int = MAX_HISTORY_BYTES) -> None:
         self._lock = threading.Lock()
-        self._dynamic: list[Segment] = []
+        self._dynamic: dict[tuple[str, str], Segment] = {}
+        self._max_bytes = max(0, max_bytes)
+        self._bytes = 0
+        self._omitted = 0
 
     def register(self, kind: str, text: Any, source_event_ids: tuple[str, ...] | list[str] = (),
                  origin: str = "") -> None:
         if not isinstance(text, str) or len(text) < MIN_SEGMENT_CHARS:
             return
-        seg = Segment(kind, text, tuple(i for i in source_event_ids if i), origin)
         with self._lock:
-            self._dynamic.append(seg)
+            # Check character lengths first so a rejected huge string does not
+            # require another huge allocation merely to measure its UTF-8 size.
+            key = (kind, text)
+            previous = self._dynamic.get(key)
+            ids = tuple(dict.fromkeys(i for i in source_event_ids if i))
+            if previous is not None:
+                ids = tuple(i for i in ids if i not in previous.source_event_ids)
+                size = sum(len(i.encode("utf-8")) + 8 for i in ids)
+            else:
+                if len(text) + len(kind) + len(origin) > self._max_bytes - self._bytes:
+                    self._omitted += 1
+                    return
+                size = sum(len(value.encode("utf-8")) for value in (kind, text, origin)) + 64
+                size += sum(len(i.encode("utf-8")) + 8 for i in ids)
+            if self._bytes + size > self._max_bytes:
+                self._omitted += 1
+                return
+            self._bytes += size
+            self._dynamic[key] = Segment(kind, previous.text if previous else text,
+                                         (previous.source_event_ids if previous else ()) + ids,
+                                         previous.origin if previous else origin)
 
     def dynamic(self) -> tuple[Segment, ...]:
         with self._lock:
-            return tuple(self._dynamic)
+            return SegmentSnapshot(self._dynamic.values(), self._omitted, self._max_bytes)
 
     def snapshot(self, env: Any = None, multi_turn_prompt: Any = None) -> tuple[Segment, ...]:
         """All segments known right now (called right before a request)."""
@@ -244,8 +277,10 @@ class SegmentRegistry:
                 out.append(Segment("api_docs", after, (), "env._full_prompt"))
         out.extend(template_literals(multi_turn_prompt))
         out.extend(harness_literals())
-        out.extend(self.dynamic())
-        return tuple(s for s in out if _searchable(s.text))
+        dynamic = self.dynamic()
+        out.extend(dynamic)
+        return SegmentSnapshot((s for s in out if _searchable(s.text)),
+                               dynamic.omitted_segments, dynamic.byte_limit)
 
 
 def _searchable(text: Any) -> bool:
@@ -372,6 +407,10 @@ def compute_input_summary(snapshot: tuple[Segment, ...], parts: list[tuple[str, 
     }
     if truncated:
         summary["unattributed_truncated"] = True
+    omitted = getattr(snapshot, "omitted_segments", 0)
+    if omitted:
+        summary["attribution_truncated"] = {"omitted_segments": omitted,
+                                             "byte_limit": snapshot.byte_limit}
     return summary
 
 

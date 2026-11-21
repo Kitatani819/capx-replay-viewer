@@ -89,7 +89,7 @@ STATUSES = ("ended", "ended_with_gaps", "running", "incomplete")
 # relative to the run dir). The viewer opens it like an episode under the id
 # ``unscoped.<pid>``; its summary has status "unscoped".
 UNSCOPED_STATUS = "unscoped"
-_UNSCOPED_ID_RE = re.compile(r"unscoped\.[0-9]{1,12}")
+_UNSCOPED_ID_RE = re.compile(r"unscoped\.[0-9]{1,12}(?:\.[0-9a-f]{16})?")
 # ``unscoped.<pid>.status.json``: written by the recorder next to a log whose lines could
 # not be written (see _unscoped_logs); read up to this size.
 UNSCOPED_STATUS_SUFFIX = ".status.json"
@@ -101,6 +101,8 @@ MAX_PAGE_BYTES = 16 * 1024 * 1024
 MAX_PAGE_EVENTS = 50_000
 # A line longer than this (the recorder caps lines at 256 KB) is skipped as corrupt.
 MAX_LINE_BYTES = 8 * 1024 * 1024
+# Bound the search for a newline after the line is already too large to serve.
+MAX_LINE_SCAN_BYTES = MAX_LINE_BYTES + 1024 * 1024
 MAX_JSON_FILE_BYTES = 16 * 1024 * 1024
 MAX_RUNNER_RECORDS_BYTES = 32 * 1024 * 1024
 MAX_CORRUPT_OFFSETS = 100
@@ -441,6 +443,10 @@ class EventsOffsetError(ValueError):
     """``after_offset`` is past the end of the file or not at the start of a line."""
 
 
+class EventsLineTooLongError(OSError):
+    """An event line has no newline within the bounded scan allowance."""
+
+
 @dataclass(frozen=True)
 class EventsPage:
     """One page of ``events.jsonl`` starting at a line boundary.
@@ -502,14 +508,21 @@ def parse_event_line(line: bytes) -> bytes | None:
         constants.append(name)
         return _replace_constant(name)
 
+    def on_float(value: str) -> float | str:
+        number = float(value)
+        if not math.isfinite(number):
+            constants.append(value)
+            return "-inf" if number < 0 else "inf"
+        return number
+
     try:
-        obj = json.loads(text, parse_constant=on_constant)
+        obj = json.loads(text, parse_constant=on_constant, parse_float=on_float)
     except (ValueError, RecursionError):
         return None
     if not isinstance(obj, dict):
         return None
     if constants:
-        return json.dumps(obj, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+        return json.dumps(obj, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
     return line
 
 
@@ -577,7 +590,8 @@ def read_events_page(
     ``next_offset``.
 
     Raises EventsOffsetError when ``after_offset`` is negative, past the end of the
-    file, or not preceded by a newline. OSError propagates when the file cannot be read.
+    file, or not preceded by a newline. EventsLineTooLongError rejects lines whose
+    newline is beyond MAX_LINE_SCAN_BYTES. OSError propagates when the file cannot be read.
     """
     if isinstance(path, int):
         return _read_events_page_fd(path, after_offset, max_bytes, max_events)
@@ -655,7 +669,9 @@ def _read_long_line(fd: int, start: int, size: int, consume: Any) -> tuple[int, 
     chunks: list[bytes] = []
     length = 0
     while True:
-        want = min(_SCAN_CHUNK, max(0, size - start - length))
+        if length >= MAX_LINE_SCAN_BYTES:
+            raise EventsLineTooLongError(errno.EFBIG, "event line exceeds the bounded scan limit")
+        want = min(_SCAN_CHUNK, max(0, size - start - length), MAX_LINE_SCAN_BYTES - length)
         chunk = os.pread(fd, want, start + length) if want else b""
         if not chunk:
             return 0, True  # reached the end of the file without a newline
@@ -1190,6 +1206,7 @@ def episode_summary_from_metadata(
             "heartbeat_age_s": round(age, 3) if age is not None else None,
             "liveness_source": "heartbeat" if heartbeat_mtime is not None else "none",
             "last_modified": max(mtimes) if mtimes else None,
+            "episode_mtime": episode_mtime,
             "events_bytes": events_bytes,
             "episode": episode_json,
             "episode_json_error": episode_json_error,
@@ -1253,7 +1270,7 @@ def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
 
         try:
             classification = classify_trial_end(summary, events(), runner_records, evaluation=evaluation)
-        except OSError:
+        except (OSError, EventsOffsetError):
             return classify_trial_end(summary, runner_records=runner_records, evaluation=evaluation)
         if _stat_key(os.fstat(fd)) == _stat_key(events_st):
             with _end_classifications_lock:

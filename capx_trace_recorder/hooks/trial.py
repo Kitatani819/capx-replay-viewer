@@ -41,6 +41,7 @@ import hashlib
 import re
 import shutil
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -664,13 +665,14 @@ def _copy_trial_videos(ctx: Any, code_path: Path, block_count: int, started_wall
                     art["reason"] = reason or "disk_low"
                 else:
                     tmp = None
+                    destination = None
                     try:
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        tmp = target.with_name(f".{name}.tmp.{os.getpid()}.{ctx.event['seq']}")
+                        destination = ctx.store.open_directory(target.parent)
+                        tmp, output = ctx.store._temporary_file(destination, name)
                         digest = hashlib.sha256()
                         copied = 0
                         last_heartbeat = 0.0
-                        with open(tmp, "xb") as out:
+                        with os.fdopen(output, "wb") as out:
                             while copied < info.st_size:
                                 now = time.monotonic()
                                 if now - last_heartbeat >= 10.0:
@@ -693,16 +695,18 @@ def _copy_trial_videos(ctx: Any, code_path: Path, block_count: int, started_wall
                         if copied != info.st_size:
                             art["reason"] = "read_failed: source_changed"
                             raise OSError("source changed during copy")
-                        os.replace(tmp, target)
+                        os.replace(tmp, name, src_dir_fd=destination, dst_dir_fd=destination)
                         art.update(written=True, bytes=copied, sha256=digest.hexdigest())
                     except OSError as exc:  # timeout-ok: video copying runs only on the writer thread
                         art.setdefault("reason", f"write_failed: {type(exc).__name__}")
                     finally:
-                        if tmp is not None:
+                        if tmp is not None and destination is not None:
                             try:
-                                tmp.unlink(missing_ok=True)
+                                os.unlink(tmp, dir_fd=destination)
                             except OSError:  # timeout-ok: video copying runs only on the writer thread
                                 pass
+                        if destination is not None:
+                            os.close(destination)
                 if not art["written"]:
                     gap = "disk_low" if art["reason"] == "disk_low" else ("read_failed" if str(art["reason"]).startswith("read_failed") else "write_failed")
                     ctx.wep.add_gap(gap, 1, ctx.event["seq"])
@@ -893,10 +897,15 @@ def make_run_single_trial_wrapper(original: Any) -> Any:
     return mark(_run_single_trial, original)
 
 
+WORKER_DRAIN_TIMEOUT_S = 30.0
+
+
 def _flush_worker_recording() -> None:
     store = get_store()
     if store is not None:
-        store.flush(timeout=None)
+        if not store.flush(timeout=WORKER_DRAIN_TIMEOUT_S):
+            print("capx-trace-recorder: recording incomplete (worker drain timed out or writer stopped)",
+                  file=sys.stderr)
 
 
 def make_trial_worker_wrapper(original: Any) -> Any:
@@ -906,8 +915,8 @@ def make_trial_worker_wrapper(original: Any) -> Any:
     entry point; ``runner.py:310-312`` disables SIGALRM before they unwind.
     ``capx/utils/parallel_eval.py:113-114`` sends its returned result and
     ``parallel_eval.py:241-246`` can terminate workers five seconds afterwards.
-    Waiting here keeps large video copies outside both the alarm and that grace
-    period, including the error path, while preserving the original result/error.
+    A bounded wait keeps large video copies outside the alarm, including the
+    error path, while preserving the original result/error if storage stalls.
     """
     @functools.wraps(original)
     def trial_worker(*args: Any, **kwargs: Any) -> Any:

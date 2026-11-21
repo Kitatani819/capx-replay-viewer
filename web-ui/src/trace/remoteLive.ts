@@ -4,6 +4,29 @@ import { ApiError, errorText, gmoApi, type GmoEpisodeSummary, type GmoLiveStatus
 
 export const REMOTE_LIVE_STATUS_MS = 2000;
 export const REMOTE_LIVE_RENEW_MS = 10_000;
+const REMOTE_LIVE_REQUEST_MS = 15_000;
+
+/** Bound each read independently; a stalled request must not stop lease retries. */
+async function remoteRequest<T>(read: (signal: AbortSignal) => Promise<T>, signal: AbortSignal): Promise<T> {
+  const controller = new AbortController();
+  let timer: number | undefined;
+  let abort = () => {};
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      abort = () => { controller.abort(); reject(new Error('aborted')); };
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) { abort(); return; }
+      timer = window.setTimeout(() => {
+        controller.abort();
+        reject(new Error('リモートの応答がありません。'));
+      }, REMOTE_LIVE_REQUEST_MS);
+      void read(controller.signal).then(resolve, reject);
+    });
+  } finally {
+    signal.removeEventListener('abort', abort);
+    window.clearTimeout(timer);
+  }
+}
 
 interface RemoteLiveState {
   key: string;
@@ -36,7 +59,7 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
       try {
         if (!discovered) {
           let config;
-          try { config = await gmoApi.config(signal); }
+          try { config = await remoteRequest(requestSignal => gmoApi.config(requestSignal), signal); }
           catch (error) {
             if (error instanceof ApiError && error.status === 404) { again = false; return; }
             throw error;
@@ -45,7 +68,7 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
           if (!config.enabled || !config.configured) { again = false; return; }
           // Ask only about this trial's run: the team listing can take minutes.
           const lookup = async (refresh: boolean) => {
-            try { return await gmoApi.episode(runId, episodeId, refresh, signal); }
+            try { return await remoteRequest(requestSignal => gmoApi.episode(runId, episodeId, refresh, requestSignal), signal); }
             catch (error) {
               // Not on GMO, or in more than one GMO location: nothing to follow.
               if (error instanceof ApiError && (error.status === 404 || error.status === 409)) return null;
@@ -68,7 +91,8 @@ export function useRemoteLive(runId: string | null, episodeId: string | null, li
         }
         if (signal.aborted) return;
         const renew = Date.now() >= nextRenewAt;
-        const status = renew ? await gmoApi.follow(runId, episodeId, signal) : await gmoApi.live(signal);
+        const status = await remoteRequest(requestSignal => renew
+          ? gmoApi.follow(runId, episodeId, requestSignal) : gmoApi.live(requestSignal), signal);
         if (signal.aborted) return;
         if (renew) nextRenewAt = Date.now() + REMOTE_LIVE_RENEW_MS;
         // Another open page can replace the single follower. Do not take it back.

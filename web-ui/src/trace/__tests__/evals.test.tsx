@@ -60,7 +60,7 @@ test('comparison renders regression text and border, retry, blanks, condition di
   assert.match(html, /再試行あり/);
   assert.match(html, /aria-label="記録なし"/);
   assert.match(html, /seed（基準 401、402 \/ 今回 401、403）/);
-  assert.match(html, /href="\/traces\?run=improved&amp;episode=c1-retry"/);
+  assert.match(html, /href="\/traces\?run=improved&amp;episode=c1-retry&amp;site=b300"/);
   assert.match(html, /title="試行を開く" aria-label="失敗（終わり方が不明）・悪化（基準は成功）・再試行あり（試行を開く）"/);
   assert.match(html, /集計と試行の表の数が異なります/);
 });
@@ -152,7 +152,7 @@ test('every ending uses the canonical cell word and long accessible label', () =
 test('paired current cells offer a separate small compare button under the trial button', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);
   assert.equal((html.match(/class="eval-compare-link"/g) || []).length, 1);
-  assert.match(html, /<div class="eval-cell-actions"><a[^>]+episode=c1-retry[^>]+>[\s\S]*?<\/a><a class="eval-compare-link" href="\/traces\/compare\?run=improved&amp;episode=c1-retry&amp;baseline_run=baseline&amp;baseline_episode=b1" aria-label="cube seed 401を基準と並べて見る">並べて見る<\/a><\/div>/);
+  assert.match(html, /<div class="eval-cell-actions"><a[^>]+episode=c1-retry[^>]+>[\s\S]*?<\/a><a class="eval-compare-link" href="\/traces\/compare\?run=improved&amp;episode=c1-retry&amp;baseline_run=baseline&amp;baseline_episode=b1&amp;site=b300" aria-label="cube seed 401を基準と並べて見る">並べて見る<\/a><\/div>/);
 });
 test('list preserves invalid records as errors and completed evaluations have no state label', () => {
   const d = detail();
@@ -171,7 +171,7 @@ test('list shows each evaluation set below the changed description and omits abs
   });
   const html = renderToStaticMarkup(<EvalListTable entries={entries} />);
   for (const [index, entry] of entries.entries()) {
-    assert.ok(html.includes(`<a href="/evals/route-${index}">把持位置の修正</a><small class="eval-set">${entry.eval!.eval_set}</small>`));
+    assert.ok(html.includes(`<a href="/evals/route-${index}?site=b300">把持位置の修正</a><small class="eval-set">${entry.eval!.eval_set}</small>`));
   }
   for (const evalSet of [null, '']) {
     const entry = detail();

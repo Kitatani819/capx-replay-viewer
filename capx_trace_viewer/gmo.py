@@ -37,6 +37,7 @@ MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
 MAX_INTERVAL_S = 24 * 60 * 60
 LISTING_TIMEOUT_S = 60
+TRANSFER_TIMEOUT_S = 300
 # Exact background import checks can take over a minute for large evaluations;
 # they run off the request path, with a separate limit from cheap listings.
 FILE_LISTING_TIMEOUT_S = 600
@@ -86,7 +87,7 @@ class FetchError(Exception):
 class RemoteRun:
     run_id: str
     path: str
-    files: list[tuple[str, int, int]] = field(default_factory=list)
+    files: list[tuple[str, int, int | float]] = field(default_factory=list)
 
     @property
     def size(self) -> int:
@@ -109,7 +110,11 @@ def list_remote(ssh: str, host: str, patterns: list[str]) -> tuple[list[RemoteRu
         if not SAFE_PATTERN.fullmatch(pattern):
             raise FetchError(f"Unsupported characters in the remote pattern: {pattern}")
     remote = "python3 -c " + shlex.quote(REMOTE_LISTER) + " " + " ".join(shlex.quote(p) for p in patterns)
-    proc = subprocess.run([*ssh_command(ssh), host, remote], capture_output=True, text=True)
+    runner = ProcessRunner(preserve_terminal=True)
+    try:
+        proc = runner.run([*ssh_command(ssh), host, remote], timeout=LISTING_TIMEOUT_S)
+    finally:
+        runner.close()
     if proc.returncode != 0:
         raise FetchError(f"Listing runs on {host} failed (exit {proc.returncode}): {proc.stderr.strip()[-500:]}")
     try:
@@ -141,7 +146,7 @@ def pending_bytes(run: RemoteRun, local_run: Path) -> int:
     return sum(size for _, size, _ in changed_files(run, local_run))
 
 
-def changed_files(run: RemoteRun, local_run: Path) -> list[tuple[str, int, int]]:
+def changed_files(run: RemoteRun, local_run: Path) -> list[tuple[str, int, int | float]]:
     """Include metadata-only changes and missing empty files as well as data."""
     changed = []
     for rel, size, mtime in run.files:
@@ -150,6 +155,7 @@ def changed_files(run: RemoteRun, local_run: Path) -> list[tuple[str, int, int]]
         except OSError:
             changed.append((rel, size, mtime))
             continue
+        # Older cached manifests contain integer seconds. New manifests retain
         if st.st_size != size or int(st.st_mtime) != mtime:
             changed.append((rel, size, mtime))
     return changed
@@ -164,13 +170,34 @@ def human(n: int) -> str:
 
 
 def rsync_run(ssh: str, host: str, run: RemoteRun, local_run: Path, rsync: str = "rsync") -> None:
-    local_run.mkdir(parents=True, exist_ok=True)
-    # -r -t: regular files and directories with their times; symlinks and devices are skipped.
-    # --inplace keeps an appended events.jsonl the same file for a viewer that is reading it.
-    command = [rsync, "-rt", "--inplace", "--partial", "-e", ssh, f"{host}:{run.path}/", f"{local_run}/"]
-    proc = subprocess.run(command)
-    if proc.returncode != 0:
-        raise FetchError(f"rsync of {run.run_id} failed (exit {proc.returncode})")
+    check_runs([run])
+    _check_local_links(local_run)
+    files = changed_files(run, local_run)
+    if not files:
+        return
+    _safe_local_directory(local_run.parent)
+    _safe_local_directory(local_run)
+    runner = ProcessRunner(preserve_terminal=True)
+    try:
+        _rsync_manifest(runner, ssh, host, run, local_run, files,
+                        timeout=TRANSFER_TIMEOUT_S, rsync=rsync)
+    finally:
+        runner.close()
+
+
+def _rsync_manifest(runner: ProcessRunner, ssh: str, host: str, run: RemoteRun,
+                    local_run: Path, files: list[tuple[str, int, int | float]], *,
+                    timeout: float, rsync: str = "rsync") -> None:
+    # Never recurse into a listed file that changed into a directory. Copy every
+    # selected file (-I): the manifest comparison already decided what changed.
+    with tempfile.TemporaryDirectory(prefix="capx-gmo-files-") as temp:
+        manifest = Path(temp) / "files"
+        manifest.write_bytes(b"".join(os.fsencode(rel) + b"\x00" for rel, _, _ in files))
+        proc = runner.run([rsync, "-tI", "--inplace", "--partial", "--from0",
+                           f"--files-from={manifest}", "-e", ssh,
+                           f"{host}:{run.path}/", f"{local_run}/"], timeout=timeout)
+        if proc.returncode != 0:
+            raise FetchError(f"rsync failed (exit {proc.returncode}): {proc.stderr.strip()[-300:]}")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -334,7 +361,6 @@ def load_settings(path: Path | None = None) -> GmoSettings:
 def save_settings(settings: GmoSettings, path: Path | None = None) -> None:
     path = config_path() if path is None else path
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
     fd, temp_name = tempfile.mkstemp(prefix=".gmo-", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -381,17 +407,58 @@ def api_ssh_argv(settings: GmoSettings) -> list[str]:
 class ProcessRunner:
     """Run bounded ssh/rsync children and reap them, including at server shutdown."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, preserve_terminal: bool = False) -> None:
         self._lock = threading.Lock()
         self._children: set[subprocess.Popen[str]] = set()
         self._closed = False
+        self._preserve_terminal = preserve_terminal
+
+    @staticmethod
+    def _descendant_pids(pid: int) -> list[int]:
+        # Linux and macOS both support this PID/PPID-only snapshot. Keep cleanup
+        # bounded and fall back to the direct child if ps is unavailable.
+        try:
+            snapshot = subprocess.run(["ps", "-A", "-o", "pid=,ppid="],
+                                      capture_output=True, text=True, timeout=0.5)
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if snapshot.returncode:
+            return []
+        children: dict[int, list[int]] = {}
+        for row in snapshot.stdout.splitlines():
+            try:
+                child, parent = map(int, row.split())
+            except ValueError:
+                continue
+            if child > 1 and child != os.getpid():
+                children.setdefault(parent, []).append(child)
+        descendants, pending, seen = [], [pid], {pid}
+        while pending:
+            for child in children.get(pending.pop(), []):
+                if child not in seen:
+                    seen.add(child)
+                    descendants.append(child)
+                    pending.append(child)
+        return descendants
 
     @staticmethod
     def _kill(proc: subprocess.Popen[str]) -> None:
         # A completed ssh may leave ProxyCommand descendants holding its pipes.
         # The process group can still exist after its original leader has exited.
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
+            if getattr(proc, "_capx_own_group", True):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                # Keep the CLI's controlling terminal without signalling its
+                # caller's group. Capture descendants before killing their root;
+                # an already exited root can no longer establish their ancestry.
+                descendants = ProcessRunner._descendant_pids(proc.pid) if proc.poll() is None else []
+                for pid in reversed(descendants):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                proc.kill()
         except OSError:
             # macOS may report EPERM for a group whose leader has exited.
             # Signal failures must not skip bounded pipe cleanup and reaping.
@@ -421,7 +488,10 @@ class ProcessRunner:
                 raise FetchError("GMO service is shutting down")
             proc = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, start_new_session=True)
+                                    text=True, start_new_session=not self._preserve_terminal)
+            # The legacy CLI keeps its controlling terminal for SSH prompts. Its
+            # caller's process group must never be signalled during cleanup.
+            proc._capx_own_group = not self._preserve_terminal
             self._children.add(proc)
         try:
             try:
@@ -521,7 +591,7 @@ def stats(directory):
                 newest = mtime if newest is None else max(newest, mtime)
                 files.append((os.path.relpath(path, directory), st.st_size, mtime))
     # Keep the representation identical to local_episode_stats. Whole-second
-    # mtimes match rsync's quick check and its default timestamp preservation.
+    # mtimes match what every rsync (including macOS's default) preserves.
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
     return count, size, newest, digest, files
 
@@ -961,11 +1031,11 @@ def validate_remote_listing(listing: Any, *, include_files: bool = False) -> dic
     return {"episodes": valid, "evals": valid_evals}
 
 
-def local_episode_stats(episode: Path) -> tuple[int, int, int | None, str] | None:
+def local_episode_stats(episode: Path) -> tuple[int, int, float | None, str] | None:
     if episode.is_symlink() or not episode.is_dir():
         return None
     count = size = 0
-    newest: int | None = None
+    newest: float | None = None
     files = []
     for base, dirs, names in os.walk(episode):
         dirs[:] = [d for d in dirs if not (Path(base) / d).is_symlink()]
@@ -988,7 +1058,7 @@ def local_episode_stats(episode: Path) -> tuple[int, int, int | None, str] | Non
 def _local_listing_digest(episode: Path) -> str | None:
     if episode.is_symlink() or not episode.is_dir():
         return None
-    files: list[tuple[str, int | None, int | None]] = []
+    files: list[tuple[str, int | None, float | None]] = []
     pending = [(episode, "")]
     while pending:
         directory, prefix = pending.pop()
@@ -1065,7 +1135,8 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
         run = RemoteRun(run_id, remote_path, [tuple(f) for f in data["files"]])
         if any(not isinstance(rel, str) or "\x00" in rel
                or any(part in ("", ".", "..") for part in rel.split("/"))
-               or type(size) is not int or size < 0 or type(mtime) is not int
+               or type(size) is not int or size < 0
+               or type(mtime) is not int
                for rel, size, mtime in run.files):
             raise FetchError("Unexpected episode files from GMO")
         check_runs([run])
@@ -1082,7 +1153,7 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
     return run
 
 
-def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[str, int, int]]:
+def _episode_changes(run: RemoteRun, episode_id: str, dest: Path) -> list[tuple[str, int, int | float]]:
     local_run = dest / run.run_id
     if local_run.is_symlink():
         raise FetchError("Local destination contains a symlink")
@@ -1117,15 +1188,8 @@ def _transfer_episode(runner: ProcessRunner, settings: GmoSettings, run: RemoteR
     # Omit -r so a listed file replaced by a directory cannot add unlisted files.
     # One manifest and one rsync keep the number of SSH connections independent
     # of the file count. Only changed files (including run.json) are listed.
-    with tempfile.TemporaryDirectory(prefix="capx-gmo-files-") as temp:
-        manifest = Path(temp) / "files"
-        manifest.write_bytes(b"".join(os.fsencode(rel) + b"\x00" for rel, _, _ in files))
-        proc = runner.run(["rsync", "-t", "--inplace", "--partial", "--from0",
-                           f"--files-from={manifest}", "-e", ssh,
-                           f"{settings.host}:{run.path}/", f"{local_run}/"],
-                          timeout=deadline - time.monotonic())
-        if proc.returncode != 0:
-            raise FetchError(f"rsync failed (exit {proc.returncode}): {proc.stderr.strip()[-300:]}")
+    _rsync_manifest(runner, ssh, settings.host, run, local_run, files,
+                    timeout=deadline - time.monotonic())
     # Compare locally with preflight rather than opening a third SSH connection.
     # A successful copy of a changing episode is useful; the next import can
     # reconcile its remaining differences, and local_state may report stale.

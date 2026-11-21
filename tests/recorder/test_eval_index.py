@@ -14,6 +14,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -164,10 +165,172 @@ def test_unavailable_episodes_keep_stored_summary(tmp_path, monkeypatch, problem
         assert "やり直しを含めると" not in html
 
 
+@pytest.mark.parametrize("stored", ["attempts", "logical_with_attempts"])
+def test_partial_episode_population_preserves_saved_score(tmp_path, stored):
+    path, value = retried_record(tmp_path, stored=stored)
+    shutil.rmtree(path.parent / "a-first")
+    shutil.rmtree(path.parent / "b-first")
+    html = page(tmp_path)
+    assert eval_index._score(value["summary"]) in html
+    assert "記録が揃っていないため、保存された集計を表示します" in html
+    assert json.loads(path.read_text(encoding="utf-8")) == value
+
+
+@pytest.mark.parametrize("problem", ["unreadable", "corrupt", "torn", "truncated"])
+def test_incomplete_runner_inputs_preserve_authoritative_saved_score(tmp_path, monkeypatch, problem):
+    from capx_trace_viewer import reader
+
+    path, value = retried_record(tmp_path)
+    value["summary"].update(success=0, failure=3)
+    value["summary"]["by_task"]["task-a"]["success"] = 0
+    path.write_text(json.dumps(value), encoding="utf-8")
+    records = path.parent / "runner_records.jsonl"
+    records.write_text('{"task":"task-a","condition":"M1","seed":1,'
+                       '"attempts":[{"attempt_id":2,"task_success":false,'
+                       '"started_at":"1970-01-01T00:00:02Z",'
+                       '"ended_at":"1970-01-01T00:00:03Z"}]}\n', encoding="utf-8")
+    if problem == "unreadable":
+        original = reader.Dir.open_file
+
+        def unreadable(directory, name):
+            if name == "runner_records.jsonl":
+                raise PermissionError("synthetic unreadable runner records")
+            return original(directory, name)
+
+        monkeypatch.setattr(reader.Dir, "open_file", unreadable)
+    elif problem == "truncated":
+        original = reader.read_jsonl
+
+        def truncated(*args, **kwargs):
+            result = original(*args, **kwargs)
+            return {**result, "truncated": True}
+
+        monkeypatch.setattr(reader, "read_jsonl", truncated)
+    else:
+        records.write_text("{broken" + ("\n" if problem == "corrupt" else ""), encoding="utf-8")
+    html = page(tmp_path)
+    assert eval_index._score(value["summary"]) in html
+    assert "記録が揃っていないため、保存された集計を表示します" in html
+
+
+@pytest.mark.parametrize("standalone", [False, True])
+def test_complete_retry_population_displays_36_of_70_with_93_attempts(tmp_path, standalone):
+    value = record("ev-full-retries")
+    value["summary"].update(trials=93, success=36, failure=57,
+                            by_task={"task-a": {"trials": 93, "success": 36}},
+                            seeds=list(range(70)))
+    path = save(tmp_path, value)
+    for seed, attempt in [*((seed, 1) for seed in range(70)),
+                          *((seed, 2) for seed in range(23))]:
+        directory = path.parent / f"trial-{seed}-{attempt}"
+        directory.mkdir()
+        (directory / "episode.json").write_text(json.dumps({
+            "status": "ended", "trace_complete": True, "task": "task-a",
+            "condition": "M1", "seed": seed, "attempt_index": attempt,
+            "start_wall_time": seed + attempt * 100,
+            "end_reason": "completed",
+            "harness_summary": {"task_completed": seed < 36 and (seed >= 23 or attempt == 2)},
+        }), encoding="utf-8")
+    if standalone:
+        package_root = Path(__file__).resolve().parents[2]
+        isolated = tmp_path / "isolated"
+        isolated.mkdir()
+        shutil.copytree(package_root / "capx_trace_recorder", isolated / "capx_trace_recorder")
+        result = subprocess.run([sys.executable, "-S", "-m", "capx_trace_recorder", "index",
+                                 "--root", str(tmp_path)],
+                                cwd=isolated, env={**os.environ, "PYTHONPATH": str(isolated)},
+                                text=True, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        html = (tmp_path / "index.html").read_text(encoding="utf-8")
+    else:
+        html = page(tmp_path)
+    assert '36 / 70<span class="attempts">（やり直しを含めると 93 回）</span>' in html
+    assert '<span class="rate">51.4%</span>' in html
+    assert json.loads(path.read_text(encoding="utf-8")) == value
+
+
+@pytest.mark.parametrize("problem", ["missing", "runner_records", "symlink", "unknown_verdict"])
+def test_standalone_correction_keeps_saved_score_when_inputs_are_incomplete(tmp_path, monkeypatch, problem):
+    path, value = retried_record(tmp_path)
+    monkeypatch.setitem(sys.modules, "capx_trace_viewer", None)
+    if problem == "missing":
+        shutil.rmtree(path.parent / "b-first")
+    elif problem == "runner_records":
+        (path.parent / "runner_records.jsonl").write_text("{}\n", encoding="utf-8")
+    elif problem == "symlink":
+        metadata = path.parent / "a-retry" / "episode.json"
+        original = tmp_path / "external-episode.json"
+        metadata.rename(original)
+        metadata.symlink_to(original)
+    else:
+        metadata = path.parent / "a-retry" / "episode.json"
+        episode = json.loads(metadata.read_text(encoding="utf-8"))
+        episode.pop("harness_summary")
+        metadata.write_text(json.dumps(episode), encoding="utf-8")
+    html = page(tmp_path)
+    assert eval_index._score(value["summary"]) in html
+    assert "記録が揃っていないため、保存された集計を表示します" in html
+    assert json.loads(path.read_text(encoding="utf-8")) == value
+
+
+@pytest.mark.parametrize("identity", ["run_id", "episode_id"])
+def test_standalone_correction_rejects_mismatched_episode_identity(tmp_path, monkeypatch, identity):
+    path, value = retried_record(tmp_path)
+    monkeypatch.setitem(sys.modules, "capx_trace_viewer", None)
+    metadata = path.parent / "a-retry" / "episode.json"
+    episode = json.loads(metadata.read_text(encoding="utf-8"))
+    episode[identity] = "unrelated-record"
+    metadata.write_text(json.dumps(episode), encoding="utf-8")
+    html = page(tmp_path)
+    assert eval_index._score(value["summary"]) in html
+    assert "記録が揃っていないため、保存された集計を表示します" in html
+
+
+def test_standalone_retry_selection_uses_metadata_time_before_directory_order(tmp_path, monkeypatch):
+    path, _value = retried_record(tmp_path)
+    monkeypatch.setitem(sys.modules, "capx_trace_viewer", None)
+    for name, started in (("a-first", 200), ("a-retry", 100)):
+        metadata = path.parent / name / "episode.json"
+        episode = json.loads(metadata.read_text(encoding="utf-8"))
+        episode.pop("start_wall_time")
+        episode["started_wall_time"] = started
+        metadata.write_text(json.dumps(episode), encoding="utf-8")
+    assert '0 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in page(tmp_path)
+
+
+def test_standalone_retry_selection_preserves_segment_order_and_terminal_verdict(tmp_path, monkeypatch):
+    path, _value = retried_record(tmp_path)
+    monkeypatch.setitem(sys.modules, "capx_trace_viewer", None)
+    first = path.parent / "a-first" / "episode.json"
+    episode = json.loads(first.read_text(encoding="utf-8"))
+    episode.update(eval_segment=2, start_wall_time=None, started_wall_time=1,
+                   trial_outcome={"source": "recorder_terminal", "task_success": False})
+    first.write_text(json.dumps(episode), encoding="utf-8")
+    html = page(tmp_path)
+    assert '0 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
+
+
+def test_index_lock_deadline_preserves_previous_page(tmp_path):
+    save(tmp_path, record())
+    output = tmp_path / "index.html"
+    output.write_text("previous complete list", encoding="utf-8")
+    lock = os.open(tmp_path / "index.html.lock", os.O_WRONLY | os.O_CREAT, 0o664)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            eval_index.build_index(tmp_path, lock_timeout=0.03)
+        assert time.monotonic() - started < 0.5
+        assert output.read_text(encoding="utf-8") == "previous complete list"
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
+
+
 @pytest.mark.parametrize("target", ["episode_directory", "episode_file", "runner_records"])
 def test_optional_episode_reads_never_follow_symlinks(tmp_path, target):
     root, outside = tmp_path / "traces", tmp_path / "outside"
-    path, _value = retried_record(root)
+    path, value = retried_record(root)
     external, _ = retried_record(outside)
     if target == "episode_directory":
         shutil.rmtree(path.parent / "a-retry")
@@ -184,10 +347,8 @@ def test_optional_episode_reads_never_follow_symlinks(tmp_path, target):
                           '"ended_at":"1970-01-01T00:00:03Z"}]}\n', encoding="utf-8")
         (path.parent / "runner_records.jsonl").symlink_to(runner)
     html = page(root)
-    if target == "runner_records":
-        assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
-    else:
-        assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' not in html
+    assert eval_index._score(value["summary"]) in html
+    assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' not in html
     assert any(link.endswith("/ev-retried") for link in Markup(html).links)
 
 
@@ -660,7 +821,8 @@ def test_cli_is_usable_without_viewer_or_site_packages(tmp_path, stored, failure
     assert result.returncode == 0, result.stderr
     html = out.read_text(encoding="utf-8")
     assert "http://127.0.0.1:9001/evals/ev-retried" in html
-    assert eval_index._score(value["summary"]) in html
+    assert '1 / 2<span class="attempts">（やり直しを含めると 3 回）</span>' in html
+    assert json.loads(path.read_text(encoding="utf-8")) == value
     if failure:
         assert "未完了" in Markup(html).cells
         assert "planned trials are incomplete" in Markup(html).titles

@@ -26,6 +26,8 @@ import type { EventsPage, TraceEvent } from './types';
 /** Resets allowed within one pass before the pager gives up (a file replaced again and again). */
 const MAX_RESETS_PER_PASS = 3;
 const MAX_PAGES_PER_PASS = 10_000;
+/** Give stalled storage/network reads a deadline so later polls can recover. */
+const PAGE_TIMEOUT_MS = 60_000;
 
 export interface PagerSnapshot {
   events: TraceEvent[];
@@ -66,7 +68,7 @@ export const EMPTY_SNAPSHOT: PagerSnapshot = {
   quietPasses: 0,
 };
 
-export type FetchPage = (afterOffset: number, generation: string | null) => Promise<EventsPage>;
+export type FetchPage = (afterOffset: number, generation: string | null, signal: AbortSignal) => Promise<EventsPage>;
 
 /** The new generation named by a 409 `generation_changed` answer, or null for any other error. */
 export function generationChangedOf(err: unknown): string | null {
@@ -93,6 +95,7 @@ export class EventsPager {
   private running: Promise<void> | null = null;
   private rerun = false;
   private disposed = false;
+  private cancelRead: (() => void) | null = null;
 
   constructor(fetchPage: FetchPage, onUpdate: (s: PagerSnapshot) => void) {
     this.fetchPage = fetchPage;
@@ -106,6 +109,7 @@ export class EventsPager {
   /** Stops publishing; results of requests still in flight are ignored. */
   dispose(): void {
     this.disposed = true;
+    this.cancelRead?.();
   }
 
   /**
@@ -154,6 +158,29 @@ export class EventsPager {
     });
   }
 
+  private async readPage(from: number): Promise<EventsPage> {
+    const controller = new AbortController();
+    const timers = typeof window === 'undefined' ? globalThis : window;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abandoned = new Promise<never>((_, reject) => {
+      this.cancelRead = () => {
+        reject(new Error('イベントの読み込みを中断しました'));
+        controller.abort();
+      };
+      timer = timers.setTimeout(() => {
+        reject(new Error('イベントの読み込みがタイムアウトしました。再読み込みしてください。'));
+        controller.abort();
+      }, PAGE_TIMEOUT_MS);
+    });
+    try {
+      // The race also ignores late results from transports which do not honor abort.
+      return await Promise.race([this.fetchPage(from, this.state.generation, controller.signal), abandoned]);
+    } finally {
+      if (timer !== undefined) timers.clearTimeout(timer);
+      this.cancelRead = null;
+    }
+  }
+
   private async pass(): Promise<void> {
     let resets = 0;
     let fresh = 0;
@@ -162,7 +189,7 @@ export class EventsPager {
       const from = this.state.nextOffset;
       let page: EventsPage;
       try {
-        page = await this.fetchPage(from, this.state.generation);
+        page = await this.readPage(from);
       } catch (err) {
         if (this.disposed) return;
         const changed = generationChangedOf(err);
