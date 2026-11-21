@@ -103,7 +103,13 @@ interface Row {
   expanded: boolean;
   /** Shown only because a descendant matches the filters. */
   context: boolean;
+  /** Header row of consecutive parallel-reasoning candidates; `node` is the first one. */
+  group?: TNode[];
 }
+
+const isCandidate = (n: TNode) => n.kind === 'model_call' && n.call?.callKind === 'ensemble_member';
+const groupKeyOf = (first: TNode) => `ensemble:${first.key}`;
+const rowKey = (r: Row) => (r.group ? groupKeyOf(r.node) : r.node.key);
 
 function isFailure(n: TNode, running: boolean): boolean {
   return n.failed || n.degraded || (n.open && !running);
@@ -141,19 +147,39 @@ function flatten(
     return v;
   };
   const rows: Row[] = [];
+  const emit = (n: TNode, depth: number) => {
+    const self = !active || selfMatch(n);
+    if (active && self) matched += 1;
+    // Filter matches inside a call must remain reachable through its parents.
+    const expanded = allDetails || expandedKeys.has(n.key) || (active && n.children.some(vis));
+    rows.push({ node: n, depth, expanded, context: active && !self });
+    if (n.children.length === 0) return;
+    // Keep the model -> Python -> API flow visible. Only calls inside calls
+    // belong to their parent's disclosure.
+    if ((n.kind === 'api_call' || n.kind === 'service_call') && !expanded) return;
+    walk(n.children, depth + 1);
+  };
   const walk = (list: TNode[], depth: number) => {
-    for (const n of list) {
-      if (!vis(n)) continue;
-      const self = !active || selfMatch(n);
-      if (active && self) matched += 1;
-      // Filter matches inside a call must remain reachable through its parents.
-      const expanded = allDetails || expandedKeys.has(n.key) || (active && n.children.some(vis));
-      rows.push({ node: n, depth, expanded, context: active && !self });
-      if (n.children.length === 0) continue;
-      // Keep the model -> Python -> API flow visible. Only calls inside calls
-      // belong to their parent's disclosure.
-      if ((n.kind === 'api_call' || n.kind === 'service_call') && !expanded) continue;
-      walk(n.children, depth + 1);
+    for (let i = 0; i < list.length; i++) {
+      const n = list[i];
+      // Consecutive candidates of one turn fold into one row.
+      let end = i + 1;
+      if (isCandidate(n)) {
+        while (end < list.length && isCandidate(list[end]) && list[end].call?.turnIndex === n.call?.turnIndex) end++;
+      }
+      if (end - i >= 2) {
+        const members = list.slice(i, end);
+        i = end - 1;
+        const shown = members.filter(vis);
+        if (shown.length === 0) continue;
+        // Selection, opened candidates and filter matches keep the group open.
+        const expanded = allDetails || expandedKeys.has(groupKeyOf(members[0])) || active ||
+          members.some((m) => expandedKeys.has(m.key));
+        rows.push({ node: members[0], depth, expanded, context: active, group: members });
+        if (expanded) for (const m of shown) emit(m, depth + 1);
+        continue;
+      }
+      if (vis(n)) emit(n, depth);
     }
   };
   walk(roots, 0);
@@ -222,8 +248,9 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
     setter(next);
   };
 
-  const itemKey = useCallback((r: Row) => r.node.key, []);
+  const itemKey = useCallback((r: Row) => rowKey(r), []);
   const estimate = useCallback((r: Row) => {
+    if (r.group) return 42;
     if (!r.expanded) return collapsedError(r.node) ? 64 : 42;
     switch (r.node.kind) {
       case 'code_block':
@@ -242,7 +269,7 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
   const measurementKey = useCallback((r: Row) => `${r.expanded}|${r.node.lastSeq}|${query}`, [query]);
 
   const filtersActive = types.size > 0 || roles.size > 0 || failuresOnly || query.trim().length > 0;
-  const selectionHidden = selectedKey !== null && !rows.some((r) => r.node.key === selectedKey);
+  const selectionHidden = selectedKey !== null && !rows.some((r) => !r.group && r.node.key === selectedKey);
   const clearFilters = () => {
     setTypes(new Set());
     setRoles(new Set());
@@ -255,13 +282,33 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     if ((e.target as HTMLElement).tagName === 'INPUT') return;
     e.preventDefault();
-    const idx = rows.findIndex((r) => r.node.key === selectedKey);
+    const idx = rows.findIndex((r) => !r.group && r.node.key === selectedKey);
     const next = e.key === 'ArrowDown' ? Math.min(rows.length - 1, idx + 1) : Math.max(0, idx - 1);
     if (rows[next]) onSelect(rows[next].node);
   };
 
   const renderItem = useCallback(
-    (r: Row) => (
+    (r: Row) => r.group ? (
+      <CandidateGroupCard
+        row={r}
+        members={r.group}
+        running={running}
+        onToggle={() => {
+          const members = r.group!;
+          setOpened(old => {
+            const next = new Set(old);
+            for (let p = r.node.parent; p; p = p.parent) next.add(p.key);
+            if (r.expanded) {
+              next.delete(groupKeyOf(r.node));
+              for (const m of members) next.delete(m.key);
+            } else next.add(groupKeyOf(r.node));
+            return next;
+          });
+          // Folding the group also releases a selected candidate, which would reopen it.
+          if (r.expanded && members.some((m) => m.key === selectedKey)) onClearSelection?.();
+        }}
+      />
+    ) : (
       <ErrorBoundary label={`カード #${r.node.seq}（${r.node.primary.event_type}）`} resetKey={`${r.node.lastSeq}|${r.node.events.length}`}>
         <NodeCard
           row={r}
@@ -365,6 +412,46 @@ export function Timeline({ model, summary, ep, running, selectedKey, selectedEve
         className="replay-process-scroll py-1"
         empty={<div className="p-4 text-xs text-text-tertiary">表示するイベントがありません</div>}
       />
+    </div>
+  );
+}
+
+/** One row for the candidates of one parallel-reasoning turn; it opens to list them. */
+function CandidateGroupCard({ row, members, running, onToggle }: { row: Row; members: TNode[]; running: boolean; onToggle: () => void }) {
+  const turn = members[0].call?.turnIndex;
+  const durations = members.map(nodeDuration).filter((d): d is number => d !== null);
+  const longest = durations.length ? Math.max(...durations) : null;
+  // A stream the caller stopped reading is a stop, not a failure (as on each candidate's own row).
+  const stoppedCall = (m: TNode) => m.call !== null && callOutcome(m.call).stopped;
+  const failed = members.filter((m) => m.failed && !stoppedCall(m)).length;
+  const stopped = members.filter((m) => m.failed && stoppedCall(m)).length;
+  const open = members.filter((m) => m.open).length;
+  return (
+    <div className="relative pr-2 py-0.5" style={{ paddingLeft: 8 + row.depth * 14 }}>
+      <div className={`rounded-md border transition-colors border-surface-border bg-surface-raised hover:border-surface-border-light ${row.context ? 'opacity-45' : ''}`}>
+        <button
+          type="button"
+          data-timeline-group=""
+          aria-expanded={row.expanded}
+          onClick={onToggle}
+          className="flex w-full min-h-9 items-center gap-1.5 rounded-md px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          <svg aria-hidden="true" className={`w-3 h-3 flex-shrink-0 text-text-tertiary transition-transform ${row.expanded ? 'rotate-90' : ''}`} fill="currentColor" viewBox="0 0 20 20">
+            <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+          </svg>
+          <Badge tone={KIND_TAG.model_call.tone}>{KIND_TAG.model_call.label}</Badge>
+          <span className="font-display text-[13px] text-text-primary truncate min-w-[40%] shrink">パラレルリーズニング：候補 {members.length} 件</span>
+          {turn != null && <span className="text-[10px] text-text-tertiary truncate min-w-0 shrink-[100]">ターン {turn}</span>}
+          <span className="ml-auto flex items-center gap-1 flex-shrink-0">
+            {longest !== null && <span className="text-[11px] text-text-tertiary font-mono" title="同時に実行した候補のうち、いちばん長くかかった時間">最長 {fmtDuration(longest)}</span>}
+            {failed > 0 && <Badge tone="red">失敗 {failed}</Badge>}
+            {stopped > 0 && <Badge tone="amber">中断 {stopped}</Badge>}
+            {open > 0 && <Badge tone={running ? 'gold' : 'red'}>{running ? '実行中' : '未完了'} {open}</Badge>}
+            {failed + stopped + open === 0 && <Badge tone="green">ok</Badge>}
+            <span className="text-[10px] text-text-muted font-mono">#{members[0].seq}–#{members[members.length - 1].seq}</span>
+          </span>
+        </button>
+      </div>
     </div>
   );
 }

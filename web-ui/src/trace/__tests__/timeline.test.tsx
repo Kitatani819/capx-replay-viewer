@@ -82,3 +82,51 @@ test('an opened API card shows the definition first and keeps argument values in
   // The error stays visible outside the folded values.
   assert.match(other, /<\/details><div class="text-\[11px\] font-mono text-red-300[^>]*>✕ RuntimeError: error-marker/);
 });
+
+test('parallel reasoning candidates fold into one closed row that opens for a selected candidate', () => {
+  const r = new Rec();
+  r.episodeStart();
+  const members = ['a', 'b', 'c'].map(id => {
+    const request = r.request('code_generator', id, 1, { call_kind: 'ensemble_member', turn_index: 0 });
+    r.response(request);
+    return request;
+  });
+  r.response(r.request('code_generator', 'synth', 1, { call_kind: 'ensemble_synthesis', turn_index: 0 }));
+  r.response(r.request('code_generator', 'single', 1, { call_kind: 'ensemble_member', turn_index: 1 }));
+  const model = buildEpisodeModel(r.events);
+  const render = (selected: { event_id: string } | null) => {
+    const node = selected ? model.allNodes.find(n => n.primary.event_id === selected.event_id)! : null;
+    return renderToStaticMarkup(<Timeline model={model} ep={{ runId: 'run', episodeId: 'ep' }} running={false}
+      selectedKey={node?.key ?? null} selectedEventId={selected?.event_id ?? null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  };
+  const closed = render(null);
+  assert.match(closed, /data-timeline-group="" aria-expanded="false"/);
+  assert.match(closed, /パラレルリーズニング：候補 3 件/);
+  assert.match(closed, /#\d+–#\d+/);
+  assert.doesNotMatch(closed, /パラレルリーズニング：候補 [123]\/3/);
+  assert.equal(closed.match(/data-timeline-group=/g)?.length, 1, 'a lone candidate is not grouped');
+  assert.match(closed, /パラレルリーズニング：統合/);
+  assert.match(closed, /パラレルリーズニング：候補 1\/1/);
+  assert.match(closed, /最長 [^<]+<\/span><span[^>]*>ok<\/span>/);
+  const open = render(members[1]);
+  assert.match(open, /data-timeline-group="" aria-expanded="true"/);
+  for (const label of ['1/3', '2/3', '3/3']) assert.match(open, new RegExp(`パラレルリーズニング：候補 ${label}`));
+  // The header carries no event id, so a candidate's id still names exactly one row.
+  assert.equal(open.match(new RegExp(`data-timeline-event="${members[0].event_id}"`, 'g'))?.length, 1);
+});
+
+test('the candidate row counts failures and stopped streams apart', () => {
+  const r = new Rec();
+  r.episodeStart();
+  r.response(r.request('code_generator', 'ok', 1, { call_kind: 'ensemble_member', turn_index: 0 }));
+  const stopped = r.request('code_generator', 'stopped', 1, { call_kind: 'ensemble_member', turn_index: 0 });
+  r.logicalError(stopped, 'GeneratorExit', 'stopped', { partial_content: 'part' });
+  const failed = r.request('code_generator', 'failed', 1, { call_kind: 'ensemble_member', turn_index: 0 });
+  r.logicalError(failed, 'RuntimeError', 'boom');
+  const model = buildEpisodeModel(r.events);
+  const html = renderToStaticMarkup(<Timeline model={model} ep={{ runId: 'run', episodeId: 'ep' }} running={false}
+    selectedKey={null} selectedEventId={null} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  assert.match(html, />失敗 1<\/span>/);
+  assert.match(html, />中断 1<\/span>/);
+  assert.doesNotMatch(html, />ok<\/span><span[^>]*>#\d+–/);
+});
