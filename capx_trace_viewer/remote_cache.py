@@ -1,6 +1,7 @@
 """Private, persistent stale-while-revalidate cache for remote discovery.
 
-Remote work is serialized by a single worker. Reading a stale or empty snapshot
+Background scans are serialized; scoped interactive discovery has a separate
+worker so it cannot queue behind a team scan. Reading stale or empty snapshots
 only schedules work; pages never wait for a remote filesystem scan.
 """
 from __future__ import annotations
@@ -47,6 +48,8 @@ class RemoteListingCache:
         self._entries: dict[str, _Entry] = {}
         self._queue: queue.Queue[tuple[str, _Entry, Callable] | None] = queue.Queue()
         self._worker: threading.Thread | None = None
+        self._interactive_queue: queue.Queue[tuple[str, _Entry, Callable] | None] = queue.Queue()
+        self._interactive_worker: threading.Thread | None = None
         self._closed = False
 
     def _path(self, key: str) -> Path:
@@ -127,7 +130,7 @@ class RemoteListingCache:
         return self._entries[key]
 
     def snapshot(self, key: str, fetch: Callable[[Listing | None], Listing], *,
-                 refresh: bool = False, wait: bool = False) -> Listing:
+                 refresh: bool = False, wait: bool = False, interactive: bool = False) -> Listing:
         """Return last good data, scheduling at most one refresh for this key.
 
         ``wait`` is reserved for explicit checks/import operations. Even with
@@ -138,10 +141,15 @@ class RemoteListingCache:
             cold = entry.data is None
             if not self._closed and not entry.pending and (refresh or time.monotonic() >= entry.expires):
                 entry.pending = True
-                self._queue.put((key, entry, fetch))
-                if self._worker is None:
-                    self._worker = threading.Thread(target=self._run, name="capx-gmo-listings", daemon=True)
-                    self._worker.start()
+                work_queue = self._interactive_queue if interactive else self._queue
+                work_queue.put((key, entry, fetch))
+                worker_attr = "_interactive_worker" if interactive else "_worker"
+                if getattr(self, worker_attr) is None:
+                    worker = threading.Thread(target=self._run, args=(work_queue,),
+                                              name="capx-gmo-runs" if interactive else "capx-gmo-listings",
+                                              daemon=True)
+                    setattr(self, worker_attr, worker)
+                    worker.start()
             if wait and (cold or refresh):
                 finished = self._condition.wait_for(lambda: not entry.pending or self._closed, timeout=65)
                 if not finished:
@@ -163,14 +171,15 @@ class RemoteListingCache:
             }
 
     def snapshot_with_status(self, key: str, fetch: Callable[[Listing | None], Listing], *,
-                             refresh: bool = False, wait: bool = False) -> tuple[Listing, dict[str, Any]]:
+                             refresh: bool = False, wait: bool = False,
+                             interactive: bool = False) -> tuple[Listing, dict[str, Any]]:
         """Read rows and their refresh status as one consistent observation.
 
         In particular, a cold response must remain marked as refreshing even if
         its worker completes between the page's row and status reads.
         """
         with self._condition:
-            data = self.snapshot(key, fetch, refresh=refresh, wait=wait)
+            data = self.snapshot(key, fetch, refresh=refresh, wait=wait, interactive=interactive)
             return data, self.status(key)
 
     def invalidate(self, key: str | None = None) -> None:
@@ -180,11 +189,11 @@ class RemoteListingCache:
             for entry in entries:
                 entry.expires = 0
 
-    def _run(self) -> None:
+    def _run(self, work_queue: queue.Queue) -> None:
         while True:
-            item = self._queue.get()
+            item = work_queue.get()
             if item is None:
-                self._queue.task_done()
+                work_queue.task_done()
                 return
             key, entry, fetch = item
             try:
@@ -215,7 +224,7 @@ class RemoteListingCache:
                     entry.expires = time.monotonic() + self.ttl
                     entry.pending = False
                     self._condition.notify_all()
-                self._queue.task_done()
+                work_queue.task_done()
 
     def close(self) -> None:
         with self._condition:
@@ -224,6 +233,8 @@ class RemoteListingCache:
             self._closed = True
             self._condition.notify_all()
             self._queue.put(None)
-            worker = self._worker
-        if worker is not None:
-            worker.join(timeout=1)
+            self._interactive_queue.put(None)
+            workers = (self._worker, self._interactive_worker)
+        for worker in workers:
+            if worker is not None:
+                worker.join(timeout=1)

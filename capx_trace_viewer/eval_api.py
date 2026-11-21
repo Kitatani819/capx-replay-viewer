@@ -141,7 +141,7 @@ class EvalService:
             remote["episodes"].extend(listing["episodes"])
 
     def _episodes(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False
-                  ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                  ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         episodes = {}
         if not conflict:
             for row in remote["episodes"]:
@@ -167,24 +167,64 @@ class EvalService:
                 remote_episode = episodes.get(episode["episode_id"])
                 # A copy fetched while the trial was still running stops there and
                 # later reads as interrupted; GMO's newer state wins until it is refetched.
-                if remote_episode and _STATUS_PROGRESS.get(remote_episode.get("status"), 0) > _STATUS_PROGRESS.get(episode.get("status"), 0):
-                    continue
+                if remote_episode:
+                    remote_progress = _STATUS_PROGRESS.get(remote_episode.get("status"), 0)
+                    local_progress = _STATUS_PROGRESS.get(episode.get("status"), 0)
+                    remote_mtime = remote_episode.get("episode_mtime")
+                    local_mtime = episode.get("episode_mtime")
+                    if (remote_progress > local_progress or
+                            (type(remote_mtime) in (int, float) and type(local_mtime) in (int, float)
+                             and remote_mtime > local_mtime and not remote_episode.get("episode_json_error"))):
+                        continue
                 episodes[episode["episode_id"]] = {**episode, "local_state": "local"}
-        return list(episodes.values()), detail["runner_records"] if detail else []
+        return (list(episodes.values()), detail["runner_records"] if detail else [],
+                detail.get("runner_records_info", {}) if detail else {})
+
+    def _classification(self, episode: dict[str, Any], records: list[dict[str, Any]],
+                        evaluation: dict[str, Any] | None = None) -> dict[str, Any]:
+        if episode["local_state"] == "local":
+            try:
+                directory = reader.Dir.open_below(self.trace_root, [episode["run_id"], episode["episode_id"]])
+            except OSError:
+                pass
+            else:
+                with directory:
+                    return reader.trial_end_classification_at(directory, episode, records, evaluation=evaluation)
+        return reader.trial_end_classification_at(None, episode, records, evaluation=evaluation)
 
     def _summary(self, entry: dict[str, Any], remote: dict[str, list[dict[str, Any]]]) -> Any:
         record = entry["eval"]
         if record is None:
             return None
-        episodes, records = self._episodes(entry["eval_id"], remote, conflict=entry["_conflict"])
+        episodes, records, records_info = self._episodes(entry["eval_id"], remote, conflict=entry["_conflict"])
         local = [episode for episode in episodes if episode["local_state"] == "local"]
+        saved = record["summary"]
+        saved_logical = saved is not None and "attempts" in saved
+        population = evals.latest_logical_episodes(episodes) if saved_logical else episodes
+        complete = (saved is None or (
+            len(episodes) >= saved.get("attempts", saved["trials"])
+            and len(population) >= saved["trials"]
+            and set(saved["tasks"]).issubset(episode.get("task") for episode in episodes
+                                            if isinstance(episode.get("task"), str))
+            and set(saved["seeds"]).issubset(episode.get("seed") for episode in episodes
+                                            if type(episode.get("seed")) is int)
+            and all(sum(episode.get("task") == task for episode in episodes) >= counts.get("attempts", counts["trials"])
+                    and sum(episode.get("task") == task for episode in population) >= counts["trials"]
+                    for task, counts in saved["by_task"].items())))
+        intact = not any(records_info.get(key) for key in ("error", "corrupt_lines", "torn_tail", "truncated"))
+        runner_complete = (saved is None or
+                           sum(evals._verdict_and_source(episode, records)[1] == "runner_record" for episode in population)
+                           >= saved["verdict_sources"].get("runner_record", 0))
         # Older records count retries as trials. Rebuild from the same episodes
-        # shown in the table when the local metadata is available and readable.
-        if local and all(not episode.get("episode_json_error") for episode in local):
-            return preserve_evaluation_failure(evals.aggregate_episodes(episodes, records, logical=True), record)
-        if record["summary"] is not None:
-            return record["summary"]
-        return evals.aggregate_episodes(episodes, records, logical=bool(record.get("segments")))
+        # shown in the table only when the saved population and evidence are available.
+        if local and complete and intact and runner_complete and all(not episode.get("episode_json_error") for episode in episodes):
+            summary = evals.aggregate_episodes(episodes, records, logical=True,
+                                             classify=lambda episode: self._classification(episode, records, record))
+            return preserve_evaluation_failure(summary, record)
+        if saved is not None:
+            return saved
+        return evals.aggregate_episodes(episodes, records, logical=bool(record.get("segments")),
+                                        classify=lambda episode: self._classification(episode, records, record))
 
     @staticmethod
     def _public(entry: dict[str, Any]) -> dict[str, Any]:
@@ -207,18 +247,10 @@ class EvalService:
 
     def _trials(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False,
                 evaluation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        episodes, records = self._episodes(run_id, remote, conflict=conflict)
+        episodes, records, _records_info = self._episodes(run_id, remote, conflict=conflict)
         trials = []
         for episode in episodes:
-            classification = reader.trial_end_classification_at(None, episode, records, evaluation=evaluation)
-            if episode["local_state"] == "local":
-                try:
-                    directory = reader.Dir.open_below(self.trace_root, [run_id, episode["episode_id"]])
-                except OSError:
-                    pass
-                else:
-                    with directory:
-                        classification = reader.trial_end_classification_at(directory, episode, records, evaluation=evaluation)
+            classification = self._classification(episode, records, evaluation)
             trials.append({
                 "episode_id": episode["episode_id"],
                 "task": episode.get("task") if isinstance(episode.get("task"), str) else None,
@@ -254,13 +286,13 @@ class EvalService:
                         and repeat_reference.record_key(candidate["eval"]) == key]
             if not matching:
                 continue
-            episodes, _records = self._episodes(entry["eval_id"], remote)
+            episodes, _records, _info = self._episodes(entry["eval_id"], remote)
             settings = repeat_reference.episode_settings(episodes)
             if settings is None or len(episodes) != entry["eval"]["summary"]["trials"]:
                 continue
             for candidate in matching:
                 self._load_episodes(remote, (candidate["eval_id"],))
-                other, _records = self._episodes(candidate["eval_id"], remote)
+                other, _records, _info = self._episodes(candidate["eval_id"], remote)
                 if len(other) != candidate["eval"]["summary"]["trials"] or repeat_reference.episode_settings(other) != settings:
                     continue
                 seen_pairs.add(frozenset((candidate["eval_id"], entry["eval_id"])))

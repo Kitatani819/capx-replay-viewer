@@ -556,7 +556,8 @@ class GmoService:
                 return rows
 
         try:
-            rows, status = self._listings.snapshot_with_status(key, fetch, refresh=refresh, wait=wait)
+            rows, status = self._listings.snapshot_with_status(
+                key, fetch, refresh=refresh, wait=wait, interactive=kind == "run")
             if status_out is not None:
                 status_out.update(status)
         except RemoteCacheError as exc:

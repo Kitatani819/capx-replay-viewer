@@ -575,6 +575,8 @@ def _events_read_error(exc: OSError, name: str) -> HTTPException:
     """An events file that exists but cannot be opened or read. Only ENOENT means "not
     written yet"; everything else is shown to the viewer as an error, never as an empty
     page (section 2: gaps are never hidden)."""
+    if isinstance(exc, reader.EventsLineTooLongError):
+        return HTTPException(status_code=413, detail=f"{name} event line exceeds the scan limit")
     if reader.is_symlink_refusal(exc):
         return HTTPException(status_code=403, detail=f"{name} is a symlink; symlinks below the trace root are not followed")
     if exc.errno in (errno.EACCES, errno.EPERM):
@@ -1119,21 +1121,17 @@ def create_trace_router(
         summary: dict[str, Any] | None = None
         trial_record = None
         with trial:
-            files = _list_trial_files(trial)
-            by_name = {f["path"]: f for f in files}
-            if "code.py" in by_name:
-                text = reader.read_text_at(trial, "code.py", MAX_TEXT_BYTES)
-                if text is not None:
-                    code = {"path": "code.py", "text": text[0], "truncated": text[1]}
-            if "summary.txt" in by_name:
-                text = reader.read_text_at(trial, "summary.txt", 4 * MAX_TEXT_BYTES)
-                if text is not None:
-                    summary = parse_summary_txt(text[0])
-                    summary["truncated"] = text[1]
-                    if not summary["parsed"]:
-                        summary["raw"] = text[0][:20000]
-            if "trial_record.json" in by_name:
-                trial_record = reader.read_json_at(trial, "trial_record.json")[0]
+            files, files_truncated = _list_trial_files(trial)
+            text = reader.read_text_at(trial, "code.py", MAX_TEXT_BYTES)
+            if text is not None:
+                code = {"path": "code.py", "text": text[0], "truncated": text[1]}
+            text = reader.read_text_at(trial, "summary.txt", 4 * MAX_TEXT_BYTES)
+            if text is not None:
+                summary = parse_summary_txt(text[0])
+                summary["truncated"] = text[1]
+                if not summary["parsed"]:
+                    summary["raw"] = text[0][:20000]
+            trial_record = reader.read_json_at(trial, "trial_record.json")[0]
         videos, images, prompts, other = [], [], [], []
         for f in files:
             name = f["path"].rsplit("/", 1)[-1]
@@ -1161,6 +1159,7 @@ def create_trace_router(
                 "harness_images": images,
                 "harness_prompts": prompts,
                 "other_files": other,
+                "files_truncated": files_truncated,
             }
         )
 
@@ -1253,19 +1252,26 @@ def _legacy_run_overview(index: int, run_id: str, run: reader.Dir) -> dict[str, 
     }
 
 
-def _list_trial_files(trial: reader.Dir) -> list[dict[str, Any]]:
+def _list_trial_files(trial: reader.Dir) -> tuple[list[dict[str, Any]], bool]:
     """Regular files of a trial dir and its direct subdirectories (symlinks skipped)."""
     out: list[dict[str, Any]] = []
+    truncated = False
 
     def visit(directory: reader.Dir, prefix: str, depth: int) -> None:
+        nonlocal truncated
         for name in directory.names():
-            if len(out) >= MAX_LEGACY_FILES or not reader.is_valid_id(name):
+            if truncated:
+                return
+            if not reader.is_valid_id(name):
                 continue
             st = directory.lstat(name)
             if st is None:
                 continue
             rel = f"{prefix}{name}"
             if stat.S_ISREG(st.st_mode):
+                if len(out) >= MAX_LEGACY_FILES:
+                    truncated = True
+                    return
                 out.append({"path": rel, "bytes": st.st_size, "mime": mime_for(name)[0]})
             elif stat.S_ISDIR(st.st_mode) and depth < 1:
                 try:
@@ -1276,4 +1282,4 @@ def _list_trial_files(trial: reader.Dir) -> list[dict[str, Any]]:
                     visit(sub, rel + "/", depth + 1)
 
     visit(trial, "", 0)
-    return out
+    return out, truncated

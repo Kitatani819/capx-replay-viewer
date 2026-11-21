@@ -82,7 +82,7 @@ def test_local_listing_and_comparison(tmp_path):
                                                                      "missing_evidence": ["最終のモデル判断 / 適用されたターン・書き直し上限 / 終了した規則名"]},
                                                            "rule_differences": []},
                                     "trace_complete": True, "local_state": "local"}
-    assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401]}]
+    assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401, 403]}]
 
 
 @pytest.mark.parametrize("local_copy", [False, True])
@@ -355,7 +355,7 @@ def test_remote_only_summary_preserves_stored_and_segment_behavior(tmp_path, mon
             1, 1 if segmented else 2, 2)
 
 
-def test_remote_conflict_still_allows_local_logical_summary(tmp_path, monkeypatch):
+def test_remote_conflict_preserves_saved_summary_with_incomplete_local_population(tmp_path, monkeypatch):
     value = record("ev-conflict-local")
     run = write_record(tmp_path, value)
     episode(run, "old", success=False)
@@ -366,7 +366,7 @@ def test_remote_conflict_still_allows_local_logical_summary(tmp_path, monkeypatc
     detail = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing)).detail(value["eval_id"])
     assert detail["error"]
     assert {trial["episode_id"] for trial in detail["trials"]} == {"old", "retry"}
-    assert (detail["summary"]["success"], detail["summary"]["trials"], detail["summary"]["attempts"]) == (1, 1, 2)
+    assert detail["summary"] == value["summary"]
 
 
 def test_remote_invalid_conflicting_and_unavailable_are_isolated(tmp_path, monkeypatch):
