@@ -85,6 +85,32 @@ def test_local_listing_and_comparison(tmp_path):
     assert detail["differences"] == [{"field": "seeds", "baseline": [401, 402], "current": [401]}]
 
 
+@pytest.mark.parametrize("local_copy", [False, True])
+@pytest.mark.parametrize("mine", [False, True])
+def test_evaluation_mine_uses_remote_scope_even_for_imported_local_copies(tmp_path, monkeypatch, local_copy, mine):
+    value = record("ev-remote")
+    # Display names are free text and must not determine ownership.
+    value["by"] = "表示名"
+    if local_copy:
+        write_record(tmp_path, value)
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    remote = remote_eval(value, mine=mine)
+    service = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: {"evals": [remote], "episodes": []}))
+    row, = service.listing()["evals"]
+    assert row["mine"] is mine
+    assert row["location"] == ("both" if local_copy else "gmo")
+    assert service.detail(value["eval_id"])["mine"] is mine
+
+
+def test_local_evaluation_is_mine_without_remote_ownership(tmp_path):
+    value = record("ev-local")
+    write_record(tmp_path, value)
+    service = EvalService(tmp_path)
+    row, = service.listing()["evals"]
+    assert row["mine"] is True
+    assert service.detail(value["eval_id"])["mine"] is True
+
+
 @pytest.mark.parametrize("stored_logical", [False, True])
 def test_finished_summary_matches_logical_trials_and_listing(tmp_path, stored_logical):
     value = record("ev-retried")

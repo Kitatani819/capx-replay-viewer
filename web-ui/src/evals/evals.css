@@ -7,7 +7,7 @@
   color-scheme: light dark;
   -webkit-font-smoothing: antialiased;
 }
-.eval-content { max-width: 1240px; margin: 0 auto; }
+.eval-content { max-width: 1240px; min-width: 0; margin: 0 auto; }
 .eval-page a { color: var(--ce-accent); text-decoration: none; text-underline-offset: 4px; font-weight: 500; }
 .eval-page a:hover { color: var(--ce-accent-hover); text-decoration: underline; }
 .eval-page a:focus-visible { outline: 2px solid var(--ce-accent); outline-offset: 3px; border-radius: 3px; }
@@ -219,3 +219,21 @@
   cursor: pointer;
 }
 .eval-remote-status button:disabled { opacity: .6; cursor: default; }
+
+/* List filters share the Clean Emerald surface and focus tokens in both themes. */
+.eval-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 20px 0 12px; padding: 16px; min-width: 0; border: 1px solid var(--ce-border); border-radius: 10px; background: var(--ce-surface); }
+.eval-filters label { display: flex; flex: 1 1 140px; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; color: var(--ce-text-secondary); font-size: 12px; }
+.eval-filters :is(input, select) { width: 100%; min-width: 0; max-width: 100%; padding: 7px 9px; border: 1px solid var(--ce-border); border-radius: 6px; background: var(--ce-bg); color: var(--ce-text); font: inherit; font-size: 13px; color-scheme: inherit; }
+.eval-filters :is(input, select):focus-visible { outline: 2px solid var(--ce-accent); outline-offset: 2px; }
+.eval-filters .eval-filter-keyword { flex-basis: 240px; }
+.eval-filter-dates { display: flex; flex: 1 1 300px; align-items: end; gap: 8px; min-width: 0; max-width: 100%; }
+.eval-filter-dates label { flex-basis: 0; }
+.eval-filter-dates > span { padding-bottom: 7px; }
+.eval-filter-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 12px 0; font-size: 13px; color: var(--ce-text-secondary); }
+.eval-filter-summary p { margin: 0; }
+.eval-filter-summary button, .eval-empty button { color: var(--ce-accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.eval-page .eval-date-heading th { background: var(--ce-subtle); color: var(--ce-text-secondary); padding-top: 10px; padding-bottom: 10px; }
+@media (max-width: 700px) {
+  .eval-header { flex-wrap: wrap; gap: 12px; }
+  .eval-page, .eval-content, .eval-table-scroll { max-width: 100%; min-width: 0; }
+}

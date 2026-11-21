@@ -105,6 +105,10 @@ class EvalService:
                 "eval_id": run_id, "eval": record,
                 "error": " / ".join(dict.fromkeys(errors)) or None,
                 "location": "both" if len(locations) > 1 else next(iter(locations)),
+                # The remote scanner applies the same owner-folder / mine-pattern
+                # rule as trial listing. An imported team copy stays a team eval.
+                "mine": (any(row.get("mine") is True for location, row in sources if location == "gmo")
+                         if "gmo" in locations else True),
                 "display_status": evals.display_status(record) if record is not None else None,
                 "evaluation_failure": evaluation_failure(record),
                 "summary": record["summary"] if record else None,

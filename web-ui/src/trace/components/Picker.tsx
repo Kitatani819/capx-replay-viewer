@@ -15,7 +15,8 @@ import { remoteName } from '../../navigation/site';
  * Related: TraceViewerPage.tsx (URL parameters), LegacyView.tsx.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { dateHeading, dateKey, listOptionValue, matchesPeriod, type DateFilter, type Period } from '../../listFilters';
 import { ApiError, gmoApi, traceApi } from '../api';
 import { fmtBytes, fmtWall } from '../format';
 import { useAsync, type AsyncState } from '../hooks';
@@ -50,6 +51,10 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
   const [runSel, setRunSel] = useState<string | null>(currentRun);
   const [filter, setFilter] = useState('');
   const [resultFilter, setResultFilter] = useState<TaskVerdict | 'all'>('all');
+  const [dateFilter, setDateFilter] = useState<DateFilter>({ period: 'all', from: '', to: '' });
+  const [taskFilter, setTaskFilter] = useState('all');
+  const [runFilter, setRunFilter] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(100);
   const runs = useAsync((s) => traceApi.runs(s), []);
   const legacyRuns = useAsync((s) => traceApi.legacyRuns(s), []);
   const gmoConfig = useAsync(async (signal) => {
@@ -82,9 +87,16 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
     legacyRuns.reload();
   };
   const detail = useAsync(runSel && mode === 'traced' ? (s) => traceApi.run(runSel, s) : null, [runSel, mode]);
+  useEffect(() => setVisibleCount(100), [dateFilter, taskFilter, runFilter, filter, resultFilter, runSel]);
+  const filterNow = Date.now();
+  const tasks = [...new Set((detail.data?.episodes ?? []).map(episode => episode.task).filter((task): task is string => !!task))].sort();
 
   const episodes = useMemo(() => {
-    const list = [...(detail.data?.episodes ?? [])].filter(episode => resultFilter === 'all' || episodeVerdict(episode, detail.data?.runner_records ?? []) === resultFilter);
+    const list = [...(detail.data?.episodes ?? [])].filter(episode =>
+      (resultFilter === 'all' || episodeVerdict(episode, detail.data?.runner_records ?? []) === resultFilter) &&
+      (taskFilter === 'all' || listOptionValue(episode.task ?? '') === taskFilter) &&
+      (runFilter === 'all' || (runSel !== null && listOptionValue(runSel) === runFilter)) &&
+      matchesPeriod(episode.start_wall_time, dateFilter, filterNow));
     const q = filter.trim().toLowerCase();
     const filtered = q
       ? list.filter((e) => [e.episode_id, e.task, e.condition, e.condition_label, String(e.seed ?? '')].some((x) => (x ?? '').toString().toLowerCase().includes(q)))
@@ -94,7 +106,9 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
       return k(a) < k(b) ? -1 : k(a) > k(b) ? 1 : 0;
     });
     return filtered;
-  }, [detail.data, filter, resultFilter]);
+  }, [detail.data, filter, resultFilter, taskFilter, runFilter, runSel, dateFilter, filterNow]);
+  const visibleEpisodes = episodes.slice(0, visibleCount);
+  const filtersActive = filter.trim() !== '' || resultFilter !== 'all' || taskFilter !== 'all' || runFilter !== 'all' || dateFilter.period !== 'all';
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface">
@@ -142,8 +156,8 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
       ) : mode === 'legacy' ? (
         <LegacyPicker runs={legacyRuns} onPickLegacy={onPickLegacy} />
       ) : (
-        <div className="flex-1 min-h-0 flex">
-          <div className="w-80 flex-shrink-0 border-r border-surface-border overflow-y-auto">
+        <div className="trial-picker-local flex-1 min-h-0 min-w-0 flex">
+          <div className="trial-picker-runs w-80 flex-shrink-0 border-r border-surface-border overflow-y-auto">
             <div className="px-3 py-2 text-[11px] font-bold font-display uppercase tracking-widest text-text-tertiary">run（新しい順）</div>
             {runs.loading && !runs.data && (
               <div className="px-3">
@@ -156,7 +170,7 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
               </div>
             )}
             {runs.data && runs.data.runs.length === 0 && <div className="px-3 text-xs text-text-tertiary">トレースのある run がありません</div>}
-            {runs.data?.runs.map((r) => (
+            {runs.data?.runs.filter(run => runFilter === 'all' || listOptionValue(run.run_id) === runFilter).map((r) => (
               <button
                 key={r.run_id}
                 type="button"
@@ -179,8 +193,14 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
             ))}
           </div>
           <div className="flex-1 min-w-0 flex flex-col">
-            <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-surface-border">
+            <div className="trial-list-filters flex-shrink-0 px-3 py-2 border-b border-surface-border">
               <span className="text-[11px] font-bold font-display uppercase tracking-widest text-text-tertiary">episode</span>
+              <label>期間<select aria-label="期間" value={dateFilter.period} onChange={event => setDateFilter(previous => ({ ...previous, period: event.target.value as Period }))}>
+                <option value="all">すべて</option><option value="today">今日</option><option value="3d">過去3日</option><option value="7d">過去7日</option><option value="custom">日付を指定</option>
+              </select></label>
+              {dateFilter.period === 'custom' && <><label>開始日<input type="date" aria-label="開始日" max={dateFilter.to || undefined} value={dateFilter.from} onChange={event => setDateFilter(previous => ({ ...previous, from: event.target.value }))} /></label><label>終了日<input type="date" aria-label="終了日" min={dateFilter.from || undefined} value={dateFilter.to} onChange={event => setDateFilter(previous => ({ ...previous, to: event.target.value }))} /></label></>}
+              <label>タスク<select aria-label="タスク" value={taskFilter} onChange={event => setTaskFilter(event.target.value)}><option value="all">すべて</option>{tasks.map(task => <option key={task} value={listOptionValue(task)}>{task}</option>)}</select></label>
+              <label>評価<select aria-label="評価" value={runFilter} onChange={event => { setRunFilter(event.target.value); const selected = runs.data?.runs.find(run => listOptionValue(run.run_id) === event.target.value); if (event.target.value !== 'all' && selected) { setRunSel(selected.run_id); setTaskFilter('all'); } }}><option value="all">すべて</option>{runs.data?.runs.map(run => <option key={run.run_id} value={listOptionValue(run.run_id)}>{run.run_id}</option>)}</select></label>
               <select aria-label="結果で絞り込み" value={resultFilter} onChange={event => setResultFilter(event.target.value as TaskVerdict | 'all')} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
                 <option value="all">すべての結果</option>{Object.entries(VERDICT_LABELS).map(([value,label]) => <option key={value} value={value}>{label}</option>)}
               </select>
@@ -194,7 +214,8 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
                 className="flex-1 px-2 py-1 bg-surface-sunken border border-surface-border rounded text-xs text-text-primary focus:outline-none focus:ring-1 focus:ring-accent/40"
               />
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            {detail.data && <p role="status" className="trial-list-count">{filtersActive ? `${detail.data.episodes.length} 件中 ${episodes.length} 件` : `${detail.data.episodes.length} 件`}</p>}
+            <div className="trial-list-scroll flex-1 min-h-0 overflow-auto">
               {!runSel && <div className="p-4 text-xs text-text-tertiary">左の run を選んでください</div>}
               {detail.loading && !detail.data && (
                 <div className="p-4">
@@ -228,7 +249,8 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
                     </tr>
                   </thead>
                   <tbody>
-                    {episodes.map((e) => (
+                    {visibleEpisodes.flatMap((e, index) => [
+                      (index === 0 || dateKey(visibleEpisodes[index - 1].start_wall_time) !== dateKey(e.start_wall_time)) ? <tr key={`date-${index}`} className="trial-date-heading"><th scope="rowgroup" colSpan={8}>{dateHeading(e.start_wall_time)}</th></tr> : null,
                       <tr
                         key={e.episode_id}
                         tabIndex={0}
@@ -261,10 +283,11 @@ export function Picker({ config, configError, currentRun, currentEpisode, curren
                         <td className="py-1.5 pr-2">{e.end_reason ?? '—'}</td>
                         <td className="py-1.5 pr-2 font-mono text-[11px] text-text-tertiary break-all">{e.episode_id}</td>
                       </tr>
-                    ))}
+                    ])}
                   </tbody>
                 </table>
               )}
+              {episodes.length > visibleCount && <button type="button" className="trial-list-more" onClick={() => setVisibleCount(previous => previous + 100)}>さらに表示（残り {episodes.length - visibleCount} 件）</button>}
               {detail.data && episodes.length === 0 && <div className="p-4 text-xs text-text-tertiary">該当するエピソードがありません</div>}
               {detail.data && (detail.data.unscoped_files ?? []).length > 0 && (
                 <UnscopedFileList

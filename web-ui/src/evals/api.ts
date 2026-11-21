@@ -72,6 +72,7 @@ export interface EvalListEntry {
   eval: EvalRecord | null;
   error: string | null;
   location: 'local' | 'gmo' | 'both';
+  mine?: boolean;
   display_status: 'running' | 'interrupted' | 'incomplete' | 'failed' | null;
   evaluation_failure?: EvaluationFailure | null;
   summary: EvalSummary | null;
