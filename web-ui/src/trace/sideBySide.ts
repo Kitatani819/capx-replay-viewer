@@ -1,6 +1,6 @@
 /** Recorded calls aligned by identity within their recorded turn, never by time. */
 import { siteHref } from '../navigation/site';
-import { callOutcome, textOf, type EpisodeModel, type TNode } from './model';
+import { callOutcome, parallelReasoningTitle, textOf, type EpisodeModel, type TNode } from './model';
 import { turnOf } from './replay';
 import { dataOf, type TraceEvent } from './types';
 
@@ -107,7 +107,7 @@ export function comparisonCalls(model: EpisodeModel, requestArguments: ReadonlyM
       const response = nodeData(outcome.finalError ?? outcome.httpAnswer);
       const result = response.message ?? response.content ?? response.partial_content;
       const args = request ? requestArguments.get(request.event_id) ?? modelArgumentSummary(request) : '';
-      calls.push({ ...base, kind: 'model', name: [call.role, call.callKind].filter(Boolean).join(' · '),
+      calls.push({ ...base, kind: 'model', name: parallelReasoningTitle(call, false) ?? [call.role, call.callKind].filter(Boolean).join(' · '),
         arguments: args,
         argumentSummary: '',
         status: outcome.state === 'failed' ? 'error' : outcome.state === 'open' ? 'started' : 'ok',
