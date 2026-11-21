@@ -117,7 +117,7 @@ function rowFor(node: unknown, task: string): FakeElement {
   assert.ok(row, `row for ${task} exists`);
   return row!;
 }
-function rowsOf(node: unknown): FakeElement[] { return findAll(node, 'tbody').flatMap(body => findAll(body, 'tr')); }
+function rowsOf(node: unknown): FakeElement[] { return findAll(node, 'tbody').flatMap(body => findAll(body, 'tr')).filter(row => findAll(row, 'td').length > 0); }
 function mountGmo(initialConfig: GmoConfigResponse | null, onPick: (run: string, episode: string) => void = () => {}, configError: string | null = null) {
   return mount(GmoPicker, { initialConfig, configError, onConfigChange: () => {}, onRetryConfig: () => {}, onDisabled: () => {}, onPick });
 }

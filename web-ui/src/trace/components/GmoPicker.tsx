@@ -1,6 +1,7 @@
 import { remoteName } from '../../navigation/site';
 /** GMO discovery and imports inside the trial picker. Transfers stay on the server. */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { dateHeading, dateKey, listOptionValue, matchesPeriod, type DateFilter, type Period } from '../../listFilters';
 import { GmoDisabledError, errorText, gmoApi, type GmoConfigResponse, type GmoJob, type GmoScope, type GmoSettings } from '../api';
 import { fmtBytes, fmtWall } from '../format';
 import { useAsync, useInterval } from '../hooks';
@@ -63,6 +64,11 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const [scope, setScope] = useState<GmoScope>('all');
   const [resultFilter, setResultFilter] = useState<TaskVerdict | 'all'>('all');
   const [query, setQuery] = useState('');
+  const [dateFilter, setDateFilter] = useState<DateFilter>({ period: 'all', from: '', to: '' });
+  const [taskFilter, setTaskFilter] = useState('all');
+  const [runFilter, setRunFilter] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(100);
+  useEffect(() => setVisibleCount(100), [scope, resultFilter, query, dateFilter, taskFilter, runFilter]);
   // null marks the POST in flight; job ids are reconciled through /jobs or the list.
   const [pending, setPending] = useState<Record<string, string | null>>({});
   const pendingRef = useRef(pending);
@@ -194,14 +200,23 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     for (const job of jobs.data ?? []) if (!result.has(rowKey(job))) result.set(rowKey(job), job);
     return result;
   }, [jobs.data]);
+  const filterNow = Date.now();
+  const tasks = [...new Set((listing.data?.rows ?? []).map(row => row.task).filter((task): task is string => !!task))].sort();
+  const runIds = [...new Set((listing.data?.rows ?? []).map(row => row.run_id))];
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return (listing.data?.rows ?? []).filter(row =>
       (scope === 'all' || row.mine === (scope === 'mine')) &&
       (resultFilter === 'all' || episodeVerdict(row) === resultFilter) &&
+      (taskFilter === 'all' || listOptionValue(row.task ?? '') === taskFilter) &&
+      (runFilter === 'all' || listOptionValue(row.run_id) === runFilter) &&
+      matchesPeriod(row.start_wall_time, dateFilter, filterNow) &&
       (!q || [row.task, row.seed, row.owner, row.mine ? '自分' : ''].some(value => String(value ?? '').toLowerCase().includes(q))),
-    );
-  }, [listing.data, scope, resultFilter, query]);
+    // Newest first, so the first page and its date headers start from today and paging goes back in time.
+    ).sort((left, right) => (right.start_wall_time ?? -Infinity) - (left.start_wall_time ?? -Infinity));
+  }, [listing.data, scope, resultFilter, query, taskFilter, runFilter, dateFilter, filterNow]);
+  const filtersActive = scope !== 'all' || resultFilter !== 'all' || query.trim() !== '' || dateFilter.period !== 'all' || taskFilter !== 'all' || runFilter !== 'all';
+  const visibleRows = rows.slice(0, visibleCount);
 
   const fetchEpisode = async (runId: string, episodeId: string) => {
     const key = rowKey({ run_id: runId, episode_id: episodeId });
@@ -367,22 +382,29 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
       {remoteStatus?.error && <div role="status" className="px-3 py-2"><ErrorText>{remoteName()} の一覧を更新できませんでした：{remoteStatus.error}</ErrorText></div>}
       {jobs.error && <div role="alert" className="px-3 py-2"><ErrorText>取り込み状況を確認できませんでした：{jobs.error}</ErrorText><SmallButton onClick={jobs.reload}>取り込み状況を再確認</SmallButton></div>}
       {configured && <>
-        <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
+        <div className="trial-list-filters flex-shrink-0 px-3 py-2 border-b border-surface-border">
           <select aria-label={`${remoteName()} の範囲`} value={scope} onChange={event => setScope(event.target.value as GmoScope)} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
             <option value="all">すべて</option><option value="mine">自分</option><option value="team">チーム</option>
           </select>
           <select aria-label={`${remoteName()} の結果で絞り込み`} value={resultFilter} onChange={event => setResultFilter(event.target.value as TaskVerdict | 'all')} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
             <option value="all">すべての結果</option>{Object.entries(VERDICT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
+          <label>期間<select aria-label="期間" value={dateFilter.period} onChange={event => setDateFilter(previous => ({ ...previous, period: event.target.value as Period }))}>
+            <option value="all">すべて</option><option value="today">今日</option><option value="3d">過去3日</option><option value="7d">過去7日</option><option value="custom">日付を指定</option>
+          </select></label>
+          {dateFilter.period === 'custom' && <><label>開始日<input type="date" aria-label="開始日" max={dateFilter.to || undefined} value={dateFilter.from} onChange={event => setDateFilter(previous => ({ ...previous, from: event.target.value }))} /></label><label>終了日<input type="date" aria-label="終了日" min={dateFilter.from || undefined} value={dateFilter.to} onChange={event => setDateFilter(previous => ({ ...previous, to: event.target.value }))} /></label></>}
+          <label>タスク<select aria-label="タスク" value={taskFilter} onChange={event => setTaskFilter(event.target.value)}><option value="all">すべて</option>{tasks.map(task => <option key={task} value={listOptionValue(task)}>{task}</option>)}</select></label>
+          <label>評価<select aria-label="評価" value={runFilter} onChange={event => setRunFilter(event.target.value)}><option value="all">すべて</option>{runIds.map(run => <option key={run} value={listOptionValue(run)}>{run}</option>)}</select></label>
           <input type="search" name="gmo-filter" aria-label={`${remoteName()} の試行を検索`} value={query} onChange={event => setQuery(event.target.value)} placeholder="絞り込み（task / seed / 実行者）" className={`${INPUT_CLASS} flex-1 min-w-40`} />
         </div>
+        {listing.data && <p role="status" className="trial-list-count">{filtersActive ? `${listing.data.rows.length} 件中 ${rows.length} 件` : `${listing.data.rows.length} 件`}</p>}
         {listing.loading && <div className="p-3"><Spinner label="一覧を読み込み中" /></div>}
-        <div className="min-h-0 overflow-x-auto">
+        <div className="trial-list-scroll min-h-0 overflow-x-auto">
           <table aria-label={`${remoteName()} の試行`} className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-raised"><tr className="text-left text-text-tertiary border-b border-surface-border">
               {['手元の状態', '結果', 'task・seed', '実行者', '開始時刻', '大きさ', '操作'].map(label => <th key={label} scope="col" className="py-1.5 px-3 font-normal whitespace-nowrap">{label}</th>)}
             </tr></thead>
-            <tbody>{rows.map((row, index) => {
+            <tbody>{visibleRows.flatMap((row, index) => {
               const key = rowKey(row);
               const job = latestJobs.get(key);
               const busy = Object.hasOwn(pending, key) || (job && activeJob(job)) || row.local_state === 'fetching';
@@ -390,7 +412,9 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
               const reason = row.conflict ? `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません` : null;
               const localState = busy ? 'fetching' : row.local_state;
               const error = rowErrors[key] || (!busy && job?.state === 'failed' ? job.error || '取り込みに失敗しました' : null);
-              return <tr key={`${key}\0${index}`} className="border-b border-surface-border/50 align-top">
+              return [
+                (index === 0 || dateKey(visibleRows[index - 1].start_wall_time) !== dateKey(row.start_wall_time)) ? <tr key={`date-${index}`} className="trial-date-heading"><th scope="rowgroup" colSpan={7}>{dateHeading(row.start_wall_time)}</th></tr> : null,
+                <tr key={`${key}\0${index}`} className="border-b border-surface-border/50 align-top">
                 <td className="py-2 px-3"><Badge tone={localState === 'local' ? 'green' : localState === 'stale' ? 'amber' : localState === 'fetching' ? 'gold' : 'neutral'}>{LOCAL_LABELS[localState]}</Badge>
                   {row.mine && row.status === 'running' && autoFollowing && !row.conflict && !skippedLarge.has(key) && <p className="mt-1 text-[11px] text-nv-green">自動で追従中</p>}
                   {skippedLarge.has(key) && <p className="mt-1 text-[11px] text-amber-500">大きいため手動</p>}
@@ -405,9 +429,10 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
                   {error && <div role="alert" className="mt-1"><ErrorText>{error}</ErrorText></div>}
                   {job?.note && <p className="mt-1 text-[11px] text-text-tertiary break-all">{job.note}</p>}
                 </td>
-              </tr>;
+              </tr>];
             })}</tbody>
           </table>
+          {rows.length > visibleCount && <button type="button" className="trial-list-more" onClick={() => setVisibleCount(previous => previous + 100)}>さらに表示（残り {rows.length - visibleCount} 件）</button>}
           {listing.data && rows.length === 0 && <p className="p-4 text-xs text-text-tertiary">該当する試行がありません</p>}
         </div>
       </>}

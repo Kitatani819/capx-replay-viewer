@@ -2,7 +2,9 @@ import { remoteName } from '../navigation/site';
 import { siteHref } from '../navigation/site';
 import { SiteTabs } from '../navigation/SiteTabs';
 /** Calm, read-only evaluation list and baseline comparison. */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { dateHeading, dateKey, listOptionValue } from '../listFilters';
+import { DEFAULT_EVAL_FILTERS, evalFilterSearch, evalFiltersActive, evaluationTasks, filterEvaluations, isRouteB, normalizeEvalFilters, readEvalFilters, type EvalFilters } from './filters';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
 import { useAsync, useInterval } from '../trace/hooks';
 import { remoteListingText } from '../trace/remoteListing';
@@ -69,15 +71,30 @@ function Rate({ entry }: { entry: EvalListEntry }) {
 }
 /** Exported evaluation sets identify the route and suite without relying on run names. */
 function RouteBNotes({ record }: { record: EvalRecord }) {
-  const [route, suite] = record.eval_set?.split(':') ?? [];
-  if (route !== 'routeB') return null;
+  const suite = record.eval_set?.split(':')[1];
+  if (!isRouteB(record)) return null;
   return <span className="eval-route-notes"><span>提出の形の評価（経路 B）・成否は審判の判定</span>
     {suite === 'behavior' && <span>シミュレーターは RTX、モデルと記録は B300</span>}</span>;
 }
 export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
+  const ordered = [...entries].sort((left, right) => {
+    const started = (entry: EvalListEntry) => {
+      const time = Date.parse(entry.eval?.started_at ?? '');
+      return Number.isFinite(time) ? time : -Infinity;
+    };
+    return started(right) - started(left);
+  });
+  const groups = new Map<string, EvalListEntry[]>();
+  for (const entry of ordered) {
+    const key = dateKey(entry.eval?.started_at);
+    const rows = groups.get(key) ?? [];
+    rows.push(entry); groups.set(key, rows);
+  }
   return <div className="eval-table-scroll"><table className="eval-list" aria-label="評価一覧">
     <thead><tr>{['日付', '実行者', '変更した部品', '成功率', 'コミット', '状態'].map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
-    <tbody>{entries.map((entry, index) => {
+    {[...groups].map(([key, rows]) => <tbody key={key}>
+      <tr className="eval-date-heading"><th colSpan={6} scope="rowgroup">{dateHeading(rows[0].eval?.started_at)}</th></tr>
+      {rows.map((entry, index) => {
       const record = entry.eval;
       if (!record) return <tr key={`${entry.eval_id}-${index}`}><td colSpan={6} className="eval-error">読み取れない評価：{entry.eval_id}<br />{entry.error || '記録が不正です'}</td></tr>;
       const href = siteHref(`/evals/${encodeURIComponent(record.eval_id)}`);
@@ -87,18 +104,50 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
         <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status && <span title={failureTooltip(entry.evaluation_failure)} className={entry.evaluation_failure ? 'eval-error' : undefined}>{entry.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[entry.display_status]}</span>}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
       </tr>;
-    })}</tbody>
+    })}</tbody>)}
   </table></div>;
 }
 export function EvalListPage() {
   const refreshNext = useRef(false);
+  const [urlFilters, setUrlFilters] = useState(() => readEvalFilters(window.location.search));
   const listing = useAsync(s => {
     const refresh = refreshNext.current;
     refreshNext.current = false;
     return evalApi.list(s, refresh);
   }, []);
   useEffect(() => { document.title = '評価一覧 · CaP-X'; }, []);
+  useEffect(() => {
+    const navigate = () => setUrlFilters(readEvalFilters(window.location.search));
+    window.addEventListener('popstate', navigate);
+    return () => window.removeEventListener('popstate', navigate);
+  }, []);
   useInterval(listing.poll, listing.data?.remote_status?.refreshing ? 2000 : 30_000, true);
+  const entries = listing.data?.evals;
+  // A cold remote listing can temporarily contain only local records. Keep
+  // shared person/task choices until the remote options have arrived.
+  const filterEntries = listing.data?.remote_status?.refreshing ? undefined : entries;
+  const filters = normalizeEvalFilters(urlFilters, filterEntries);
+  useEffect(() => {
+    const normalized = normalizeEvalFilters(urlFilters, filterEntries);
+    const search = evalFilterSearch(window.location.search, normalized);
+    if (search !== window.location.search) window.history.replaceState(null, '', `${window.location.pathname}${search}${window.location.hash}`);
+    if (JSON.stringify(normalized) !== JSON.stringify(urlFilters)) setUrlFilters(normalized);
+  }, [urlFilters, filterEntries]);
+  const changeFilters = (patch: Partial<EvalFilters>) => {
+    const next = normalizeEvalFilters({ ...filters, ...patch }, filterEntries);
+    const search = evalFilterSearch(window.location.search, next);
+    // Typing a keyword or a date replaces the entry, so Back does not step through every keystroke.
+    const typed = Object.keys(patch).every(key => key === 'q' || key === 'from' || key === 'to');
+    if (search !== window.location.search) window.history[typed ? 'replaceState' : 'pushState'](null, '', `${window.location.pathname}${search}${window.location.hash}`);
+    setUrlFilters(next);
+  };
+  const resetFilters = () => changeFilters(DEFAULT_EVAL_FILTERS);
+  const active = evalFiltersActive(filters);
+  // All comparisons in this render share one clock reading (including fake clocks).
+  const now = Date.now();
+  const filtered = filterEvaluations(entries ?? [], filters, now);
+  const people = [...new Set(entries?.flatMap(entry => entry.eval?.by ? [entry.eval.by] : []) ?? [])].sort((a, b) => a.localeCompare(b, 'ja'));
+  const tasks = [...new Set(entries?.flatMap(evaluationTasks) ?? [])].sort((a, b) => a.localeCompare(b, 'ja'));
   const status = listing.data?.remote_status;
   return <main className="eval-page"><div className="eval-content">
     <Breadcrumb items={[{ label: '評価一覧' }]} />
@@ -108,7 +157,34 @@ export function EvalListPage() {
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
     {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>{remoteName()} の一覧を更新</button></div>}
-    {listing.data && (listing.data.evals.length ? <EvalListTable entries={listing.data.evals} /> : <p>評価の記録がありません。</p>)}
+    {listing.data && <>
+      {(listing.data.evals.length > 0 || active) && <div className="eval-filters" role="search" aria-label="評価の絞り込み">
+        <label>期間<select aria-label="期間" value={filters.period} onChange={event => changeFilters({ period: event.target.value as EvalFilters['period'] })}>
+          <option value="all">すべて</option><option value="today">今日</option><option value="3d">過去3日</option><option value="7d">過去7日</option><option value="custom">日付を指定</option>
+        </select></label>
+        {filters.period === 'custom' && <div className="eval-filter-dates">
+          <label>開始日<input aria-label="開始日" type="date" value={filters.from} max={filters.to || undefined} onChange={event => changeFilters({ from: event.target.value })} /></label>
+          <span aria-hidden="true">〜</span><label>終了日<input aria-label="終了日" type="date" value={filters.to} min={filters.from || undefined} onChange={event => changeFilters({ to: event.target.value })} /></label>
+        </div>}
+        <label>実行者<select aria-label="実行者" value={filters.by} onChange={event => changeFilters({ by: event.target.value })}>
+          <option value="all">すべて</option><option value="mine">自分</option>{people.map(person => <option key={person} value={listOptionValue(person)}>{person}</option>)}
+        </select></label>
+        <label>種類<select aria-label="種類" value={filters.kind} onChange={event => changeFilters({ kind: event.target.value as EvalFilters['kind'] })}>
+          <option value="all">すべて</option><option value="a">自分たちの評価（経路 A）</option><option value="b">提出の形（経路 B）</option>
+        </select></label>
+        <label>タスク<select aria-label="タスク" value={filters.task} onChange={event => changeFilters({ task: event.target.value })}>
+          <option value="all">すべて</option>{tasks.map(task => <option key={task} value={listOptionValue(task)}>{task}</option>)}
+        </select></label>
+        <label>状態<select aria-label="状態" value={filters.status} onChange={event => changeFilters({ status: event.target.value as EvalFilters['status'] })}>
+          <option value="all">すべて</option><option value="completed">完了</option><option value="running">実行中</option><option value="stopped">途中で終了</option>
+        </select></label>
+        <label className="eval-filter-keyword">キーワード<input aria-label="キーワード" type="search" value={filters.q} placeholder="変えた部品・組・評価ID・実行者" onChange={event => changeFilters({ q: event.target.value })} /></label>
+      </div>}
+      <div className="eval-filter-summary"><p role="status">{active ? `${listing.data.evals.length} 件中 ${filtered.length} 件` : `${listing.data.evals.length} 件`}</p>
+        {active && <button type="button" onClick={resetFilters}>絞り込みを解除</button>}
+      </div>
+      {filtered.length ? <EvalListTable entries={filtered} /> : active ? <div className="eval-empty"><p>条件に合う評価はありません</p><button type="button" onClick={resetFilters}>絞り込みを解除</button></div> : <p>評価の記録がありません。</p>}
+    </>}
   </div></main>;
 }
 const WORD_LEGEND = `${Object.entries(CELL_LEGEND).map(([word, explanation]) => word === explanation ? word : `${word}＝${explanation}`).join('　')}　空欄＝記録なし`;

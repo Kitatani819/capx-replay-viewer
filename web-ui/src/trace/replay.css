@@ -1,3 +1,18 @@
+/* Trial picker filters share the Clean Emerald palette in both themes. */
+.trial-list-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; }
+.trial-list-filters label { display: flex; flex: 0 1 160px; flex-direction: column; gap: 3px; min-width: 0; max-width: 100%; color: var(--ce-text-secondary); font-size: 12px; }
+.trial-list-filters :is(select, input) { min-width: 0; max-width: 100%; padding: 5px 8px; border: 1px solid var(--ce-border); border-radius: 6px; background: var(--ce-surface); color: var(--ce-text); font-size: 12px; }
+.trial-list-filters > input[type="search"] { flex: 1 1 180px; }
+.trial-list-count { flex-shrink: 0; margin: 0; padding: 8px 12px; color: var(--ce-text-secondary); font-size: 12px; }
+.trial-list-scroll { min-width: 0; max-width: 100%; }
+.trial-date-heading th { padding: 9px 12px; border-block: 1px solid var(--ce-border); background: var(--ce-subtle); color: var(--ce-text-secondary); font-weight: 600; text-align: left; }
+.trial-list-more { display: block; margin: 12px auto; max-width: calc(100% - 24px); padding: 7px 12px; border: 1px solid var(--ce-accent-border); border-radius: 6px; background: var(--ce-accent-soft); color: var(--ce-accent); font-size: 12px; }
+@media (max-width: 640px) {
+  .trial-picker-local { flex-direction: column; }
+  .trial-picker-runs { width: 100%; max-height: 140px; border-right: 0; border-bottom: 1px solid var(--ce-border); }
+  .trial-list-filters label { flex-basis: calc(50% - 4px); }
+}
+
 /* Clean Emerald workspace: video, short process rows, and one focused inspector. */
 .replay-workspace {
   --replay-surface: 246 248 247;
