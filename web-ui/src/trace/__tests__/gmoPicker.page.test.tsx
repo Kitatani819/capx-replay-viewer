@@ -32,7 +32,7 @@ function job(row: GmoEpisodeSummary, overrides: Partial<GmoJob> = {}): GmoJob {
 function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   resetBrowser();
   const state = { config: config(configured), disabled: false, configError: '', configStatus: 502, configLatency: 5,
-    legacyRuns: [] as { run_id: string; root_index: number; n_trials: number }[], legacyError: false, legacyLatency: 5,
+    legacyRuns: [] as { run_id: string; root_index: number; n_trials: number }[], legacyError: false, legacyLatency: 5, episodesLatency: 0,
     rows, jobs: [] as GmoJob[],
     listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     auto: { enabled: configured, paused: false, interval_s: 120, running: false, last_run_at: null,
@@ -72,7 +72,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
     }
     if (req.path === '/api/gmo/check') return { json: state.check };
     if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
-    if (req.path === '/api/gmo/episodes') return { json: state.rows };
+    if (req.path === '/api/gmo/episodes') return { json: state.rows, latency: state.episodesLatency };
     if (req.path === '/api/gmo/jobs') return { json: state.jobs };
     if (req.path === '/api/gmo/fetch') {
       if (state.fetchError) return { status: state.fetchStatus, json: { detail: state.fetchError } };
@@ -394,6 +394,22 @@ test('GMO serves cached rows during refresh, labels approximate sizes, and keeps
   assert.match(text(page.output), /Remote refresh failed/);
   click(page.output, '一覧を更新'); await advance(100);
   assert.ok(net.log.some(req => req.path === '/api/gmo/episodes' && req.query.get('refresh') === '1'));
+  page.unmount();
+});
+
+test('GMO 2 s polls during a background refresh never show the loading line, so rows do not shift', async () => {
+  const state = setup([episode('cached')]);
+  state.listingStatus.refreshing = true;
+  const page = mountGmo(state.config); await advance(100);
+  // Each poll takes 300 ms to answer, so a loading line would be visible between the checks below.
+  state.episodesLatency = 300;
+  const loading = () => findAll(page.output, Spinner).some(el => el.props.label === '一覧を読み込み中');
+  assert.equal(rowsOf(page.output).length, 1);
+  for (let tick = 0; tick < 20; tick++) {
+    await advance(100);
+    assert.equal(loading(), false, `no loading line at ${(tick + 1) * 100} ms into polling`);
+  }
+  assert.ok(net.log.filter(req => req.path === '/api/gmo/episodes').length >= 2, 'the list was polled meanwhile');
   page.unmount();
 });
 
