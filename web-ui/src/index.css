@@ -892,3 +892,85 @@ details[open] summary::before {
   border-radius: 8px;
   border: 1px solid var(--ce-border-subtle);
 }
+
+/* ============================================
+   ModelInputTab: 狭い幅での折り返し・はみ出し対策
+   ============================================ */
+
+/* 2. 画像とメタデータ（order / sha256 / 由来）の崩れ・はみ出し防止 */
+.flex.gap-3.items-start:has(> .font-mono.min-w-0) {
+  flex-wrap: wrap;
+}
+.flex.gap-3.items-start > .font-mono.min-w-0 {
+  flex: 1 1 12rem;
+  word-break: break-all;
+}
+
+/* 3. assets に移した画像・動画の長いパスをはみ出さずに折り返す */
+.text-xs.text-text-secondary > ul.font-mono li {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* ============================================
+   APIとPythonパネル（ライト・ダーク両対応）
+   ============================================ */
+.api-python-panel {
+  background: var(--ce-surface) !important;
+  border-color: var(--ce-border) !important;
+  color: var(--ce-text) !important;
+}
+
+.api-python-list-section,
+.api-python-code-section {
+  background: var(--ce-surface) !important;
+  border-color: var(--ce-border) !important;
+}
+
+.api-python-code-heading,
+.api-python-list-section thead,
+.api-python-list-section th {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-border) !important;
+  color: var(--ce-text-secondary) !important;
+}
+
+.api-python-selected-description {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-border-subtle) !important;
+  color: var(--ce-text) !important;
+}
+
+.api-python-selected-description strong {
+  color: var(--ce-text) !important;
+}
+
+.api-python-muted {
+  color: var(--ce-text-secondary) !important;
+}
+
+.api-python-list-section button,
+.api-python-list-section tr {
+  background: transparent;
+  border-color: var(--ce-border-subtle) !important;
+  color: var(--ce-text);
+}
+
+.api-python-list-section button:hover,
+.api-python-list-section tr:hover {
+  background: var(--ce-hover) !important;
+}
+
+/* 選択中の行をダークモード対応のアクセント背景にする */
+.api-python-list-section [aria-current="true"],
+.api-python-list-section [aria-selected="true"],
+.api-python-list-section [aria-pressed="true"],
+.api-python-list-section [data-selected="true"],
+.api-python-list-section [data-active="true"],
+.api-python-list-section .is-selected,
+.api-python-list-section .selected,
+.api-python-list-section .active {
+  background: var(--ce-accent-soft) !important;
+  color: var(--ce-text) !important;
+  border-left-color: var(--ce-accent) !important;
+}
