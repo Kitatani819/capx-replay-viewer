@@ -427,3 +427,20 @@ test('changing the live episode resets the camera playback identity', async () =
     assert.ok(!visibleText(media.output).includes(finishingNote));
   } finally { media.unmount(); }
 });
+
+
+test('LiveCameras renders long saved frame histories without exceeding the argument limit', () => {
+  resetBrowser();
+  const rec = new Rec();
+  frame(rec, 'front', 0);
+  const model = buildEpisodeModel(rec.events);
+  const seed = model.frames[0];
+  const frames = Array.from({ length: 200_000 }, (_, i) => ({ ...seed, bufferIndex: i,
+    path: `frames/front/e0_${i}.jpg`, event: { ...seed.event, wall_time: clock.now / 1000 - 2000 + i / 100 } }));
+  model.framesByCamera.set('front', frames);
+  const cameras = mount(LiveCameras, { model, ep });
+  try {
+    assert.match(shownSources(cameras)[0], /frames\/front\/e0_199699.jpg$/);
+    assert.equal(findAll(cameras.output, 'figure').length, 1);
+  } finally { cameras.unmount(); }
+});

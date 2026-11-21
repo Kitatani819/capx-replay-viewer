@@ -62,7 +62,7 @@ test('the comparison route reads both requested episodes and falls back to run b
   assert.deepEqual(crumbs.items.map(item => item.label), ['試行を選ぶ', 'eval', 'cube · seed 7', '基準と並べて比べる']);
   const breadcrumb = mount(Breadcrumb, crumbs);
   assert.equal(findAll(breadcrumb.output, 'nav')[0].props['aria-label'], '現在の場所');
-  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/traces', '/traces?run=eval', '/traces?run=eval&episode=current']);
+  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/traces?site=b300', '/traces?run=eval&site=b300', '/traces?run=eval&episode=current&site=b300']);
   const currentPage = findAll(breadcrumb.output, 'span').find(item => item.props['aria-current'] === 'page');
   assert.equal(text(currentPage), '基準と並べて比べる');
   assert.doesNotMatch(text(page.output), /← 試行の要約へ戻る|評価の一覧/);
@@ -86,7 +86,7 @@ test('comparison breadcrumbs link through the current evaluation and current tri
   const crumbs = propsOf<Parameters<typeof Breadcrumb>[0]>(page.output, Breadcrumb);
   assert.deepEqual(crumbs.items.map(item => item.label), ['評価一覧', '把持位置の修正', 'cube · seed 7', '基準と並べて比べる']);
   const breadcrumb = mount(Breadcrumb, crumbs);
-  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/evals', '/evals/eval', '/traces?run=eval&episode=current']);
+  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/evals?site=b300', '/evals/eval?site=b300', '/traces?run=eval&episode=current&site=b300']);
   assert.deepEqual(findAll(breadcrumb.output, 'span').filter(item => item.props['aria-current'] === 'page').map(text), ['基準と並べて比べる']);
   assert.doesNotMatch(text(page.output), /← 試行の要約へ戻る|評価の一覧/);
   breadcrumb.unmount();
@@ -164,7 +164,7 @@ test('compact rows expand both complete sides and preserve event links', async (
   assert.equal(findAll(page.output, 'pre').filter(pre => text(pre) === fullArguments).length, 2);
   assert.equal(findAll(page.output, 'pre').filter(pre => text(pre) === fullResult).length, 2);
   for (const ep of ['baseline', 'current']) {
-    assert.ok(findAll(page.output, 'a').some(link => link.props.href === `/traces?run=eval&episode=${ep}&event=${ep}_1`));
+    assert.ok(findAll(page.output, 'a').some(link => link.props.href === `/traces?run=eval&episode=${ep}&event=${ep}_1&site=b300`));
   }
   (rowButton().props.onClick as () => void)();
   await advance(0);

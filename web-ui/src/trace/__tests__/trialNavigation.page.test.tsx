@@ -56,14 +56,14 @@ test('trial breadcrumb links back to its evaluation, preserving an event deep li
   ]);
   const navigation = mount(Breadcrumb, crumbs);
   assert.equal(findAll(navigation.output, 'nav')[0].props['aria-label'], '現在の場所');
-  assert.equal(findAll(navigation.output, 'a').find(a => text(a) === '把持位置の修正')?.props.href, '/evals/current');
+  assert.equal(findAll(navigation.output, 'a').find(a => text(a) === '把持位置の修正')?.props.href, '/evals/current?site=b300');
   assert.equal(findAll(navigation.output, 'span').filter(span => span.props['aria-current'] === 'page').length, 1);
   navigation.unmount();
   const bar = mount(TopBar, propsOf<BarProps>(page.output, TopBar));
   const compare = findAll(bar.output, 'a').find(a => text(a) === '基準と並べて比べる');
   assert.ok(compare);
-  assert.equal(compare!.props.href, '/traces/compare?run=current&episode=trial&baseline_run=baseline&baseline_episode=base_trial');
-  assert.equal(findAll(bar.output, 'a').filter(a => a.props.href === '/evals').length, 0);
+  assert.equal(compare!.props.href, '/traces/compare?run=current&episode=trial&baseline_run=baseline&baseline_episode=base_trial&site=b300');
+  assert.equal(findAll(bar.output, 'a').filter(a => a.props.href === '/evals?site=b300').length, 0);
   assert.ok(findAll(bar.output, 'button').some(button => text(button).startsWith('別の試行を選ぶ')));
   assert.doesNotMatch(text(bar.output), /試行 7 を変更/);
   assert.equal(currentParams().get('event'), 'trial_2');
@@ -97,7 +97,7 @@ test('simple trial view shares its breadcrumb and baseline comparison action', a
   const page = mount(TraceViewerPage, {}); await advance(100);
   assert.equal(propsOf<CrumbProps>(page.output, Breadcrumb).items[1].href, '/evals/current');
   assert.ok(findAll(page.output, 'a').some(a => text(a) === '基準と並べて比べる'));
-  assert.ok(!findAll(page.output, 'a').some(a => a.props.href === '/evals'));
+  assert.ok(!findAll(page.output, 'a').some(a => a.props.href === '/evals?site=b300'));
   assert.ok(findAll(page.output, 'button').some(button => text(button).startsWith('別の試行を選ぶ')));
   page.unmount();
 });

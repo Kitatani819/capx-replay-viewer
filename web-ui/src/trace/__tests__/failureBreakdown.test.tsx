@@ -84,7 +84,7 @@ test('without baseline only current counts and trial links are displayed', () =>
   const html = renderToStaticMarkup(<FailureBreakdown detail={breakdownDetail(false)} />);
   assert.doesNotMatch(html, /基準|増減|failure-bar-baseline|比較なし/);
   assert.match(html, /失敗 3件・未判定 1件/);
-  assert.match(html, /href="\/traces\?run=current&amp;episode=c2"/);
+  assert.match(html, /href="\/traces\?run=current&amp;episode=c2&amp;site=b300"/);
 });
 test('change tags compare verdict categories rather than raw end reasons', () => {
   const unjudgedError = classifiedTrial('b', 1, 'error', { verdict: 'unknown' });
@@ -95,6 +95,6 @@ test('change tags compare verdict categories rather than raw end reasons', () =>
 test('comparison cell links include both matching trial ids and omit missing pairs', () => {
   const d = breakdownDetail();
   const html = renderToStaticMarkup(<EvalComparison detail={d} />);
-  assert.match(html, /href="\/traces\/compare\?run=current&amp;episode=c1&amp;baseline_run=baseline&amp;baseline_episode=b1"/);
+  assert.match(html, /href="\/traces\/compare\?run=current&amp;episode=c1&amp;baseline_run=baseline&amp;baseline_episode=b1&amp;site=b300"/);
   assert.doesNotMatch(html, /\/traces\/compare\?run=current&amp;episode=c5/);
 });

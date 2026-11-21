@@ -52,7 +52,7 @@ test('missing trial follows discovery, one fetch and jobs, then opens local trac
   await advance(100);
   assert.match(text(page.output), /GMOから取り込み中（2.0 KB）/);
   assert.deepEqual(state.posts, [{ path: '/api/gmo/fetch', body: { run_id: 'ev-demo', episode_id: 'target' } }]);
-  assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo'));
+  assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo?site=b300'));
   complete(); await advance(1500);
   assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
   assert.doesNotMatch(text(page.output), /GMOから取り込み中/);
@@ -184,7 +184,7 @@ for (const reason of ['disabled', 'unconfigured', 'absent', 'large', 'conflict',
     else { state.job.state = 'failed'; state.job.error = 'rsync failed'; expected = /rsync failed/; }
     const page = mount(TraceViewerPage, {}); await advance(100);
     assert.match(text(page.output), expected);
-    assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo'));
+    assert.ok(findAll(page.output, 'a').some(a => a.props.href === '/evals/ev-demo?site=b300'));
     assert.equal(state.posts.length, reason === 'fetch-limit' || reason === 'job-failure' ? 1 : 0);
     page.unmount();
   });
@@ -203,4 +203,54 @@ test('navigation cancels pending discovery so it cannot import the previous tria
   complete();
   page.unmount(); await advance(6000);
   assert.equal(state.posts.length, 0);
+});
+
+for (const localState of ['local', 'stale'] as const) {
+  test(`an evicted import job stays pending then opens its ${localState} episode`, async () => {
+    const { row, state, complete } = setup();
+    const handler = net.handler;
+    let evicted = false;
+    net.handler = req => {
+      if (evicted && req.path === '/api/gmo/jobs') return { json: [] };
+      if (req.path === '/api/gmo/episode') {
+        assert.equal(req.query.get('run_id'), 'ev-demo');
+        assert.equal(req.query.get('episode_id'), 'target');
+        return { json: row };
+      }
+      return handler(req);
+    };
+    const page = mount(TraceViewerPage, {});
+    try {
+      await advance(100);
+      evicted = true;
+      row.local_state = 'fetching';
+      await advance(2100);
+      assert.match(text(page.output), /GMOから取り込み中/);
+      assert.doesNotMatch(text(page.output), /取り込み状況が見つかりません/);
+      complete();
+      row.local_state = localState;
+      await advance(1100);
+      assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
+      assert.equal(state.posts.length, 1, 'eviction never starts a second transfer');
+    } finally { page.unmount(); }
+  });
+}
+
+test('an evicted import job reports failure when its episode is no longer pending or local', async () => {
+  const { row } = setup();
+  const handler = net.handler;
+  let evicted = false;
+  net.handler = req => {
+    if (evicted && req.path === '/api/gmo/jobs') return { json: [] };
+    if (req.path === '/api/gmo/episode') return { json: row };
+    return handler(req);
+  };
+  const page = mount(TraceViewerPage, {});
+  try {
+    await advance(100);
+    evicted = true;
+    await advance(1100);
+    assert.match(text(page.output), /取り込み状況が見つかりません/);
+    assert.equal(net.log.filter(req => req.path === '/api/gmo/episode').length, 1);
+  } finally { page.unmount(); }
 });

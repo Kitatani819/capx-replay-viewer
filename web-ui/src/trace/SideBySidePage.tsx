@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { evalApi } from '../evals/api';
 import { Breadcrumb, trialBreadcrumbs } from '../navigation/Breadcrumb';
 import { SiteTabs } from '../navigation/SiteTabs';
@@ -12,6 +12,7 @@ import { applyDataAssets, pendingAsset } from './dataAsset';
 import { fmtDuration } from './format';
 import { useAsync, useDataAssets, useEpisodeEvents, useFullText, useInterval, useUrlParams } from './hooks';
 import { useMissingEpisodeImport } from './importEpisode';
+import { graceActive, incompletePollMs, pollPlan, summaryDigest, videoCopyFinished, videoCopyInterrupted, type GraceStart } from './live';
 import { buildEpisodeModel, camerasOf, type EpisodeModel } from './model';
 import { episodeVerdict } from './outcome';
 import { recordedTurns } from './replay';
@@ -182,10 +183,51 @@ function useComparisonTrial(runId: string | null, episodeId: string | null) {
     }
   } : null, [runId, episodeId]);
   const run = useAsync(runId ? signal => traceApi.run(runId, signal) : null, [runId]);
-  const events = useEpisodeEvents(runId, episodeId, summary.data?.status === 'running');
+  const status = summary.data?.status ?? null;
+  const videoPending = summary.data?.episode?.video_copy_pending === true;
+  const [grace, setGrace] = useState<GraceStart | null>(null);
+  const plan = pollPlan({ live: true, running: status === 'running', incomplete: status === 'incomplete',
+    heartbeatAgeS: summary.data?.heartbeat_age_s, videoPending, videoCopyInterrupted: videoCopyInterrupted(summary.data), grace: grace !== null });
+  const events = useEpisodeEvents(runId, episodeId, plan.events);
   const onReady = useCallback(() => { summary.reload(); run.reload(); events.refresh(); }, [summary.reload, run.reload, events.refresh]);
   const importing = useMissingEpisodeImport(runId, episodeId, missingKey === key && !summary.data, onReady, summary);
-  useInterval(summary.poll, 5000, summary.data?.status === 'running');
+  useInterval(summary.poll, plan.summaryMs ?? 1000, plan.summaryMs !== null && !!runId && !!episodeId);
+  useInterval(events.refresh, incompletePollMs(summary.data?.heartbeat_age_s), status === 'incomplete' && !plan.events && !!runId && !!episodeId);
+  const [reads, setReads] = useState({ key: '', n: 0, stable: 0, digest: null as string | null });
+  useEffect(() => {
+    if (!summary.data) return;
+    const digest = summaryDigest(summary.data);
+    setReads(previous => previous.key !== key ? { key, n: 1, stable: 0, digest }
+      : { key, n: previous.n + 1, stable: previous.digest === digest ? previous.stable + 1 : 0, digest });
+  }, [summary.data]);
+  const previous = useRef<{ key: string; status: string | null; videoPending: boolean }>({ key: '', status: null, videoPending: false });
+  useEffect(() => {
+    const prev = previous.current;
+    if (prev.key !== key) setGrace(null);
+    else {
+      if ((prev.status === 'running' && status !== null && status !== 'running') ||
+          (prev.status === 'incomplete' && (status === 'ended' || status === 'ended_with_gaps'))) {
+        setGrace({ startedAt: Date.now(), passesAtStart: events.passes, summaryReadsAtStart: reads.n });
+        events.refresh();
+        run.reload();
+      }
+      if (videoCopyFinished(prev.videoPending, videoPending)) events.refresh();
+    }
+    previous.current = { key, status, videoPending };
+  }, [key, status, videoPending, events.refresh, run.reload]);
+  useEffect(() => {
+    if (!grace) return;
+    const check = () => {
+      if (!graceActive(grace, { now: Date.now(), passes: events.passes, quietPasses: events.quietPasses,
+        summaryReads: reads.n, stableSummaryReads: reads.stable })) {
+        setGrace(null);
+        run.reload();
+      }
+    };
+    check();
+    const timer = window.setInterval(check, 1000);
+    return () => window.clearInterval(timer);
+  }, [grace, events.passes, events.quietPasses, reads.n, reads.stable, run.reload]);
   const ref = useMemo(() => runId && episodeId ? { runId, episodeId, generation: events.generation } : null, [runId, episodeId, events.generation]);
   const assets = useDataAssets(ref, String(events.resets));
   const assetTargets = useMemo(() => events.events.filter(event => /^(model_|api_call_|service_call_|code_block_)/.test(event.event_type)), [events.events]);
@@ -229,6 +271,7 @@ export default function SideBySidePage() {
     <div className="site-page-navigation"><Breadcrumb items={trialBreadcrumbs({ runId, episodeId, evaluation: evaluation.data?.eval,
       task: current.summary?.task ?? currentTrial?.task, seed: current.summary?.seed ?? currentTrial?.seed, compare: true })} /><SiteTabs /></div>
     {!complete ? <p role="alert">比較する2つの試行を指定してください。</p> : <>
+      <button type="button" onClick={() => { baseline.retry(); current.retry(); }}>更新</button>
       {!baseline.data && <div className="comparison-loading" role="status">基準：{baseline.message}
         {!baseline.importing?.busy && <button type="button" onClick={baseline.retry}>再読み込み</button>}</div>}
       {!current.data && <div className="comparison-loading" role="status">今回：{current.message}

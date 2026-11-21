@@ -124,8 +124,9 @@ export function EvalListPage() {
   useInterval(listing.poll, listing.data?.remote_status?.refreshing ? 2000 : 30_000, true);
   const entries = listing.data?.evals;
   // A cold remote listing can temporarily contain only local records. Keep
-  // shared person/task choices until the remote options have arrived.
-  const filterEntries = listing.data?.remote_status?.refreshing ? undefined : entries;
+  // shared person/task choices until remote discovery has succeeded.
+  const remoteStatus = listing.data?.remote_status;
+  const filterEntries = listing.data?.error || (remoteStatus && (remoteStatus.refreshing || remoteStatus.error || !remoteStatus.fetched_at)) ? undefined : entries;
   const filters = normalizeEvalFilters(urlFilters, filterEntries);
   useEffect(() => {
     const normalized = normalizeEvalFilters(urlFilters, filterEntries);
@@ -290,7 +291,7 @@ export function EvalDetailPage({ evalId }: { evalId: string }) {
   }, [evalId]);
   useEffect(() => { document.title = '評価の比較 · CaP-X'; }, []);
   const status = detail.data?.remote_status;
-  useInterval(detail.poll, status?.refreshing ? 2000 : 30_000, status?.refreshing === true || detail.data?.eval?.status === 'running');
+  useInterval(detail.poll, status?.refreshing ? 2000 : 30_000, status?.refreshing === true || detail.data?.eval?.status === 'running' || detail.data?.baseline?.status === 'running');
   return <main className="eval-page"><div className="eval-content">
     <div className="site-page-navigation"><Breadcrumb items={[{ label: '評価一覧', href: '/evals' }, { label: detail.data?.eval ? evaluationTitle(detail.data.eval) : evalId }]} /><SiteTabs /></div>
     {detail.loading && !detail.data && <p role="status">評価を読み込み中…</p>}

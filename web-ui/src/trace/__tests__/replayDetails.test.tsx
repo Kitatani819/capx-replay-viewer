@@ -5,6 +5,7 @@ import { buildEpisodeModel, resolveSelection } from '../model';
 import { processTitle } from '../replay';
 import { EnsembleTab } from '../components/tabs/EnsembleTab';
 import { InputOutputTab, RecordedModelOutput } from '../components/tabs/InputOutputTab';
+import { ModelOutputTab } from '../components/tabs/ModelOutputTab';
 import { ApiTurnModelTab } from '../components/tabs/ApiTurnModelTab';
 import { ApiLogTab } from '../components/tabs/ApiLogTab';
 import { DebugTab } from '../components/tabs/DebugTab';
@@ -294,4 +295,25 @@ test('warning messages and evaluator provenance remain visible outside diagnosti
   assert.match(resultHtml,/task_completed: false/);
   assert.match(resultHtml,/evaluator_result（ハーネスの評価）/);
   assert.match(resultHtml,/RECORDED_EVALUATOR/);
+});
+
+
+test('selecting a second response shows its own body and executed Python links in both output views', () => {
+  const r = new Rec(); r.episodeStart();
+  const request = r.request('code_generator', 'multi-response');
+  const first = r.response(request, 200, 'FIRST_RESPONSE');
+  r.blockStart(first, 'FIRST_EXECUTION', { block_index: 11 });
+  const second = r.response(request, 200, 'SECOND_RESPONSE');
+  r.blockStart(second, 'SECOND_EXECUTION', { block_index: 22 });
+  const selected = props(r, second.event_id);
+  assert.equal(selected.selection.attempt?.responses.length, 2);
+  for (const output of [RecordedModelOutput, ModelOutputTab]) {
+    const html = renderToStaticMarkup(output(selected));
+    assert.match(html, /SECOND_RESPONSE/);
+    assert.doesNotMatch(html, /FIRST_RESPONSE/);
+    if (output === RecordedModelOutput) {
+      assert.match(html, /実行されたPythonへ（#22）/);
+      assert.doesNotMatch(html, /実行されたPythonへ（#11）/);
+    }
+  }
 });

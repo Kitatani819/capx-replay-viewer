@@ -78,9 +78,21 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
           const jobs = await gmoApi.jobs(signal);
           if (signal.aborted) return;
           const job = jobs.find(item => item.job_id === jobId);
-          if (!job) throw new Error('取り込み状況が見つかりません。');
-          if (job.state === 'failed') throw new Error(job.error || '取り込みに失敗しました。');
-          if (job.state === 'done') {
+          if (!job) {
+            // Job history is capped; the per-episode view checks the complete
+            // pending set and local files even when this job was evicted.
+            const episode = await gmoApi.episode(runId, episodeId, false, signal);
+            if (signal.aborted) return;
+            if (episode.local_state === 'fetching') {
+              await waitForPoll(signal);
+              continue;
+            }
+            if (episode.local_state !== 'local' && episode.local_state !== 'stale') {
+              throw new Error('取り込み状況が見つかりません。');
+            }
+          }
+          if (job?.state === 'failed') throw new Error(job.error || '取り込みに失敗しました。');
+          if (!job || job.state === 'done') {
             setState({ key, value: { busy: true, message: '取り込んだ試行を読み込み中…' }, imported: true });
             onReady();
             return;

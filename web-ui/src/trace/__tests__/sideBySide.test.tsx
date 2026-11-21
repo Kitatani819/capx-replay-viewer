@@ -178,7 +178,7 @@ test('comparison renders first-difference marker, factual banner and event links
   assert.match(html, /40.0 s/);
   assert.match(html, /成功/);
   assert.match(html, /失敗/);
-  assert.equal(comparisonUrl('current', 'trial', 'baseline', 'trial'), '/traces/compare?run=current&episode=trial&baseline_run=baseline&baseline_episode=trial');
+  assert.equal(comparisonUrl('current', 'trial', 'baseline', 'trial'), '/traces/compare?run=current&episode=trial&baseline_run=baseline&baseline_episode=trial&site=b300');
 });
 test('all-same banners distinguish identical calls and differences confined to model text', () => {
   const baseline = comparisonRecording();

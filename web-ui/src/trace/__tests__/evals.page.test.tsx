@@ -61,7 +61,7 @@ test('evaluation comparison breadcrumb uses the list title and a real ancestor l
     const breadcrumb = mount(Breadcrumb, crumbProps);
     const links = findAll(breadcrumb.output, 'a');
     assert.equal(links.length, 1);
-    assert.equal(links[0].props.href, '/evals');
+    assert.equal(links[0].props.href, '/evals?site=b300');
     assert.equal(text(links[0]), '評価一覧');
     assert.equal(findAll(breadcrumb.output, 'span').find(item => item.props['aria-current'] === 'page')?.props.children, label);
     assert.doesNotMatch(text(page.output), /← 評価一覧/);

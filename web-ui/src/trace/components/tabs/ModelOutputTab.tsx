@@ -67,7 +67,7 @@ function ModelCallOutput({ model, ep, selection, running, onSelect, call }: TabP
   const attempt: Attempt | null = selection.attempt ?? mainAttempt(call);
   // Only the selected attempt's own response: a response of another HTTP attempt is never
   // shown as if this attempt had received it.
-  const resp = attempt?.responses[0] ?? null;
+  const resp = attempt?.responses.find(event => event.event_id === selection.eventId) ?? attempt?.responses[0] ?? null;
   const rd = resp ? dataOf(resp, 'model_response') : null;
   const storedResponse = storedResponseText(rd, resp?.artifacts ?? []);
   const outcome = callOutcome(call);
