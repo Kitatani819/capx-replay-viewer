@@ -160,3 +160,817 @@ details[open] summary::before {
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================
+   Organic Sage & Forest Design Tokens (Light / Dark)
+   ============================================ */
+:root {
+  --ce-bg: #f9faf8;
+  --ce-surface: #ffffff;
+  --ce-subtle: #f2f5f1;
+  --ce-hover: #edf2ec;
+  --ce-selected: #e7f2ea;
+  --ce-border: #e2e7e1;
+  --ce-border-subtle: #edf1ec;
+  --ce-text: #1c241e;
+  --ce-text-secondary: #5a665d;
+  --ce-text-muted: #78857b;
+
+  --ce-accent: #286b46;
+  --ce-accent-hover: #1f5537;
+  --ce-accent-soft: #eef5f0;
+  --ce-accent-border: #c5decb;
+
+  /* 成功・改善（落ち着いたセージグリーン） */
+  --ce-success-bg: #eaf4ec;
+  --ce-success-text: #286b46;
+  --ce-success-border: #c3dfc9;
+
+  /* 未達成・通常失敗（主張を抑えたニュートラルグレー） */
+  --ce-danger-bg: #f1f3f1;
+  --ce-danger-text: #566159;
+  --ce-danger-border: #d8ded8;
+
+  /* 悪化・エラー（温かみのあるテラコッタオレンジで異常だけ浮かせる） */
+  --ce-regression-bg: #fdf0e8;
+  --ce-regression-text: #c25728;
+  --ce-regression-border: #f0c9b4;
+
+  /* 条件の違い・注意ボックス（淡いクリーム） */
+  --ce-warning-bg: #fdf8eb;
+  --ce-warning-text: #855a14;
+  --ce-warning-border: #ecd9a8;
+
+  --ce-neutral-bg: #f1f3f1;
+  --ce-neutral-text: #5a665d;
+  --ce-neutral-border: #dce2dc;
+
+  --ce-shadow: 0 1px 2px rgba(28, 36, 30, 0.03);
+  --ce-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans JP", sans-serif;
+  --ce-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ce-bg: #111613;
+    --ce-surface: #181f1b;
+    --ce-subtle: #202924;
+    --ce-hover: #26312b;
+    --ce-selected: #1d3226;
+    --ce-border: #2c3831;
+    --ce-border-subtle: #232d27;
+    --ce-text: #eef2ee;
+    --ce-text-secondary: #9ba89f;
+    --ce-text-muted: #7a877e;
+
+    --ce-accent: #52b788;
+    --ce-accent-hover: #74c69d;
+    --ce-accent-soft: #1a2e23;
+    --ce-accent-border: #2d543f;
+
+    --ce-success-bg: #162b1f;
+    --ce-success-text: #74c69d;
+    --ce-success-border: #2b543d;
+
+    --ce-danger-bg: #242b27;
+    --ce-danger-text: #b2bdb5;
+    --ce-danger-border: #38433d;
+
+    --ce-regression-bg: #361e14;
+    --ce-regression-text: #f4976c;
+    --ce-regression-border: #7a3e23;
+
+    --ce-warning-bg: #2b2313;
+    --ce-warning-text: #f3d082;
+    --ce-warning-border: #5e491c;
+
+    --ce-neutral-bg: #202924;
+    --ce-neutral-text: #9ba89f;
+    --ce-neutral-border: #2f3b34;
+
+    --ce-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  }
+}
+
+/* ============================================
+   Figma 案ベース：繊細な枠線・角丸・スイッチ・ボタン
+   ============================================ */
+
+/* カード・表は影を控えめにして、枠線と角丸12pxで上品にまとめる */
+.eval-table-scroll,
+.eval-significance,
+.eval-code-changes,
+.failure-counts,
+.failure-trials,
+.trial-summary-card,
+.replay-inspector {
+  border-radius: 12px !important;
+  border: 1px solid var(--ce-border) !important;
+  box-shadow: var(--ce-shadow) !important;
+}
+
+/* 注意ボックスは4辺を淡い枠線で囲み、主張しすぎない上品なトーンに */
+.eval-note {
+  background: var(--ce-warning-bg) !important;
+  color: var(--ce-warning-text) !important;
+  border: 1px solid var(--ce-warning-border) !important;
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+}
+
+/* セグメントスイッチ（全カメラ/1台、一覧/APIとPython） */
+.replay-content-switch {
+  padding: 3px !important;
+  gap: 2px;
+  border: 1px solid var(--ce-border) !important;
+  border-radius: 8px !important;
+  background: var(--ce-subtle) !important;
+}
+.replay-content-switch button {
+  min-height: 28px !important;
+  padding: 4px 12px !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  color: var(--ce-text-secondary) !important;
+  font-weight: 500;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.replay-content-switch button[aria-pressed="true"] {
+  background: var(--ce-surface) !important;
+  color: var(--ce-text) !important;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(28, 36, 30, 0.08);
+}
+
+/* ボタン（Primary / Secondary） */
+.replay-play-button,
+.trial-summary-actions a.trial-summary-compare {
+  border-radius: 8px !important;
+  background: var(--ce-accent) !important;
+  color: #ffffff !important;
+  transition: background-color 0.15s ease, transform 0.12s ease;
+}
+.replay-play-button:hover,
+.trial-summary-actions a.trial-summary-compare:hover {
+  background: var(--ce-accent-hover) !important;
+}
+.replay-trial-button,
+.replay-compare-button,
+.eval-page .eval-cell .eval-compare-link {
+  border-radius: 8px !important;
+  border: 1px solid var(--ce-border) !important;
+  background: var(--ce-surface) !important;
+  color: var(--ce-text) !important;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.replay-trial-button:hover,
+.replay-compare-button:hover,
+.eval-page .eval-cell .eval-compare-link:hover {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-accent-border) !important;
+  color: var(--ce-accent) !important;
+}
+
+/* 評価マトリクスの結果チップ（悪化だけテラコッタ色で浮かせる） */
+.eval-result {
+  border-radius: 8px !important;
+  border-width: 1px !important;
+  font-weight: 600 !important;
+}
+.eval-page .eval-regression {
+  border: 1px solid var(--ce-regression-border) !important;
+  background: var(--ce-regression-bg) !important;
+  color: var(--ce-regression-text) !important;
+}
+
+/* 失敗の内訳：選択中の行を左バー＋淡い緑でハイライト */
+.failure-count-row[aria-pressed="true"] {
+  background: var(--ce-selected) !important;
+  border-color: transparent !important;
+  box-shadow: inset 3px 0 0 var(--ce-accent);
+  border-radius: 0 !important;
+}
+.failure-bar-baseline { background: #b8c4ba !important; }
+.failure-bar-current { background: #5a8f63 !important; }
+
+/* 試行要約：3指標の縦区切り & 「最初のエラー」をテラコッタ文字でシャープに */
+.trial-summary-stats {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 !important;
+}
+.trial-summary-stats > div {
+  padding-right: 24px;
+}
+.trial-summary-stats > div + div {
+  padding-left: 24px;
+  border-left: 1px solid var(--ce-border-subtle);
+}
+.trial-summary-facts > div:has(.trial-summary-error) {
+  margin: 0 !important;
+  padding: 14px 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-top: 1px solid var(--ce-border-subtle) !important;
+}
+.trial-summary-facts > div:has(.trial-summary-error) dt {
+  color: var(--ce-text-secondary) !important;
+  font-weight: 500 !important;
+}
+.trial-summary-facts > div:has(.trial-summary-error) dt::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ce-regression-text);
+  vertical-align: middle;
+}
+.trial-summary-error {
+  color: var(--ce-regression-text) !important;
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+
+@media (max-width: 700px) {
+  .trial-summary-stats {
+    grid-template-columns: 1fr !important;
+    gap: 16px !important;
+  }
+  .trial-summary-stats > div + div {
+    padding-left: 0;
+    border-left: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--ce-border-subtle);
+  }
+}
+
+/* ============================================
+   Trial Summary: Figma 案への追い込み調整
+   ============================================ */
+
+/* 1. 見出し行：カメラ選択と結果バッジを右端に寄せる */
+.trial-summary-heading {
+  justify-content: space-between;
+}
+.trial-summary-camera {
+  margin-left: auto;
+}
+
+/* 2. 3指標（終わり方・ターン・かかった時間）の数値にメリハリをつける */
+.trial-summary-stats {
+  padding-bottom: 20px;
+}
+.trial-summary-stats dd {
+  font-size: 20px !important;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.trial-summary-stats > div:nth-child(n+2) dd {
+  font-size: 26px !important;
+  font-weight: 700;
+}
+
+/* 3. 「ターンの流れ」を上下区切りの独立した帯＋角丸6pxバッジにする */
+.trial-summary-flow {
+  margin: 0 -24px !important;
+  padding: 14px 24px !important;
+  background: color-mix(in srgb, var(--ce-subtle) 55%, var(--ce-surface));
+  border-top: 1px solid var(--ce-border-subtle);
+  border-bottom: 1px solid var(--ce-border-subtle);
+  line-height: 2;
+}
+.trial-summary-flow a {
+  border-radius: 6px !important;
+  padding: 3px 10px !important;
+  background: var(--ce-surface) !important;
+  border: 1px solid var(--ce-border) !important;
+  color: var(--ce-text) !important;
+  font-size: 12px;
+  font-weight: 500;
+}
+.trial-summary-flow a:hover {
+  border-color: var(--ce-accent-border) !important;
+  background: var(--ce-accent-soft) !important;
+  color: var(--ce-accent) !important;
+}
+
+/* 4. 詳細リスト（最初のエラー〜最後の画像）の余白と「→」リンク */
+.trial-summary-facts {
+  margin-top: 0 !important;
+}
+.trial-summary-facts > div:first-child {
+  border-top: 0 !important;
+}
+.trial-summary-facts > div > span a {
+  color: var(--ce-text-secondary);
+  font-weight: 500;
+}
+.trial-summary-facts > div > span a:hover {
+  color: var(--ce-accent);
+  text-decoration: none;
+}
+.trial-summary-facts > div > span a::after {
+  content: " →";
+  display: inline-block;
+  margin-left: 2px;
+  transition: transform 0.15s ease;
+}
+.trial-summary-facts > div > span a:hover::after {
+  transform: translateX(2px);
+}
+
+/* 5. 最後の画像サムネイルをリスト行に馴染むサイズへ */
+.trial-summary-frames img {
+  width: 112px !important;
+  height: 70px !important;
+  border-radius: 6px !important;
+}
+
+@media (max-width: 540px) {
+  .trial-summary-flow {
+    margin: 0 -14px !important;
+    padding: 12px 14px !important;
+  }
+}
+
+/* ============================================
+   「根拠を見る」展開パネルの調整
+   ============================================ */
+.trial-summary-evidence {
+  margin-top: 8px;
+}
+.trial-summary-evidence summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ce-text-secondary) !important;
+  cursor: pointer;
+  user-select: none;
+}
+.trial-summary-evidence summary::-webkit-details-marker {
+  display: none;
+}
+.trial-summary-evidence summary:hover {
+  color: var(--ce-accent) !important;
+}
+
+
+/* 展開された中身を淡いグリーンのパネルに */
+.trial-summary-evidence[open] > :not(summary):not(a):not(:has(> a:only-child)){
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--ce-accent-soft);
+  border: 1px solid var(--ce-accent-border);
+  border-radius: 8px;
+  font-family: var(--ce-font-sans);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ce-text);
+}
+.trial-summary-evidence[open] > :not(summary) p:first-child {
+  font-weight: 600;
+  color: var(--ce-accent);
+  margin-bottom: 4px;
+}
+.trial-summary-evidence[open] > :not(summary) a {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ce-text-secondary);
+}
+.trial-summary-evidence[open] > :not(summary) a:hover {
+  color: var(--ce-accent);
+  text-decoration: none;
+}
+.trial-summary-evidence[open] > :not(summary) a::after {
+  content: " →";
+  margin-left: 3px;
+}
+
+/* ============================================
+   動画プレイヤー & 「基準と並べて見る」ボタンの Figma 寄せ
+   ============================================ */
+
+/* 1. 「基準と並べて見る」を白背景＋繊細な枠線ボタンに */
+.trial-summary-actions a.trial-summary-compare {
+  background: var(--ce-surface) !important;
+  color: var(--ce-text) !important;
+  border: 1px solid var(--ce-border) !important;
+  border-radius: 10px !important;
+  box-shadow: var(--ce-shadow) !important;
+  font-weight: 500 !important;
+  padding: 8px 16px !important;
+}
+.trial-summary-actions a.trial-summary-compare:hover {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-accent-border) !important;
+  color: var(--ce-accent) !important;
+}
+
+/* 2. 動画プレイヤー全体を1つの白いカードで囲う */
+.replay-media {
+  background: var(--ce-surface);
+  border: 1px solid var(--ce-border);
+  border-radius: 12px;
+  padding: 14px 16px 10px;
+  box-shadow: var(--ce-shadow);
+}
+.replay-camera-tools {
+  justify-content: flex-end;
+  padding-bottom: 10px !important;
+}
+
+/* 3. カメララベルを映像の左上に半透明バッジで浮かせる */
+.replay-camera-view {
+  border-radius: 8px !important;
+  border: 1px solid var(--ce-border-subtle) !important;
+}
+.replay-camera-stage-all .replay-camera-main {
+  box-shadow: none !important;
+  border-color: var(--ce-accent-border) !important;
+}
+.replay-camera-label {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px !important;
+  border-radius: 6px;
+  background: rgba(30, 41, 35, 0.72);
+  backdrop-filter: blur(4px);
+  color: #f4f7f5 !important;
+  font-size: 11px !important;
+  font-weight: 500;
+  pointer-events: none;
+}
+.replay-camera-label::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a7d7b8;
+  flex-shrink: 0;
+}
+
+/* 4. 再生ボタンを淡いセージグリーン＋ピル型に */
+.replay-playbar {
+  min-height: 54px !important;
+  padding-top: 6px;
+}
+.replay-play-button {
+  background: var(--ce-accent-soft) !important;
+  color: var(--ce-accent) !important;
+  border: 1px solid var(--ce-accent-border) !important;
+  border-radius: 999px !important;
+  min-width: 84px !important;
+  padding: 6px 16px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+}
+.replay-play-button:hover {
+  background: var(--ce-selected) !important;
+  border-color: var(--ce-accent) !important;
+}
+
+/* ============================================
+   「この試行の流れ」（ログ・APIとPython）の Figma 寄せ
+   ============================================ */
+
+/* 1. 見出し行（「この試行の流れ」とターン選択）をカード外でスッキリ整える */
+.replay-process-log {
+  margin-top: 20px;
+}
+.replay-log-heading {
+  padding: 0 2px 10px !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: var(--ce-text) !important;
+  letter-spacing: -0.01em;
+}
+.replay-log-heading select {
+  background: var(--ce-surface) !important;
+  border: 1px solid var(--ce-border) !important;
+  border-radius: 8px !important;
+  padding: 5px 12px !important;
+  font-size: 13px !important;
+  font-weight: 500;
+}
+
+/* 2. ツールバー〜ログ本体を1枚の白い角丸カードに見せる */
+.replay-log-tools {
+  background: var(--ce-surface);
+  border: 1px solid var(--ce-border);
+  border-bottom: 1px solid var(--ce-border-subtle);
+  border-radius: 12px 12px 0 0;
+  padding: 12px 16px !important;
+  margin-bottom: 0 !important;
+}
+.replay-process-log > .replay-process-scroll,
+.replay-process-log > div:last-child:not(.replay-log-tools) {
+  background: var(--ce-surface);
+  border: 1px solid var(--ce-border);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  box-shadow: var(--ce-shadow);
+  overflow: hidden;
+}
+
+/* 3. イベント行：等幅フォント + 選択行を左バー＆淡いセージグリーンに */
+.replay-event-row {
+  padding: 11px 16px !important;
+  min-height: 44px !important;
+  border-bottom: 1px solid var(--ce-border-subtle) !important;
+  transition: background-color 0.12s ease;
+}
+.replay-event-name {
+  font-family: var(--ce-font-mono);
+  font-size: 13px !important;
+  color: var(--ce-text);
+}
+.replay-workspace .replay-event-row[data-current="true"] {
+  background: var(--ce-selected) !important;
+  border-radius: 0 !important;
+  box-shadow: inset 3px 0 0 var(--ce-accent) !important;
+  border-bottom-color: var(--ce-border-subtle) !important;
+}
+
+/* 4. Pythonコード表示エリア：白ベース + 読みやすい行間 */
+.replay-workspace .hljs {
+  background: var(--ce-surface) !important;
+  font-family: var(--ce-font-mono);
+  font-size: 13px;
+  line-height: 1.75;
+  padding: 14px 16px;
+}
+
+/* ============================================
+   詳細インスペクター（入出力・記録・照合結果）の Figma 寄せ
+   ============================================ */
+
+/* 1. タブバー：下線と選択中タブの強調 */
+.replay-inspector {
+  background: var(--ce-surface) !important;
+}
+.replay-tabs {
+  border-bottom: 1px solid var(--ce-border) !important;
+  background: var(--ce-surface);
+  padding: 0 24px !important;
+  gap: 24px !important;
+  min-height: 52px !important;
+}
+.replay-workspace .replay-tabs [role="tab"] {
+  position: relative;
+  padding: 14px 2px !important;
+  color: var(--ce-text-secondary);
+  font-size: 14px !important;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.replay-workspace .replay-tabs [role="tab"]:hover {
+  color: var(--ce-text);
+}
+.replay-workspace .replay-tabs [role="tab"][aria-selected="true"] {
+  color: var(--ce-accent) !important;
+  font-weight: 700 !important;
+  border-bottom-color: var(--ce-accent) !important;
+}
+
+/* 2. 本文エリアの見出し・余白 */
+.replay-detail-body {
+  padding: 22px 24px !important;
+  background: var(--ce-surface);
+}
+.replay-detail-body h2,
+.replay-detail-body h3 {
+  color: var(--ce-text);
+  letter-spacing: -0.01em;
+}
+
+/* 3. 折りたたみ（システム指示など）とプロンプト/コード塊をカード風に */
+.replay-detail-body details {
+  border: 1px solid var(--ce-border);
+  border-radius: 10px;
+  background: var(--ce-surface);
+  padding: 12px 16px;
+  margin: 12px 0;
+}
+.replay-detail-body details > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ce-text-secondary);
+}
+.replay-detail-body details > summary:hover {
+  color: var(--ce-accent);
+}
+.replay-detail-body pre {
+  background: var(--ce-subtle) !important;
+  border: 1px solid var(--ce-border-subtle);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: var(--ce-font-mono);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ce-text);
+}
+
+/* 4. 入力内の画像・リンクの整え */
+.replay-detail-body img {
+  border-radius: 8px;
+  border: 1px solid var(--ce-border);
+}
+.replay-detail-body a,
+.replay-detail-body button.replay-text-button {
+  color: var(--ce-accent);
+  font-weight: 500;
+}
+
+/* ============================================
+   評価比較：条件の違い / 公式注意 / 統計的有意性の Figma 寄せ
+   ============================================ */
+
+/* 1. 1つ目の注意ボックス（条件の違い）を淡いセージグリーン系に */
+.eval-page .eval-note:first-of-type:not(.eval-rule-note) {
+  background: var(--ce-subtle) !important;
+  border: 1px solid var(--ce-border) !important;
+  color: var(--ce-text) !important;
+}
+.eval-page .eval-note:first-of-type:not(.eval-rule-note) strong,
+.eval-page .eval-note:first-of-type:not(.eval-rule-note) b {
+  color: var(--ce-text);
+}
+.eval-page .eval-note code {
+  background: var(--ce-surface);
+  border: 1px solid var(--ce-border);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+/* 2. 統計的有意性カード（差はたまたまでしょうか）の余白と結論テキスト */
+.eval-significance {
+  padding: 24px 28px !important;
+  background: var(--ce-surface) !important;
+}
+.eval-significance h2 {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: var(--ce-text) !important;
+  margin-bottom: 10px !important;
+}
+.eval-significance-verdict,
+.eval-significance > p:first-of-type {
+  color: var(--ce-text) !important;
+  font-size: 18px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em;
+}
+
+/* 3. 「検定の見方」展開パネル（淡いセージ背景＋左ライン） */
+.eval-significance details {
+  margin-top: 14px;
+}
+.eval-significance details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ce-text-secondary);
+  cursor: pointer;
+}
+.eval-significance details > summary:hover {
+  color: var(--ce-accent);
+}
+.eval-significance details[open] > :not(summary) {
+  margin-top: 12px;
+  padding: 14px 18px;
+  background: var(--ce-accent-soft);
+  border-left: 3px solid var(--ce-accent-border);
+  border-radius: 0 8px 8px 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--ce-text-secondary);
+}
+
+/* 4. 検定の見方の下にある補足テキストの上に薄い区切り線 */
+.eval-significance details + p {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ce-border-subtle);
+  font-size: 12.5px;
+  color: var(--ce-text-secondary);
+}
+
+/* ============================================
+   記録フレーム / キーフレーム表示の Figma 寄せ
+   ============================================ */
+
+/* 1. シークバーを黄色からフォレストグリーンに統一 */
+.replay-media input[type="range"] {
+  accent-color: var(--ce-accent) !important;
+}
+
+
+/* 3. キーフレーム画像枠の角丸と枠線 */
+.replay-media figure img,
+.replay-media canvas {
+  border-radius: 8px;
+  border: 1px solid var(--ce-border-subtle);
+}
+
+/* ============================================
+   ModelInputTab: 狭い幅での折り返し・はみ出し対策
+   ============================================ */
+
+/* 2. 画像とメタデータ（order / sha256 / 由来）の崩れ・はみ出し防止 */
+.flex.gap-3.items-start:has(> .font-mono.min-w-0) {
+  flex-wrap: wrap;
+}
+.flex.gap-3.items-start > .font-mono.min-w-0 {
+  flex: 1 1 12rem;
+  word-break: break-all;
+}
+
+/* 3. assets に移した画像・動画の長いパスをはみ出さずに折り返す */
+.text-xs.text-text-secondary > ul.font-mono li {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* ============================================
+   APIとPythonパネル（ライト・ダーク両対応）
+   ============================================ */
+.api-python-panel {
+  background: var(--ce-surface) !important;
+  border-color: var(--ce-border) !important;
+  color: var(--ce-text) !important;
+}
+
+.api-python-list-section,
+.api-python-code-section {
+  background: var(--ce-surface) !important;
+  border-color: var(--ce-border) !important;
+}
+
+.api-python-code-heading,
+.api-python-list-section thead,
+.api-python-list-section th {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-border) !important;
+  color: var(--ce-text-secondary) !important;
+}
+
+.api-python-selected-description {
+  background: var(--ce-subtle) !important;
+  border-color: var(--ce-border-subtle) !important;
+  color: var(--ce-text) !important;
+}
+
+.api-python-selected-description strong {
+  color: var(--ce-text) !important;
+}
+
+.api-python-muted {
+  color: var(--ce-text-secondary) !important;
+}
+
+.api-python-list-section button,
+.api-python-list-section tr {
+  background: transparent;
+  border-color: var(--ce-border-subtle) !important;
+  color: var(--ce-text);
+}
+
+.api-python-list-section button:hover,
+.api-python-list-section tr:hover {
+  background: var(--ce-hover) !important;
+}
+
+/* 選択中の行をダークモード対応のアクセント背景にする */
+.api-python-list-section [aria-current="true"],
+.api-python-list-section [aria-selected="true"],
+.api-python-list-section [aria-pressed="true"],
+.api-python-list-section [data-selected="true"],
+.api-python-list-section [data-active="true"],
+.api-python-list-section .is-selected,
+.api-python-list-section .selected,
+.api-python-list-section .active {
+  background: var(--ce-accent-soft) !important;
+  color: var(--ce-text) !important;
+  border-left-color: var(--ce-accent) !important;
+}
