@@ -97,6 +97,23 @@ test('the replay header keeps the trial picker at the right with details collaps
   }
 });
 
+test('a replaced events file is a gap only until a complete, ended trace has been read again', () => {
+  const r = new Rec();
+  r.episodeStart();
+  r.episodeEnd({ trace_complete: true, gaps: [], dropped_events: 0, late_events: 0, n_warnings: 0 });
+  const bar = (summary: EpisodeSummary, eof = true) => text(<TopBar
+    runLabel={EP.runId} episodeLabel={EP.episodeId} episodeId={EP.episodeId} summary={summary}
+    model={buildEpisodeModel(r.events)} runnerRecords={[]} live={false} onLive={() => {}}
+    poll={{ text: '', tone: 'neutral' }} lastFetch={null} onOpenPicker={() => {}} onRefresh={() => {}}
+    reader={{ corruptLines: 0, tornTail: false, eof, count: r.events.length, replaced: true }}
+  />);
+  const complete = { episode_id: EP.episodeId, status: 'ended', trace_complete: true, gaps: [] };
+  assert.doesNotMatch(bar(complete), /記録に欠落があります/);
+  assert.match(bar(complete, false), /記録に欠落があります.*最初から読み直しました/);
+  assert.match(bar({ ...complete, status: 'running', trace_complete: null }), /記録に欠落があります.*最初から読み直しました/);
+  assert.match(bar({ ...complete, status: 'ended_with_gaps', trace_complete: false }), /記録に欠落があります.*最初から読み直しました/);
+});
+
 test('Oracle-only warnings are explained in the details and real recording gaps stay visible', () => {
   const r = new Rec();
   const legacyHook = {

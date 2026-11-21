@@ -340,7 +340,10 @@ export function TopBar({
   }
   if (reader.corruptLines) gapParts.push(`破損行 ${reader.corruptLines}`);
   if (reader.tornTail && status !== 'running') gapParts.push('末尾の行が途中で切れています');
-  if (reader.replaced) gapParts.push('表示中に events.jsonl が置き換えられ、最初から読み直しました');
+  // A replaced events.jsonl is read again from the start. Once that read reached the end of a
+  // complete, ended trace (a route B export finishing a trial it showed live), nothing is missing.
+  const replacedByComplete = reader.replaced && reader.eof && status === 'ended' && summary?.trace_complete === true;
+  if (reader.replaced && !replacedByComplete) gapParts.push('表示中に events.jsonl が置き換えられ、最初から読み直しました');
   // events.jsonl exists but could not be read (backend 403/500): nothing of the episode is shown.
   if (reader.error && reader.count === 0 && !unscoped) gapParts.push('events.jsonl を読み込めません');
   // episode.json exists but could not be used: the status and summary fields come without it.
