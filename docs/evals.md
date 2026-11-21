@@ -94,6 +94,8 @@ GMOでの既定の保存先は `~/shared-storage/traces/<ユーザー名>` で�
 
 評価ラッパーは開始時と終了時に、全員の評価をまとめた **`~/shared-storage/traces/index.html`** を更新します。保存先を指定した場合は、ユーザー別の記録先 `CAPX_TRACE_DIR` の親に `index.html` を作ります。再開した評価も同じ一覧を更新します。一覧の生成に失敗しても、警告を出して評価を続け、評価の結果と終了コードは変えません。自動更新を止めるには `CAPX_EVAL_INDEX=0` を設定するか、`eval --no-index ... -- <評価コマンド>` を使います。
 
+同じ共有先の `submission_evals/_viewer` にある提出の形の評価（経路 B）も一覧に含め、組の欄に「提出の形（経路 B）」と表示します。経路 B の書き出しだけでは一覧を更新しないため、次の再生成時（記録器を通した評価の開始・終了時、または `index` コマンド）に反映します。
+
 GMOでこのHTMLファイルをブラウザで直接開くか、自分のPCへコピーして開きます。CSSも含めた1ファイルなので、一覧の閲覧にサーバーやネットワーク接続は不要です。日時はJSTで表示します。各行の下を展開するとタスク別の集計も読めます。
 
 生成時にViewerの集計モジュールと評価フォルダー内のエピソードを読める場合は、最後の試行だけで数え直します。やり直しがあれば、全体とタスク別の成功数に `36 / 70（やり直しを含めると 93 回）` のように全試行数も添えます。Viewerがない場合やエピソードを読めない場合は、保存済みの集計を表示します。
@@ -110,7 +112,7 @@ GMOのログインノードや計算ノードで、recorderを使えるPython 3.
 python -m capx_trace_recorder index --root ~/shared-storage/traces
 ```
 
-`<root>/*/ev-*/eval.json` を集め、既定では `<root>/index.html` に保存します。PCへ取り込んだ記録のような `<root>/ev-*/eval.json` の配置にも対応します。出力先とViewerのURLを変える場合は、次のように指定します。
+`<root>/*/ev-*/eval.json` を集め、既定では `<root>/index.html` に保存します。PCへ取り込んだ記録のような `<root>/ev-*/eval.json` の配置にも対応します。経路 B は、リンクを解決した `<root>` の隣にある `submission_evals/_viewer` が通常のディレクトリなら読み込みます。このフォルダーがない環境では省略します。`--submission-root PATH` で別の既存フォルダーを指定でき、`--submission-root ''` で経路 B の読み込みを止められます。出力先とViewerのURLを変える場合は、次のように指定します。
 
 ```bash
 python -m capx_trace_recorder index \

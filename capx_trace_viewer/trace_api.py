@@ -714,32 +714,8 @@ def compact_record(record: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def create_trace_router(
-    trace_root: Path,
-    *,
-    viewer_only: bool,
-    expose: bool,
-    runner_roots: Sequence[Path] = (),
-    viser_probe: Callable[[int | None], int | None] | None = None,
-    unix_socket: bool = False,
-) -> APIRouter:
-    """Router for ``/api/traces`` (section 9.2) and the legacy views (section 9.4).
-
-    Args:
-        trace_root: Trace root to serve (need not exist yet).
-        viewer_only: Set by ``--viewer-only``; reported by ``/config`` and ``/viser``.
-        expose: Answer non-loopback clients too (``--expose-traces``).
-        runner_roots: Experiment-runner output roots for the legacy views.
-        viser_probe: Called with this server's own port (or None); returns the port the
-            server's Viser proxy uses, or None. Full UI only.
-        unix_socket: The server listens on a Unix domain socket (``--uds``): requests
-            without a client address come through it and are answered.
-    """
-    base_dir = Path(trace_root)
-    roots = [Path(p) for p in runner_roots]
-    cache = reader.EventsPageCache()
-    array_slots = threading.BoundedSemaphore(ARRAY_WORKERS)
-
+def trace_access_gate(*, expose: bool = False, unix_socket: bool = False) -> Callable[[Request], None]:
+    """Share the trace API's loopback checks with site discovery."""
     def gate(request: Request) -> None:
         if expose:
             return
@@ -766,8 +742,37 @@ def create_trace_router(
                 status_code=403,
                 detail="the trace API answers loopback pages only: cross-origin requests are refused",
             )
+    return gate
 
-    router = APIRouter(prefix="/api/traces", dependencies=[Depends(gate)])
+
+def create_trace_router(
+    trace_root: Path,
+    *,
+    viewer_only: bool,
+    expose: bool,
+    runner_roots: Sequence[Path] = (),
+    viser_probe: Callable[[int | None], int | None] | None = None,
+    unix_socket: bool = False,
+    prefix: str = "/api/traces",
+) -> APIRouter:
+    """Router for ``/api/traces`` (section 9.2) and the legacy views (section 9.4).
+
+    Args:
+        trace_root: Trace root to serve (need not exist yet).
+        viewer_only: Set by ``--viewer-only``; reported by ``/config`` and ``/viser``.
+        expose: Answer non-loopback clients too (``--expose-traces``).
+        runner_roots: Experiment-runner output roots for the legacy views.
+        viser_probe: Called with this server's own port (or None); returns the port the
+            server's Viser proxy uses, or None. Full UI only.
+        unix_socket: The server listens on a Unix domain socket (``--uds``): requests
+            without a client address come through it and are answered.
+    """
+    base_dir = Path(trace_root)
+    roots = [Path(p) for p in runner_roots]
+    cache = reader.EventsPageCache()
+    array_slots = threading.BoundedSemaphore(ARRAY_WORKERS)
+
+    router = APIRouter(prefix=prefix, dependencies=[Depends(trace_access_gate(expose=expose, unix_socket=unix_socket))])
 
     @contextmanager
     def array_slot() -> Iterator[None]:

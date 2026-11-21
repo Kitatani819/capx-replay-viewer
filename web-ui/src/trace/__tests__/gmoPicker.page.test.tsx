@@ -15,7 +15,7 @@ import { addEpisode, ev, makeRun, serve } from './pageServer';
 const browserFetch = globalThis.fetch;
 interface SentRequest { path: string; method: string; headers: Headers; body: unknown }
 function settings(overrides: Partial<GmoSettings> = {}): GmoSettings {
-  return { host: 'gmo', port: null, identity_file: null, shared_root: '', mine: ['/mine/traces'], team: ['/team/traces'], interval_s: 120, ...overrides };
+  return { host: 'gmo', port: null, identity_file: null, shared_root: '', submission_root: '~/shared-storage/submission_evals/_viewer', mine: ['/mine/traces'], team: ['/team/traces'], interval_s: 120, ...overrides };
 }
 function config(configured = true): GmoConfigResponse {
   return { enabled: true, configured, settings: configured ? settings() : settings({ host: '', mine: [], team: [] }), dest: '/local/traces', config_path: '/config/gmo.json' };
@@ -66,7 +66,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
         if (state.saveError) return { status: 400, json: { detail: state.saveError } };
         const saved = sent.body as GmoSettings;
         state.config = { ...state.config, settings: saved, configured: Boolean(saved.host && (saved.shared_root || saved.mine.length || saved.team.length)) };
-        state.auto = { ...state.auto, interval_s: saved.interval_s, enabled: Boolean(saved.host && (saved.shared_root || saved.mine.length) && saved.interval_s > 0) };
+        state.auto = { ...state.auto, interval_s: saved.interval_s, enabled: Boolean(state.config.configured && (saved.shared_root || saved.submission_root || saved.mine.length) && saved.interval_s > 0) };
       }
       return { json: state.config, latency: state.configLatency };
     }
@@ -781,6 +781,20 @@ test('GMO initializes shared settings with collapsed patterns and preserves edit
   assert.equal(patternDetails(page.output).props.open, false);
   page.unmount();
 });
+
+for (const submissionRoot of ['~/shared-storage/submission_evals/_viewer', '/path/to/submission_evals/_viewer', '']) {
+  test(`GMO preserves the submission folder when saving connection settings (${submissionRoot || 'disabled'})`, async () => {
+    const state = setup();
+    state.config.settings.submission_root = submissionRoot;
+    const page = mountGmo(state.config); await advance(100);
+    click(page.output, '接続設定'); await advance(0);
+    change(page.output, '接続先', 'host-alias'); await advance(0);
+    await saveForm(page.output);
+    assert.deepEqual(state.sent.find(req => req.method === 'PUT')?.body, settings({ host: 'host-alias', submission_root: submissionRoot }));
+    assert.equal(state.config.settings.submission_root, submissionRoot);
+    page.unmount();
+  });
+}
 
 test('GMO opens existing individual-only settings for editing and allows them to be collapsed', async () => {
   const state = setup();

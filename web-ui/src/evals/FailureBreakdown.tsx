@@ -1,3 +1,4 @@
+import { siteHref } from '../navigation/site';
 import { useState } from 'react';
 import type { EvalDetail } from './api';
 import { comparisonTable } from './model';
@@ -46,12 +47,12 @@ export function FailureBreakdown({ detail }: { detail: EvalDetail }) {
             {hasBaseline && <span className="failure-trial-baseline" title={paired?.end_classification ? causeTooltip(paired.end_classification) || undefined : undefined}>基準：{paired ? reasonLabel(paired) : '記録なし'}</span>}
             <span title={trial.end_classification ? causeTooltip(trial.end_classification) || undefined : undefined}>今回：{reasonLabel(trial)}</span>
             {hasBaseline && <span className={`failure-tag${tag === '悪化' ? ' failure-increase' : tag === '改善' ? ' failure-decrease' : ''}`}>{tag}</span>}
-            <a href={`/traces?${new URLSearchParams({ run: detail.eval_id, episode: trial.episode_id })}`}>試行を開く</a>
+            <a href={siteHref(`/traces?${new URLSearchParams({ run: detail.eval_id, episode: trial.episode_id })}`)}>試行を開く</a>
           </li>)}</ul>}
           {hasBaseline && baselineRun && cause.baseline > 0 && <ul className="failure-baseline-trials" aria-label={`${cause.label}：基準の試行`}>{baseTrials.filter(trial => causeGroupKey(trial) === cause.key).map(trial => <li key={`base-${trial.episode_id}`}>
             <span className="failure-trial-name">{trial.task ?? 'タスク未記録'} · seed {trial.seed ?? '—'}{trial.condition && <small>条件 {trial.condition}</small>}</span>
             <span title={trial.end_classification ? causeTooltip(trial.end_classification) || undefined : undefined}>基準：{reasonLabel(trial)}</span>
-            <a href={`/traces?${new URLSearchParams({ run: baselineRun, episode: trial.episode_id })}`}>基準の試行を開く</a>
+            <a href={siteHref(`/traces?${new URLSearchParams({ run: baselineRun, episode: trial.episode_id })}`)}>基準の試行を開く</a>
           </li>)}</ul>}
         </details></th>
           {hasBaseline && <td>{cause.baseline}件</td>}<td>{cause.current}件</td>{hasBaseline && <td>{cause.current > cause.baseline ? '+' : ''}{cause.current - cause.baseline}</td>}</tr>)}</tbody>

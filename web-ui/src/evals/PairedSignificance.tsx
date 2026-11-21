@@ -1,3 +1,4 @@
+import { siteHref } from '../navigation/site';
 import type { EvalDetail } from './api';
 import { pairedResult, pText, significanceLabel } from './significance';
 
@@ -22,7 +23,7 @@ export function PairedSignificance({ detail }: { detail: EvalDetail }) {
       const original = reference.side === 'current' ? detail.trials : detail.baseline_trials;
       const repeat = pairedResult(original, reference.trials);
       if (!repeat.paired) return null;
-      return <p className="eval-repeat-reference" key={`${reference.side}-${reference.eval.eval_id}`}>{reference.side === 'current' ? '今回' : '基準'}と同じコード・記録条件の再実行 <a href={`/evals/${encodeURIComponent(reference.eval.eval_id)}`}>{reference.eval.eval_id}</a> では、対応した {repeat.paired}組中 {repeat.improved + repeat.worsened}組（{((repeat.improved + repeat.worsened) / repeat.paired * 100).toFixed(1)}%）で結果が変わりました。観測されたぶれの参考で、今回の差の判定には加えていません。</p>;
+      return <p className="eval-repeat-reference" key={`${reference.side}-${reference.eval.eval_id}`}>{reference.side === 'current' ? '今回' : '基準'}と同じコード・記録条件の再実行 <a href={siteHref(`/evals/${encodeURIComponent(reference.eval.eval_id)}`)}>{reference.eval.eval_id}</a> では、対応した {repeat.paired}組中 {repeat.improved + repeat.worsened}組（{((repeat.improved + repeat.worsened) / repeat.paired * 100).toFixed(1)}%）で結果が変わりました。観測されたぶれの参考で、今回の差の判定には加えていません。</p>;
     })}
     {!(detail.repeat_references?.length) && <p className="eval-significance-exclusions">同じコードと実効条件を確認できる再実行の記録は見つかりません。設定が不足する古い記録は、ぶれの参考に使いません。</p>}
   </section>;

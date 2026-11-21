@@ -15,7 +15,7 @@
  * Related: model.ts (keyFramesOf, framesAround), TraceImage.tsx.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { episodeFileUrl } from '../api';
 import { cameraForVideo, cameraLabel, mainCameraOf } from '../cameras';
 import { fmtBytes, shortSha } from '../format';
@@ -38,7 +38,7 @@ import { dataOf, type ImageInfo } from '../types';
 import { Badge, DebugFrameChip, SentToModelChip, SmallButton } from './common';
 import type { EventDataAccess } from './DataAssetState';
 import { TraceImage } from './TraceImage';
-import { LiveCameras } from './LiveCameras';
+import { LIVE_DELAY_S, MAX_LAG_S, LiveCameras } from './LiveCameras';
 import { VideoPlayback, type ReplaySeek } from './VideoPlayback';
 import type { TrialVideo } from '../playback';
 import type { TNode } from '../model';
@@ -63,11 +63,39 @@ interface MediaPaneProps extends EventDataAccess {
   ep: EpisodeRef;
   selection: Selection | null;
   live3d: Live3dState;
-  /** Live mode on a running episode: show the latest frame of every camera. */
+  /** Live mode on a running episode: follow the saved frames of every camera. */
   follow: boolean;
+  /** The trial is still running. When follow stops while it runs (the user left Live), the view switches at once. */
+  running?: boolean;
 }
 
-export function MediaPane({ model, ep, camera: sharedCamera, onCameraChange, selection, live3d, follow, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonVisibleChange, assetStates, onRetryAsset }: MediaPaneProps) {
+export function MediaPane({ model, ep, camera: sharedCamera, onCameraChange, selection, live3d, follow, running = false, videos = [], onPlaybackSelect, onPlaybackClear, selectionFromPlayback, seekRequest, logPanel, replayLive, allowReplayInitialSelection, onReplayInteract, onApiPythonVisibleChange, assetStates, onRetryAsset }: MediaPaneProps) {
+  const episodeKey = JSON.stringify([ep.runId, ep.episodeId, ep.generation]);
+  const live = follow && videos.length === 0;
+  const [livePlayback, setLivePlayback] = useState(() => ({ episodeKey, live, finishing: false }));
+  // Adjust before committing the new view so an end transition retains the
+  // mounted cameras, while another episode never inherits their finishing state.
+  let playback = livePlayback;
+  if (playback.episodeKey !== episodeKey) {
+    playback = { episodeKey, live, finishing: false };
+    setLivePlayback(playback);
+  } else if (playback.live !== live) {
+    // Only the trial's end finishes the frames; leaving Live on a running trial switches at once.
+    playback = { episodeKey, live, finishing: !live && (!running || videos.length > 0) };
+    setLivePlayback(playback);
+  }
+  const finishing = playback.finishing;
+  const finishLivePlayback = useCallback(() => {
+    setLivePlayback(previous => previous.episodeKey === episodeKey && previous.finishing
+      ? { ...previous, finishing: false } : previous);
+  }, [episodeKey]);
+  useEffect(() => {
+    if (!finishing) return;
+    // A browser timer also bounds the wait if the playback wall clock stalls.
+    const timer = window.setTimeout(finishLivePlayback, (LIVE_DELAY_S + MAX_LAG_S) * 1000);
+    return () => window.clearTimeout(timer);
+  }, [finishing, finishLivePlayback]);
+
   const [preferredTab, setTab] = useState<'video' | 'recorded' | 'live'>('video');
   const tab = preferredTab === 'video' && videos.length === 0 ? 'recorded' : preferredTab;
   const cameras = useMemo(() => camerasOf(model), [model]);
@@ -87,9 +115,14 @@ export function MediaPane({ model, ep, camera: sharedCamera, onCameraChange, sel
     if (!live3d.available && tab === 'live') setTab('recorded');
   }, [live3d.available, tab]);
 
-  // A running trial has no MP4 yet (CaP-X writes it at the end), so Live shows the
-  // newest frame of every camera. Once videos exist, the normal player is kept.
-  if (follow && videos.length === 0) return <div className="replay-media flex flex-col min-w-0"><LiveCameras model={model} ep={ep} />
+  // CaP-X writes MP4 at the end. Finish the delayed frames before handing over
+  // to the ordinary player, only if these cameras were already being followed.
+  if (live || finishing) return <div className="replay-media flex flex-col min-w-0">
+    {finishing && <div className="px-3 pt-3 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+      <p>試行が終わりました。残りの記録フレームを再生してから動画に切り替えます</p>
+      <SmallButton onClick={finishLivePlayback}>すぐ動画に切り替える</SmallButton>
+    </div>}
+    <LiveCameras key={episodeKey} model={model} ep={ep} ended={finishing} onCaughtUp={finishLivePlayback} />
     {logPanel && <div className="border-t border-surface-border">{logPanel}</div>}</div>;
 
   return (

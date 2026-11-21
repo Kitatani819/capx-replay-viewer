@@ -1,3 +1,4 @@
+import { remoteName } from '../../navigation/site';
 /** GMO discovery and imports inside the trial picker. Transfers stay on the server. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { GmoDisabledError, errorText, gmoApi, type GmoConfigResponse, type GmoJob, type GmoScope, type GmoSettings } from '../api';
@@ -256,6 +257,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     try {
       const saved = await gmoApi.saveConfig({
         shared_root: draft.sharedRoot.trim(),
+        submission_root: config?.settings.submission_root ?? '~/shared-storage/submission_evals/_viewer',
         host: draft.host.trim(), port: draft.port.trim() ? Number(draft.port) : null,
         identity_file: draft.identityFile.trim() || null, mine: lines(draft.mine), team: lines(draft.team),
         interval_s: Number(draft.interval),
@@ -293,6 +295,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
   const skippedLarge = new Set(autoStatus?.skipped_large.map(rowKey));
   const usingDefaults = config?.settings.host === 'gmo' && config.settings.port === null
     && config.settings.identity_file === null && config.settings.shared_root === '~/shared-storage/traces'
+    && config.settings.submission_root === '~/shared-storage/submission_evals/_viewer'
     && !config.settings.mine.length && !config.settings.team.length && config.settings.interval_s === 120;
 
   return (
@@ -320,8 +323,8 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
         {autoError && <div role="alert" className="mt-1"><ErrorText>自動取り込み：{autoError}</ErrorText></div>}
       </section>}
       {settingsOpen && (
-        <section aria-label="GMO の接続設定" className="flex-shrink-0 px-3 py-3 border-b border-surface-border bg-surface-raised">
-          <h3 className="text-xs font-bold text-text-primary mb-2">GMO の接続設定</h3>
+        <section aria-label={`${remoteName()} の接続設定`} className="flex-shrink-0 px-3 py-3 border-b border-surface-border bg-surface-raised">
+          <h3 className="text-xs font-bold text-text-primary mb-2">{remoteName()} の接続設定</h3>
           <p className="mb-2 text-xs text-text-secondary">{usingDefaults ? '既定の設定を使っています。Host gmo が設定済みなら入力は不要です。' : 'Host gmo が設定済みなら、接続先 gmo と共有フォルダー ~/shared-storage/traces で使えます。'}</p>
           {initialConfigError && <div role="alert" className="mb-2"><ErrorText>{initialConfigError}</ErrorText><SmallButton onClick={onRetryConfig}>設定を読み直す</SmallButton></div>}
           <form onSubmit={event => { event.preventDefault(); void saveAndCheck(); }}>
@@ -329,7 +332,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
               <div className="sm:col-span-2 space-y-1">
                 <label htmlFor="gmo-shared-root">共有の記録フォルダー</label>
                 <input id="gmo-shared-root" name="gmo-shared-root" aria-label="共有の記録フォルダー" aria-describedby="gmo-shared-root-help" value={draft.sharedRoot} onChange={event => updateDraft('sharedRoot', event.target.value)} placeholder="~/shared-storage/traces" className={`${INPUT_CLASS} font-mono`} />
-                <p id="gmo-shared-root-help" className="text-text-tertiary">記録の場所はここだけで設定できます。この下の GMO のユーザー名フォルダーから、自分とチームの記録を探します。絶対パスか ~/ で始まるパスを 1 つ指定してください。~/ は GMO 側のホームです。空欄にすると共有フォルダーを使いません。</p>
+                <p id="gmo-shared-root-help" className="text-text-tertiary">記録の場所はここだけで設定できます。この下の {remoteName()} のユーザー名フォルダーから、自分とチームの記録を探します。絶対パスか ~/ で始まるパスを 1 つ指定してください。~/ は {remoteName()} 側のホームです。空欄にすると共有フォルダーを使いません。</p>
               </div>
               <label className="space-y-1">接続先<input aria-label="接続先" name="gmo-host" required value={draft.host} onChange={event => updateDraft('host', event.target.value)} placeholder="host-alias または user@host" className={INPUT_CLASS} /></label>
               <label className="space-y-1">ポート<input aria-label="ポート" name="gmo-port" type="number" min="1" max="65535" step="1" value={draft.port} onChange={event => updateDraft('port', event.target.value)} placeholder="SSH の設定を使う" className={INPUT_CLASS} /></label>
@@ -361,21 +364,21 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
         </section>
       )}
       {listing.error && <div role="alert" className="px-3 py-2"><ErrorText>一覧を取得できませんでした：{listing.error}</ErrorText></div>}
-      {remoteStatus?.error && <div role="status" className="px-3 py-2"><ErrorText>GMO の一覧を更新できませんでした：{remoteStatus.error}</ErrorText></div>}
+      {remoteStatus?.error && <div role="status" className="px-3 py-2"><ErrorText>{remoteName()} の一覧を更新できませんでした：{remoteStatus.error}</ErrorText></div>}
       {jobs.error && <div role="alert" className="px-3 py-2"><ErrorText>取り込み状況を確認できませんでした：{jobs.error}</ErrorText><SmallButton onClick={jobs.reload}>取り込み状況を再確認</SmallButton></div>}
       {configured && <>
         <div className="flex-shrink-0 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-surface-border">
-          <select aria-label="GMO の範囲" value={scope} onChange={event => setScope(event.target.value as GmoScope)} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
+          <select aria-label={`${remoteName()} の範囲`} value={scope} onChange={event => setScope(event.target.value as GmoScope)} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
             <option value="all">すべて</option><option value="mine">自分</option><option value="team">チーム</option>
           </select>
-          <select aria-label="GMO の結果で絞り込み" value={resultFilter} onChange={event => setResultFilter(event.target.value as TaskVerdict | 'all')} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
+          <select aria-label={`${remoteName()} の結果で絞り込み`} value={resultFilter} onChange={event => setResultFilter(event.target.value as TaskVerdict | 'all')} className="rounded border border-surface-border bg-surface-sunken p-1 text-xs">
             <option value="all">すべての結果</option>{Object.entries(VERDICT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
-          <input type="search" name="gmo-filter" aria-label="GMO の試行を検索" value={query} onChange={event => setQuery(event.target.value)} placeholder="絞り込み（task / seed / 実行者）" className={`${INPUT_CLASS} flex-1 min-w-40`} />
+          <input type="search" name="gmo-filter" aria-label={`${remoteName()} の試行を検索`} value={query} onChange={event => setQuery(event.target.value)} placeholder="絞り込み（task / seed / 実行者）" className={`${INPUT_CLASS} flex-1 min-w-40`} />
         </div>
         {listing.loading && <div className="p-3"><Spinner label="一覧を読み込み中" /></div>}
         <div className="min-h-0 overflow-x-auto">
-          <table aria-label="GMO の試行" className="w-full text-xs">
+          <table aria-label={`${remoteName()} の試行`} className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-raised"><tr className="text-left text-text-tertiary border-b border-surface-border">
               {['手元の状態', '結果', 'task・seed', '実行者', '開始時刻', '大きさ', '操作'].map(label => <th key={label} scope="col" className="py-1.5 px-3 font-normal whitespace-nowrap">{label}</th>)}
             </tr></thead>
@@ -384,7 +387,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
               const job = latestJobs.get(key);
               const busy = Object.hasOwn(pending, key) || (job && activeJob(job)) || row.local_state === 'fetching';
               // Total size cannot predict the changed-file transfer size; the server enforces its limit.
-              const reason = row.conflict ? '同じ run ID が GMO の複数の場所にあるため取り込めません' : null;
+              const reason = row.conflict ? `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません` : null;
               const localState = busy ? 'fetching' : row.local_state;
               const error = rowErrors[key] || (!busy && job?.state === 'failed' ? job.error || '取り込みに失敗しました' : null);
               return <tr key={`${key}\0${index}`} className="border-b border-surface-border/50 align-top">

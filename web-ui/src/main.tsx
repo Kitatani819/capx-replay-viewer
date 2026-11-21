@@ -4,6 +4,9 @@ import TraceViewerPage from './trace/TraceViewerPage'
 import SideBySidePage from './trace/SideBySidePage'
 import { EvalDetailPage, EvalListPage } from './evals/EvalPages'
 import './index.css'
+import { currentSiteName } from './navigation/site'
+
+currentSiteName()
 
 const path = window.location.pathname.replace(/\/$/, '')
 let page = <TraceViewerPage />

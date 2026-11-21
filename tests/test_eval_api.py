@@ -250,6 +250,63 @@ def test_remote_evals_merge_trials_with_local_precedence_and_missing_baseline(tm
     assert service.detail("ev-empty")["trials"] == []
 
 
+def test_local_copy_fetched_mid_trial_gives_way_to_newer_remote_state(tmp_path, monkeypatch):
+    value = record("ev-live", status="running")
+    run = write_record(tmp_path, value)
+    stale = episode(run, "trial")
+    stale.update(status="running", trace_complete=None, end_reason=None, harness_summary=None)
+    (run / "trial" / "episode.json").write_text(json.dumps(stale), encoding="utf-8")
+    finished = {**stale, "status": "ended", "trace_complete": True, "end_reason": "completed",
+                "harness_summary": {"task_completed": True}}
+    listing = {"evals": [remote_eval(value)], "episodes": [remote_episode(value["eval_id"], finished)]}
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    service = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing))
+    [trial] = service.detail(value["eval_id"])["trials"]
+    assert (trial["local_state"], trial["status"], trial["verdict"]) == ("remote", "ended", "success")
+    # Once the local copy has caught up it is preferred again.
+    (run / "trial" / "episode.json").write_text(json.dumps({**finished, "harness_summary": {"task_completed": False}}),
+                                                encoding="utf-8")
+    [trial] = service.detail(value["eval_id"])["trials"]
+    assert (trial["local_state"], trial["verdict"]) == ("local", "failure")
+
+
+@pytest.mark.parametrize("ended,success,code", [
+    ("steplimit", False, "step_limit"), ("reset", False, "submission_reset"),
+    ("cut", False, "job_cut"), ("future_end_state", False, "unknown"),
+    ("reset", True, "success"),
+])
+def test_remote_referee_cause_survives_fetching_local_events(tmp_path, monkeypatch, ended, success, code):
+    value = record("ev-exported")
+    value["eval_set"] = "routeB:behavior:bringing_water"
+    metadata = {"source": "eval_gateway", "status": "ended", "trace_complete": True,
+                "task": "bringing_water", "seed": 401, "attempt_index": 1, "end_reason": "completed",
+                "config_flags": {"route": "B"}, "stop_context": {"steps_used": 265},
+                "harness_summary": {"task_completed": success,
+                                    "referee": {"ended": ended, "cycles": 265,
+                                                "steps_to_success": 42 if success else None}}}
+    listing = {"evals": [remote_eval(value)],
+               "episodes": [{**remote_episode(value["eval_id"], metadata),
+                             "first_event": {"event_type": "episode_start", "data": {"source": "eval_gateway"}}}]}
+    monkeypatch.setattr(gmo, "load_settings", lambda: SimpleNamespace(configured=True))
+    service = EvalService(tmp_path, SimpleNamespace(remote_listing=lambda: listing))
+    [remote] = service.detail(value["eval_id"])["trials"]
+    assert remote["local_state"] == "remote"
+    assert remote["end_classification"]["cause"]["code"] == code
+    assert remote["end_classification"]["conditions"]["steps_used"] == (42 if success else 265)
+    run = write_record(tmp_path, value)
+    directory = run / "trial"
+    directory.mkdir()
+    (directory / "episode.json").write_text(json.dumps(metadata), encoding="utf-8")
+    events = [{"event_type": "model_output_parsed", "event_id": "finish", "seq": 1,
+               "data": {"decision": "finish", "model_said_finish": True}},
+              {"event_type": "episode_end", "event_id": "end", "seq": 2,
+               "data": {"end_reason": "completed", "harness_summary": {"task_completed": success}}}]
+    (directory / "events.jsonl").write_text("".join(json.dumps(row) + "\n" for row in events), encoding="utf-8")
+    [local] = service.detail(value["eval_id"])["trials"]
+    assert local["local_state"] == "local"
+    assert local["end_classification"] == remote["end_classification"]
+
+
 @pytest.mark.parametrize("status,segmented", [("completed", False), ("running", False), ("running", True)])
 def test_remote_only_summary_preserves_stored_and_segment_behavior(tmp_path, monkeypatch, status, segmented):
     value = record("ev-remote", status=status)

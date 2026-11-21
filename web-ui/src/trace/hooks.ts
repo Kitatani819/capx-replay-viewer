@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { currentSiteName, siteHref } from '../navigation/site';
 import { episodeFileUrl, errorText, fetchJsonFile, fetchText, traceApi, type EpisodeRef } from './api';
 import { dataAssetRef, parseDataAsset, type DataAssetState } from './dataAsset';
 import { resolveText } from './model';
@@ -33,6 +34,7 @@ import type { TextValue, TraceEvent } from './types';
 export type UrlParams = Record<string, string | null>;
 
 function readParams(): URLSearchParams {
+  currentSiteName();
   return new URLSearchParams(window.location.search);
 }
 
@@ -55,7 +57,7 @@ export function useUrlParams(): [URLSearchParams, (next: UrlParams, push?: boole
       else p.set(k, v);
     }
     const qs = p.toString();
-    const url = `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`;
+    const url = siteHref(`${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
     if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       if (push) window.history.pushState(null, '', url);
       else window.history.replaceState(null, '', url);

@@ -24,7 +24,9 @@ import type {
   ViserResponse,
 } from './types';
 
-const BASE = '/api/traces';
+import { apiRoot, remoteName } from '../navigation/site';
+
+const traceRoot = () => `${apiRoot()}/traces`;
 
 export class ApiError extends Error {
   readonly status: number;
@@ -59,7 +61,7 @@ function rootQuery(root: number | null | undefined): string {
 }
 
 function episodeBase(runId: string, episodeId: string): string {
-  return `${BASE}/runs/${seg(runId)}/episodes/${seg(episodeId)}`;
+  return `${traceRoot()}/runs/${seg(runId)}/episodes/${seg(episodeId)}`;
 }
 
 /**
@@ -125,15 +127,15 @@ export interface EventsQuery {
 
 export const traceApi = {
   config(signal?: AbortSignal): Promise<TraceConfigResponse> {
-    return getJson(`${BASE}/config`, signal);
+    return getJson(`${traceRoot()}/config`, signal);
   },
 
   runs(signal?: AbortSignal): Promise<RunListResponse> {
-    return getJson(`${BASE}/runs`, signal);
+    return getJson(`${traceRoot()}/runs`, signal);
   },
 
   run(runId: string, signal?: AbortSignal): Promise<RunDetailResponse> {
-    return getJson(`${BASE}/runs/${seg(runId)}`, signal);
+    return getJson(`${traceRoot()}/runs/${seg(runId)}`, signal);
   },
 
   episode(runId: string, episodeId: string, signal?: AbortSignal): Promise<EpisodeSummary> {
@@ -175,25 +177,25 @@ export const traceApi = {
   },
 
   viser(signal?: AbortSignal): Promise<ViserResponse> {
-    return getJson(`${BASE}/viser`, signal);
+    return getJson(`${traceRoot()}/viser`, signal);
   },
 
   legacyRuns(signal?: AbortSignal): Promise<unknown> {
-    return getJson(`${BASE}/legacy/runs`, signal);
+    return getJson(`${traceRoot()}/legacy/runs`, signal);
   },
 
   /** `root` is the runner-root index from /legacy/runs (the same run id can exist under two roots). */
   legacyRun(runId: string, root: number | null, signal?: AbortSignal): Promise<unknown> {
-    return getJson(`${BASE}/legacy/runs/${seg(runId)}${rootQuery(root)}`, signal);
+    return getJson(`${traceRoot()}/legacy/runs/${seg(runId)}${rootQuery(root)}`, signal);
   },
 
   legacyTrial(runId: string, task: string, condition: string, trialDir: string, root: number | null, signal?: AbortSignal): Promise<unknown> {
-    return getJson(`${BASE}/legacy/trials/${seg(runId)}/${seg(task)}/${seg(condition)}/${seg(trialDir)}${rootQuery(root)}`, signal);
+    return getJson(`${traceRoot()}/legacy/trials/${seg(runId)}/${seg(task)}/${seg(condition)}/${seg(trialDir)}${rootQuery(root)}`, signal);
   },
 
   /** URL of a file below a legacy trial dir (9.4). */
   legacyFileUrl(runId: string, task: string, condition: string, trialDir: string, relpath: string, root: number | null): string {
-    return `${BASE}/legacy/file/${seg(runId)}/${seg(task)}/${seg(condition)}/${seg(trialDir)}/${encodeRelPath(relpath)}${rootQuery(root)}`;
+    return `${traceRoot()}/legacy/file/${seg(runId)}/${seg(task)}/${seg(condition)}/${seg(trialDir)}/${encodeRelPath(relpath)}${rootQuery(root)}`;
   },
 };
 
@@ -208,6 +210,7 @@ export interface GmoSettings {
   port: number | null;
   identity_file: string | null;
   shared_root: string;
+  submission_root: string;
   mine: string[];
   team: string[];
   interval_s: number;
@@ -288,7 +291,7 @@ export class GmoDisabledError extends ApiError {
 }
 
 async function gmoJson<T>(path: string, signal?: AbortSignal, method: 'GET' | 'PUT' | 'POST' = 'GET', body?: unknown): Promise<T> {
-  const url = `/api/gmo${path}`;
+  const url = `${apiRoot()}/gmo${path}`;
   const headers: Record<string, string> = { Accept: 'application/json', 'X-CapX-Request': 'gmo' };
   if (method !== 'GET') headers['Content-Type'] = 'application/json';
   const resp = await fetch(url, {
@@ -308,7 +311,7 @@ async function gmoJson<T>(path: string, signal?: AbortSignal, method: 'GET' | 'P
     throw new ApiError(resp.status, e.message, url, e.body);
   }
   if (!(resp.headers.get('content-type') ?? '').includes('json')) {
-    throw new ApiError(resp.status, 'GMO から JSON ではない応答が返りました', url);
+    throw new ApiError(resp.status, `${remoteName()} から JSON ではない応答が返りました`, url);
   }
   return (await resp.json()) as T;
 }
@@ -329,6 +332,12 @@ export const gmoApi = {
   episodes(scope: GmoScope = 'all', refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary[]> {
     const params = new URLSearchParams({ scope, refresh: refresh ? '1' : '0' });
     return gmoJson(`/episodes?${params.toString()}`, signal);
+  },
+
+  /** One trial's GMO state, read from a listing of its own run only. */
+  episode(runId: string, episodeId: string, refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary> {
+    const params = new URLSearchParams({ run_id: runId, episode_id: episodeId, refresh: refresh ? '1' : '0' });
+    return gmoJson(`/episode?${params.toString()}`, signal);
   },
 
   listingStatus(signal?: AbortSignal): Promise<RemoteListingStatus> {

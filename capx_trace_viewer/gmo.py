@@ -36,6 +36,13 @@ SAFE_HOST = re.compile(r"[A-Za-z0-9._@-]+")
 MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
 MAX_INTERVAL_S = 24 * 60 * 60
+LISTING_TIMEOUT_S = 60
+# The background import lists every file of every own trial, which takes over a
+# minute once a few large evaluations have run; it runs off the request path.
+FILE_LISTING_TIMEOUT_S = 600
+# The team listing refreshes in the background behind a cached copy. On a shared
+# folder with large evaluations it takes one to three minutes.
+TEAM_LISTING_TIMEOUT_S = 600
 CONNECTION_ERROR = (
     "GMOに接続できません。公式GENIACチュートリアルの Host gmo をSSH設定に追加するか、"
     "接続設定で接続先を指定してください。"
@@ -235,6 +242,7 @@ class GmoSettings:
     team: tuple[str, ...] = ()
     interval_s: int = 120
     shared_root: str = "~/shared-storage/traces"
+    submission_root: str = "~/shared-storage/submission_evals/_viewer"
 
     @property
     def configured(self) -> bool:
@@ -245,13 +253,14 @@ class GmoSettings:
             "host": self.host, "port": self.port, "identity_file": self.identity_file,
             "mine": list(self.mine), "team": list(self.team), "interval_s": self.interval_s,
             "shared_root": self.shared_root,
+            "submission_root": self.submission_root,
         }
 
     @classmethod
     def from_dict(cls, value: Any) -> GmoSettings:
         if not isinstance(value, dict):
             raise FetchError("Settings must be a JSON object")
-        allowed = {"host", "port", "identity_file", "mine", "team", "interval_s", "shared_root"}
+        allowed = {"host", "port", "identity_file", "mine", "team", "interval_s", "shared_root", "submission_root"}
         unknown = set(value) - allowed
         if unknown:
             raise FetchError(f"Unknown setting: {sorted(unknown)[0]}")
@@ -264,16 +273,17 @@ class GmoSettings:
         identity = value.get("identity_file")
         if identity is not None and (not isinstance(identity, str) or not identity or "\x00" in identity):
             raise FetchError("identity_file must be a nonempty path")
-        shared_root = value.get("shared_root", cls.shared_root)
         # Only ~/ is allowed: ~other would select another account's home, and
         # expansion must happen on GMO rather than on the viewer's computer.
-        shared_path = shared_root
-        if isinstance(shared_root, str) and shared_root.startswith("~/"):
-            shared_path = shared_root[1:]
-        if not isinstance(shared_root, str) or (shared_root and (
-            not SAFE_REMOTE_PATH.fullmatch(shared_path) or ".." in shared_root.split("/")
-        )):
-            raise FetchError("shared_root must be an absolute or ~/ plain path without '..' or glob characters")
+        roots = {}
+        for key in ("shared_root", "submission_root"):
+            root = value.get(key, getattr(cls, key))
+            path = root[1:] if isinstance(root, str) and root.startswith("~/") else root
+            if not isinstance(root, str) or (root and (
+                not SAFE_REMOTE_PATH.fullmatch(path) or ".." in root.split("/")
+            )):
+                raise FetchError(f"{key} must be an absolute or ~/ plain path without '..' or glob characters")
+            roots[key] = root
         patterns = {}
         for key in ("mine", "team"):
             items = value.get(key, [])
@@ -285,7 +295,8 @@ class GmoSettings:
         interval = value.get("interval_s", 120)
         if type(interval) is not int or not 0 <= interval <= MAX_INTERVAL_S:
             raise FetchError(f"interval_s must be an integer from 0 to {MAX_INTERVAL_S}")
-        return cls(host, port, identity, patterns["mine"], patterns["team"], interval, shared_root)
+        return cls(host, port, identity, patterns["mine"], patterns["team"], interval,
+                   roots["shared_root"], roots["submission_root"])
 
 
 def config_path() -> Path:
@@ -350,6 +361,8 @@ def api_ssh_argv(settings: GmoSettings) -> list[str]:
     if os.name != "nt" and sys.platform != "win32":
         # A private, short local path also fits macOS's Unix-socket path limit.
         # Multiplexing avoids a fresh login for every live manifest and rsync.
+        # OpenSSH %C hashes the local host, remote host, port and remote user,
+        # so sites on different hosts cannot reuse each other's control socket.
         control_dir = Path("/tmp") / f"capx-gmo-ssh-{os.getuid()}"
         control_dir.mkdir(mode=0o700, exist_ok=True)
         st = control_dir.lstat()
@@ -593,15 +606,16 @@ eval_only = config.get('eval_only', False)
 metadata_only = config.get('metadata_only', False)
 run_ids = config.get('run_ids')
 previous = {(path, episode): (fingerprint, directories) for path, episode, fingerprint, directories in config.get('previous', [])}
-shared_root = os.path.realpath(os.path.expanduser(config['shared_root'])) if config['shared_root'] else None
-shared_real = shared_root
-if shared_root:
+shared_roots = [os.path.realpath(os.path.expanduser(config[key]))
+                for key in ('shared_root', 'submission_root') if config[key]]
+if shared_roots:
     # Resolve ssh aliases' User on the remote host during this same listing.
     username = config['username'] or pwd.getpwuid(os.geteuid()).pw_name
     if not re.fullmatch(r'[A-Za-z0-9._+@-]+', username) or username in ('.', '..'):
-        raise ValueError('Unsupported remote username for shared_root')
-    mine = [os.path.join(shared_root, username)] + mine
-    team = [os.path.join(shared_root, '*')] + team
+        raise ValueError('Unsupported remote username for shared folders')
+    roots = [root for root in shared_roots if os.path.isdir(root)]
+    mine = [os.path.join(root, username) for root in roots] + mine
+    team = [os.path.join(root, '*') for root in roots] + team
 include_files = len(sys.argv) > 2 and sys.argv[2] == 'files'
 mine_only = len(sys.argv) > 3 and sys.argv[3] == 'mine'
 out = []
@@ -635,7 +649,7 @@ for scope, patterns in (('mine', mine), ('team', team)):
                     continue
                 try:
                     trace_root = os.path.dirname(real)
-                    if shared_real is not None and os.path.dirname(trace_root) == shared_real:
+                    if os.path.dirname(trace_root) in shared_roots:
                         owner = os.path.basename(trace_root)
                     else:
                         owner_id = os.stat(run).st_uid
@@ -806,7 +820,7 @@ def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
         raise FetchError(CONNECTION_ERROR) from exc
     except FetchError as exc:
         if "timed out" in str(exc):
-            raise FetchError(CONNECTION_ERROR) from exc
+            raise FetchError(f"{CONNECTION_ERROR}（{timeout:g} 秒以内に応答がありませんでした）") from exc
         raise
     if proc.returncode != 0:
         if proc.returncode == 255:
@@ -822,9 +836,11 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                          include_files: bool = False, mine_only: bool = False,
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
-                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+                         metadata_only: bool = False,
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
     return _list_remote_records(runner, settings, include_files=include_files, mine_only=mine_only,
-                                run_ids=run_ids, previous=previous, metadata_only=metadata_only)
+                                run_ids=run_ids, previous=previous, metadata_only=metadata_only,
+                                timeout=timeout)
 
 
 def list_remote_evals(runner: ProcessRunner, settings: GmoSettings) -> dict[str, list[dict[str, Any]]]:
@@ -836,7 +852,8 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
                          mine_only: bool = False, eval_only: bool = False,
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
-                         metadata_only: bool = False) -> dict[str, list[dict[str, Any]]]:
+                         metadata_only: bool = False,
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
     if include_files and metadata_only:
         raise FetchError("An exact manifest cannot be metadata-only")
     if not settings.configured:
@@ -855,11 +872,12 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
         compact = []
     payload = json.dumps({
         "mine": settings.mine, "team": settings.team, "shared_root": settings.shared_root,
+        "submission_root": settings.submission_root,
         "username": settings.host.rsplit("@", 1)[0] if "@" in settings.host else "",
         "eval_only": eval_only, "run_ids": run_ids, "previous": compact, "metadata_only": metadata_only,
     })
     args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
-    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=60)
+    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=timeout)
     if isinstance(listing, dict) and isinstance(listing.get("episodes"), list):
         merged = []
         for row in listing["episodes"]:
@@ -1129,11 +1147,11 @@ def fetch_episode(runner: ProcessRunner, settings: GmoSettings, row: dict[str, A
                              max_bytes=max_bytes, deadline=deadline, notes=notes, changes=changes)
 
 
-def prefetch_mine(dest: Path) -> int:
-    """Launcher prefetch: copy only episodes matched by the configured mine patterns."""
+def prefetch_mine(dest: Path, config_path: Path | None = None) -> int:
+    """Launcher prefetch using one site's configured mine patterns."""
     try:
-        settings = load_settings()
-        if not settings.host or not (settings.shared_root or settings.mine):
+        settings = load_settings() if config_path is None else load_settings(config_path)
+        if not settings.configured or not (settings.shared_root or settings.submission_root or settings.mine):
             print("GMO settings for mine are missing; starting without prefetch.", file=sys.stderr)
             return 0
         runner = ProcessRunner()

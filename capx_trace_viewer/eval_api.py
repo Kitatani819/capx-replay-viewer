@@ -16,6 +16,10 @@ from capx_trace_viewer.trace_api import (
 )
 
 
+# How far a trial's recording has got; a local copy behind GMO is not shown.
+_STATUS_PROGRESS = {"incomplete": 0, "running": 1, "ended_with_gaps": 2, "ended": 2}
+
+
 class EvalService:
     def __init__(self, trace_root: Path, gmo_service: Any = None) -> None:
         self.trace_root = trace_root
@@ -47,7 +51,9 @@ class EvalService:
         from capx_trace_viewer import gmo
 
         try:
-            if not gmo.load_settings().configured:
+            settings = (self.gmo_service.load_settings() if hasattr(self.gmo_service, "load_settings")
+                        else gmo.load_settings())
+            if not settings.configured:
                 return empty, None, None
             if hasattr(self.gmo_service, "remote_eval_snapshot"):
                 listing, status = self.gmo_service.remote_eval_snapshot(refresh=refresh)
@@ -153,6 +159,11 @@ class EvalService:
         if detail:
             for episode in detail["episodes"]:
                 if episode.get("kind") == "unscoped":
+                    continue
+                remote_episode = episodes.get(episode["episode_id"])
+                # A copy fetched while the trial was still running stops there and
+                # later reads as interrupted; GMO's newer state wins until it is refetched.
+                if remote_episode and _STATUS_PROGRESS.get(remote_episode.get("status"), 0) > _STATUS_PROGRESS.get(episode.get("status"), 0):
                     continue
                 episodes[episode["episode_id"]] = {**episode, "local_state": "local"}
         return list(episodes.values()), detail["runner_records"] if detail else []
@@ -329,7 +340,7 @@ class EvalService:
 
 
 def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: Any = None,
-                       unix_socket: bool = False) -> APIRouter:
+                       unix_socket: bool = False, prefix: str = "/api/evals") -> APIRouter:
     """``unix_socket``: the server listens on a ``--uds`` socket, whose requests carry no
     client address; the gate then accepts requests without one, like the trace API."""
     service = EvalService(trace_root, gmo_service)
@@ -344,7 +355,7 @@ def create_eval_router(trace_root: Path, *, expose: bool = False, gmo_service: A
         if origin is not None and not origin_is_loopback(origin):
             raise HTTPException(status_code=403, detail="the eval API answers loopback pages only")
 
-    router = APIRouter(prefix="/api/evals", dependencies=[Depends(gate)])
+    router = APIRouter(prefix=prefix, dependencies=[Depends(gate)])
 
     @router.get("")
     def listing(refresh: int = 0):

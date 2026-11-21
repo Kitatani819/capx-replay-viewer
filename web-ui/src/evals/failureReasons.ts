@@ -2,18 +2,20 @@ import type { EndCauseCode, EndClassification, EndReason } from '../trace/types'
 import type { EvalTrial } from './api';
 import { baselineTrialFor } from './model';
 
-export const FAILURE_REASONS = ['error', 'timeout', 'finish_unmet', 'regen_limit', 'single_shot', 'unknown'] as const;
+export const FAILURE_REASONS = ['error', 'timeout', 'finish_unmet', 'submission_reset', 'regen_limit', 'single_shot', 'unknown'] as const;
 export type FailureReason = typeof FAILURE_REASONS[number];
 export const END_LABELS: Record<EndReason, string> = {
   success: '成功', error: 'エラーで停止', timeout: '時間切れ・打ち切り',
   finish_unmet: '「終わった」と答えたが未達成', regen_limit: '書き直しの上限', unknown: '終わり方が不明',
   single_shot: '1回だけ実行して終了（single-shot）',
+  submission_reset: '提出物が試行を終えた（未達成）',
 };
 // Mirrored from end_reason.py; a Python test checks both label maps.
 export const END_CELL_WORDS: Record<EndReason, string> = {
   success: '成功', error: 'エラー', timeout: '時間切れ',
   finish_unmet: '未達成', regen_limit: '上限', unknown: '不明',
   single_shot: '1回実行',
+  submission_reset: '終了',
 };
 // Labels only: end_reason.py is the sole cause classifier, including for old traces.
 export const END_CAUSE_LABELS: Record<EndCauseCode, string> = {
@@ -25,6 +27,8 @@ export const END_CAUSE_LABELS: Record<EndCauseCode, string> = {
   evaluation_budget: '評価全体の時間制限に到達',
   planned_unrun: '計画された試行が実行されなかった',
   single_shot: '1回だけ実行して終了（single-shot）',
+  submission_reset: '提出物が試行を終えた（未達成）',
+  job_cut: '評価ジョブの終了で打ち切り',
 };
 // Canonical cell vocabulary mirrored from end_reason.py; parity is tested.
 export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = {
@@ -47,6 +51,8 @@ export const END_CAUSE_WORDS: Record<EndCauseCode, readonly [string, string]> = 
   evaluation_budget: ["評価時間", "評価全体の時間制限に到達"],
   planned_unrun: ["未走行", "計画されたが実行されず、失敗として集計した試行"],
   single_shot: ["1回実行", "初回のプログラムを実行し、書き直しの判断をせず終了"],
+  submission_reset: ["終了", "審判が成功と判定する前に提出物が試行を終えた"],
+  job_cut: ["打ち切り", "試行の途中で評価ジョブが終了し、公式集計では終了した試行に数えない"],
 };
 export const END_CAUSE_CELL_WORDS = Object.fromEntries(
   Object.entries(END_CAUSE_WORDS).map(([code, [word]]) => [code, word]),
@@ -164,7 +170,7 @@ export function causeCounts(current: EvalTrial[], baseline: EvalTrial[], categor
   return [...rows.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
 export function reasonCounts(trials: EvalTrial[]): Record<BreakdownCategory, number> {
-  const counts: Record<BreakdownCategory, number> = { error: 0, timeout: 0, finish_unmet: 0, regen_limit: 0, single_shot: 0, unknown: 0, unjudged: 0 };
+  const counts: Record<BreakdownCategory, number> = { error: 0, timeout: 0, finish_unmet: 0, submission_reset: 0, regen_limit: 0, single_shot: 0, unknown: 0, unjudged: 0 };
   for (const trial of trials) {
     const category = trialCategory(trial);
     if (category !== 'success' && category !== 'running') counts[category]++;

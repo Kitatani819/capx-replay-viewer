@@ -26,6 +26,7 @@ def test_defaults_without_file(config):
     assert settings.as_dict() == {
         "host": "gmo", "port": None, "identity_file": None,
         "shared_root": "~/shared-storage/traces", "mine": [], "team": [], "interval_s": 120,
+        "submission_root": "~/shared-storage/submission_evals/_viewer",
     }
     assert settings.configured
     command = gmo.api_ssh_argv(settings)
@@ -35,6 +36,7 @@ def test_defaults_without_file(config):
 
 @pytest.mark.parametrize("overrides", [
     {}, {"mine": ["/data/traces"]}, {"host": "alias", "interval_s": 0}, {"shared_root": ""},
+    {"shared_root": "~/shared-storage/traces", "mine": [], "team": []}, {"submission_root": ""},
 ])
 def test_existing_file_uses_defaults_only_for_absent_keys(config, overrides):
     config.parent.mkdir()
@@ -48,6 +50,35 @@ def test_explicit_empty_shared_root_disables_shared_listing(config):
     assert settings.shared_root == "" and settings.mine == ("/data/traces",)
     assert settings.configured
     assert not gmo.GmoSettings.from_dict({"shared_root": ""}).configured
+
+
+def test_explicit_empty_submission_root_disables_submission_listing(config):
+    gmo.save_settings(gmo.GmoSettings.from_dict({"submission_root": ""}))
+    settings = gmo.load_settings()
+    assert settings.submission_root == ""
+    assert settings.shared_root == "~/shared-storage/traces" and settings.configured
+    # The additional default must not re-enable a deliberately unconfigured site.
+    assert not gmo.GmoSettings.from_dict({"shared_root": "", "submission_root": "/data/evals"}).configured
+
+
+@pytest.mark.parametrize("path", ["", "~/shared-storage/submission_evals/_viewer", "~/", "/", "/data/evals/", "/data/v..2"])
+def test_submission_root_round_trip(config, path):
+    settings = gmo.GmoSettings.from_dict({"submission_root": path})
+    assert settings.submission_root == path
+    assert settings.as_dict()["submission_root"] == path
+    assert gmo.GmoSettings.from_dict(settings.as_dict()) == settings
+    gmo.save_settings(settings)
+    assert gmo.load_settings() == settings
+
+
+@pytest.mark.parametrize("path", [
+    None, 1, [], True, "relative/evals", "~", "~user/evals", "~/~/evals", "/data/../evals", "/..",
+    "~/../evals", "/data/*", "/data/?", "/data/[users]", "/data/{users}", "/with space",
+    "/data\nevals", "/data\x00evals", "/data\tevals", "/data;command",
+])
+def test_submission_root_rejects_unsafe_paths(path):
+    with pytest.raises(gmo.FetchError, match="submission_root"):
+        gmo.GmoSettings.from_dict({"submission_root": path})
 
 
 def test_saving_effective_defaults_writes_private_file(config):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import errno
 import fcntl
 import html
 import json
@@ -20,7 +21,7 @@ import stat
 import sys
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from capx_trace_recorder.evaluation_failure import (
     evaluation_failure, failure_description, preserve_evaluation_failure,
@@ -30,6 +31,7 @@ MAX_EVAL_BYTES = 256 * 1024
 HEARTBEAT_STALE_S = 300
 JST = dt.timezone(dt.timedelta(hours=9), name="JST")
 _ID = re.compile(r"ev-[A-Za-z0-9._-]{1,197}")
+_DEFAULT_SUBMISSION_ROOT = object()
 
 
 def _escape(value: Any) -> str:
@@ -128,6 +130,33 @@ def _directory(path: Path):
         yield fd
     finally:
         os.close(fd)
+
+
+@contextlib.contextmanager
+def _submission_directory(root: Path, submission_root):
+    """Pin a separate trust boundary, without following the default's final link."""
+    if submission_root is None or submission_root == "":
+        yield None
+        return
+    if submission_root is not _DEFAULT_SUBMISSION_ROOT:
+        resolved = Path(submission_root).expanduser().resolve(strict=True)
+        with _directory(resolved) as directory:
+            yield directory
+        return
+    try:
+        parent = (root.parent / "submission_evals").resolve(strict=True)
+        with _directory(parent) as parent_fd:
+            directory = os.open("_viewer", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                dir_fd=parent_fd)
+    except OSError as exc:  # timeout-ok: optional supervisor/CLI root discovery
+        if exc.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            raise
+        yield None
+        return
+    try:
+        yield directory
+    finally:
+        os.close(directory)
 
 
 def _logical_summary(directory: int, eval_id: str) -> dict[str, Any] | None:
@@ -311,6 +340,17 @@ td { overflow-wrap: anywhere; max-width: 320px; min-width: 100px; }
 }
 .rate { display: block; font-size: 12px; font-weight: 500; margin-top: 2px; }
 .eval-id { display: block; font-size: 11px; color: var(--text-dim); margin-top: 4px; }
+.route-tag {
+  display: block;
+  width: fit-content;
+  margin-top: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 12px;
+}
 code {
   font: 12px/1.6 "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   background: var(--subtle);
@@ -420,7 +460,8 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
     rows = []
     for record in records:
         identity = record["eval_id"]  # Validated before it becomes part of a URL.
-        link = _escape(f"{viewer_url}/evals/{identity}")
+        viewer = urlsplit(viewer_url)
+        link = _escape(urlunsplit(viewer._replace(path=f"{viewer.path.rstrip('/')}/evals/{identity}")))
         git = record.get("git")
         commit = git["commit"][:8] + (" (dirty)" if git.get("dirty") else "") if git else "記録なし"
         baseline = record.get("baseline_eval_id")
@@ -430,11 +471,14 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
         if len(matches) == 1 and summary is not None and matches[0].get("summary") is not None:
             delta = summary["success"] - matches[0]["summary"]["success"]
             baseline_html += f'<span class="rate">成功数 {_escape(f"{delta:+d}")}</span>'
+        eval_set = _escape(record.get("eval_set") or "—")
+        if record.get("_index_route_b"):
+            eval_set += '<small class="route-tag">提出の形（経路 B）</small>'
         cells = [
             f'<time datetime="{_escape(record["started_at"])}">{_escape(_time(record["started_at"]).astimezone(JST).strftime("%Y-%m-%d %H:%M:%S"))}</time>'
             f'<small class="eval-id">{_escape(identity)}</small>',
             _escape(record.get("by") or "—"), _escape(record.get("changed") or "—"),
-            _escape(record.get("eval_set") or "—"), _status(record, now), _score(summary),
+            eval_set, _status(record, now), _score(summary),
             _escape(_duration(record, now)), _escape(commit), baseline_html,
             f'<a href="{link}">Viewerで開く</a>',
         ]
@@ -459,6 +503,7 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
             '<h1>CaP-X 評価一覧</h1>'
             f'<p class="meta">生成日時: {_escape(now.astimezone(JST).strftime("%Y-%m-%d %H:%M:%S JST"))} · 評価数: {_escape(len(records))}件</p>'
             '<p>失敗した試行の中身は Viewer（bash Start-Replay.sh --from-gmo）で開けます</p>'
+            '<p class="meta"><code>submission_evals/_viewer</code> の提出の形の評価（経路 B）も、次の再生成（記録器を通した評価の開始・終了時、または index コマンド）で一覧に入ります。</p>'
             f'<p class="meta">Viewer URL: <a href="{_escape(viewer_url)}">{_escape(viewer_url)}</a></p>'
             '<p class="meta">実行状況は生成時点の記録です。heartbeat が5分以上更新されていない評価は「途中で終了」と表示します。</p>'
             '</header>' + (table if records else '<p class="empty">評価の記録はありません。</p>')
@@ -475,11 +520,15 @@ def _shared_mode(fd: int, group: int) -> None:
 
 
 def build_index(root: Path, out: Path | None = None,
-                viewer_url: str = "http://127.0.0.1:8390") -> Path:
+                viewer_url: str = "http://127.0.0.1:8390",
+                submission_root=_DEFAULT_SUBMISSION_ROOT) -> Path:
     """Scan both user/ev-* and flat ev-* layouts and atomically publish one page.
 
     Callers must create the output directory first. Neither its permissions nor
     ownership are changed. The persistent lock is shared by all writers.
+    The default submission root is the resolved root's sibling
+    ``submission_evals/_viewer``, if it is a real directory. An explicit path
+    must exist; ``None`` or an empty string disables submission records.
     """
     # The explicitly supplied root is the trust boundary (shared-storage may
     # itself be an alias). Every descendant is still opened with O_NOFOLLOW.
@@ -487,9 +536,9 @@ def build_index(root: Path, out: Path | None = None,
     out = Path(os.path.abspath(Path(out).expanduser())) if out is not None else root / "index.html"
     parsed = urlsplit(viewer_url)
     _require(parsed.scheme in ("http", "https") and bool(parsed.hostname)
-             and not parsed.query and not parsed.fragment and not parsed.username and not parsed.password
+             and not parsed.fragment and not parsed.username and not parsed.password
              and not any(ord(c) < 32 or ord(c) == 127 for c in viewer_url), "viewer URL (use http:// or https://)")
-    viewer_url = viewer_url.rstrip("/")
+    viewer_url = urlunsplit(parsed._replace(path=parsed.path.rstrip("/")))
     with _directory(out.parent) as output_fd:
         group = os.fstat(output_fd).st_gid
         lock_fd = os.open(out.name + ".lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -500,6 +549,17 @@ def build_index(root: Path, out: Path | None = None,
             try:
                 with _directory(root) as root_fd:
                     records, errors = _scan(root_fd)
+                # Provenance comes from the scanned root, never record metadata.
+                records = [{**record, "_index_route_b": False} for record in records]
+                errors = [(f"traces/{path}", reason) for path, reason in errors]
+                with _submission_directory(root, submission_root) as submission_fd:
+                    if submission_fd is not None:
+                        submission_records, submission_errors = _scan(submission_fd)
+                        records.extend({**record, "_index_route_b": True}
+                                       for record in submission_records)
+                        errors.extend((f"submission_evals/_viewer/{path}", reason)
+                                      for path, reason in submission_errors)
+                records.sort(key=lambda item: (_time(item["started_at"]), item["eval_id"]), reverse=True)
                 page = _render(records, errors, viewer_url, dt.datetime.now(dt.timezone.utc))
                 temporary = f".{out.name}.{os.urandom(12).hex()}.tmp"
                 created = False
@@ -529,9 +589,11 @@ def main(words: Sequence[str] | None = None) -> int:
     parser.add_argument("--root", required=True, type=Path, help="shared traces root")
     parser.add_argument("--out", type=Path, help="output HTML (default: <root>/index.html)")
     parser.add_argument("--viewer-url", default="http://127.0.0.1:8390")
+    parser.add_argument("--submission-root", default=_DEFAULT_SUBMISSION_ROOT,
+                        help="route B root (default: sibling submission_evals/_viewer if present; '' disables)")
     args = parser.parse_args(words)
     try:
-        path = build_index(args.root, args.out, args.viewer_url)
+        path = build_index(args.root, args.out, args.viewer_url, args.submission_root)
     except (OSError, ValueError) as exc:  # timeout-ok: CLI only, never on a trial thread
         print(f"index: {exc}", file=sys.stderr)
         return 1

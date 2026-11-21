@@ -1,4 +1,5 @@
 /** Recorded calls aligned by identity within their recorded turn, never by time. */
+import { siteHref } from '../navigation/site';
 import { callOutcome, textOf, type EpisodeModel, type TNode } from './model';
 import { turnOf } from './replay';
 import { dataOf, type TraceEvent } from './types';
@@ -31,12 +32,12 @@ export function trialEventUrl(runId: string, episodeId: string, eventId?: string
   const query = new URLSearchParams({ run: runId, episode: episodeId });
   if (eventId) query.set('event', eventId);
   if (camera) query.set('camera', camera);
-  return `/traces?${query}`;
+  return siteHref(`/traces?${query}`);
 }
 export function comparisonUrl(runId: string, episodeId: string, baselineRunId: string, baselineEpisodeId: string, camera?: string | null): string {
   const query = new URLSearchParams({ run: runId, episode: episodeId, baseline_run: baselineRunId, baseline_episode: baselineEpisodeId });
   if (camera) query.set('camera', camera);
-  return `/traces/compare?${query}`;
+  return siteHref(`/traces/compare?${query}`);
 }
 
 const ellipsis = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit - 1)}…` : text;

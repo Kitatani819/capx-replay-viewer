@@ -3,22 +3,24 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shlex
 import signal
 import socket
 import stat
 import sys
+from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Sequence
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from capx_trace_viewer.trace_api import create_trace_router
+from capx_trace_viewer.trace_api import create_trace_router, trace_access_gate
 from capx_trace_viewer.eval_api import create_eval_router
 from capx_trace_viewer.platform_support import UnsupportedBackendPlatform, require_supported_backend
 
@@ -45,6 +47,46 @@ def _package_version() -> str:
 
 def _cli_path(value: str | Path) -> Path:
     return Path(os.path.abspath(os.path.expanduser(str(value))))
+
+
+@dataclass(frozen=True)
+class Site:
+    """One additional remote connection and its local records."""
+
+    name: str
+    label: str
+    config_path: Path
+    trace_root: Path
+
+    def __post_init__(self) -> None:
+        if re.fullmatch(r'[a-z0-9-]{1,32}', self.name) is None:
+            raise ValueError('site names must match [a-z0-9-]{1,32}')
+        if not self.label.strip():
+            raise ValueError('site labels must not be empty')
+        object.__setattr__(self, 'config_path', _cli_path(self.config_path))
+        object.__setattr__(self, 'trace_root', _cli_path(self.trace_root))
+
+
+def parse_site(value: str) -> Site:
+    """Parse ``--site NAME=LABEL,CONFIG,TRACE_ROOT`` without changing global settings."""
+    try:
+        name, rest = value.split('=', 1)
+        label, config, root = rest.split(',', 2)
+        if not config.strip() or not root.strip():
+            raise ValueError('config and trace root must not be empty')
+        return Site(name=name, label=label, config_path=Path(config), trace_root=Path(root))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f'invalid site {value!r}: expected NAME=LABEL,CONFIG,TRACE_ROOT; {exc}'
+        ) from None
+
+
+def _validate_sites(sites: Sequence[Site]) -> None:
+    names = {'b300'}
+    for site in sites:
+        if site.name in names:
+            raise ValueError(f'duplicate site name: {site.name}')
+        names.add(site.name)
 
 
 def _safe_dist_file(dist_root: Path, path: str) -> Path | None:
@@ -137,11 +179,12 @@ def _remove_socket_file(path: Path) -> None:
 def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None,
                expose_traces: bool = False, runner_roots: Sequence[str | Path] | None = None,
                frontend_dist: str | Path | None = None, gmo: bool = False,
-               unix_socket: bool = False) -> FastAPI:
+               unix_socket: bool = False, sites: Sequence[Site] = ()) -> FastAPI:
     """``unix_socket``: the app is served on a ``--uds`` socket, whose requests carry no
     client address; the trace and GMO APIs then accept requests without one."""
     if not viewer_only:
         raise ValueError('The standalone server supports viewer-only mode')
+    _validate_sites(sites)
     require_supported_backend()
     app = FastAPI(title='CaP-X Trace Viewer', version=_package_version(),
                   docs_url=None, redoc_url=None, openapi_url=None)
@@ -153,23 +196,42 @@ def create_app(*, viewer_only: bool = True, trace_root: str | Path | None = None
     dist = _cli_path(frontend_dist) if frontend_dist is not None else _DEFAULT_FRONTEND_DIST
     app.state.viewer_only = True
     app.state.trace_root = trace_dir
-    app.include_router(create_trace_router(trace_dir, viewer_only=True, expose=expose_traces, runner_roots=roots,
-                                           unix_socket=unix_socket))
-    gmo_service = None
-    if gmo:
-        from capx_trace_viewer.gmo_api import GmoService, create_gmo_router
-        gmo_service = GmoService(trace_dir)
-        app.state.gmo_service = gmo_service
-        app.include_router(create_gmo_router(gmo_service, unix_socket=unix_socket))
-        app.router.add_event_handler('startup', gmo_service.start_auto)
-        app.router.add_event_handler('shutdown', gmo_service.close)
-    app.include_router(create_eval_router(trace_dir, expose=expose_traces, gmo_service=gmo_service,
-                                          unix_socket=unix_socket))
+    app.state.gmo_services = {}
 
-    @app.api_route('/api/gmo', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
-    @app.api_route('/api/gmo/{path:path}', methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
     async def gmo_not_found(path: str = ''):
         return JSONResponse({'detail': 'Not Found'}, status_code=404)
+
+    def mount_site(name: str, root: Path, prefix: str, *, enabled: bool,
+                   config_path: Path | None = None, runner_paths: Sequence[Path] = ()) -> None:
+        app.include_router(create_trace_router(root, viewer_only=True, expose=expose_traces,
+                                               runner_roots=runner_paths, unix_socket=unix_socket,
+                                               prefix=f'{prefix}/traces'))
+        service = None
+        if enabled:
+            from capx_trace_viewer.gmo_api import GmoService, create_gmo_router
+            service = GmoService(root, config_path=config_path)
+            app.state.gmo_services[name] = service
+            if name == 'b300':
+                app.state.gmo_service = service  # compatibility with single-site embedders
+            app.include_router(create_gmo_router(service, unix_socket=unix_socket, prefix=f'{prefix}/gmo'))
+            app.router.add_event_handler('startup', service.start_auto)
+            app.router.add_event_handler('shutdown', service.close)
+        app.include_router(create_eval_router(root, expose=expose_traces, gmo_service=service,
+                                              unix_socket=unix_socket, prefix=f'{prefix}/evals'))
+        for suffix in ('', '/{path:path}'):
+            app.add_api_route(f'{prefix}/gmo{suffix}', gmo_not_found,
+                              methods=['GET', 'PUT', 'POST', 'DELETE', 'PATCH'])
+
+    mount_site('b300', trace_dir, '/api', enabled=gmo, runner_paths=roots)
+    for site in sites:
+        mount_site(site.name, site.trace_root, f'/api/sites/{site.name}', enabled=True,
+                   config_path=site.config_path, runner_paths=[site.trace_root.parent / 'runner'])
+    site_info = [{'name': 'b300', 'label': 'B300', 'primary': True}]
+    site_info.extend({'name': site.name, 'label': site.label, 'primary': False} for site in sites)
+
+    @app.get('/api/sites', dependencies=[Depends(trace_access_gate(expose=expose_traces, unix_socket=unix_socket))])
+    async def list_sites():
+        return JSONResponse(site_info)
 
     @app.get('/')
     async def redirect_to_traces():
@@ -229,8 +291,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                              'other users can connect to 127.0.0.1')
     parser.add_argument('--expose-traces', action='store_true')
     parser.add_argument('--gmo', action='store_true', help='Enable the loopback-only GMO import API')
+    parser.add_argument('--site', type=parse_site, action='append', default=[], metavar='NAME=LABEL,CONFIG,TRACE_ROOT',
+                        help='Add a remote site with its own settings and local traces (repeatable)')
     parser.add_argument('--frontend-dist', help='Directory containing the built frontend index.html and assets')
     args = parser.parse_args(argv)
+    try:
+        _validate_sites(args.site)
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.uds is not None and (args.host is not None or args.port is not None):
         parser.error('--uds cannot be combined with --host or --port')
     dist = _cli_path(args.frontend_dist) if args.frontend_dist is not None else _DEFAULT_FRONTEND_DIST
@@ -254,14 +322,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         try:
             app = create_app(trace_root=args.trace_root, runner_roots=roots or None,
                              expose_traces=args.expose_traces, frontend_dist=args.frontend_dist,
-                             gmo=args.gmo, unix_socket=sock is not None)
+                             gmo=args.gmo, unix_socket=sock is not None, sites=args.site)
         except UnsupportedBackendPlatform as exc:
             parser.error(str(exc))
         if args.gmo:
             from capx_trace_viewer.gmo import prefetch_mine
             # Connection problems are reported in one line; local records stay
             # available even when GMO cannot be reached at startup.
-            prefetch_mine(app.state.trace_root)
+            for service in app.state.gmo_services.values():
+                prefetch_mine(service.dest, config_path=service.config_path)
         if not (dist / 'index.html').is_file():
             print(f'Frontend dist is missing or has no index.html: {dist}', file=sys.stderr)
         if sock is not None:

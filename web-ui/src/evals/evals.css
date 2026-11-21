@@ -63,7 +63,7 @@
 .eval-comparison th small { display: block; color: var(--ce-text-muted); font-size: 12px; font-weight: normal; }
 .eval-comparison .eval-task-start { border-top: 1px solid var(--ce-border); }
 .eval-comparison .eval-cell { padding: 8px 10px; min-width: 84px; height: 64px; }
-.eval-cell-actions { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.eval-cell-actions { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
 .eval-result {
   display: inline-flex;
   min-width: 46px;
@@ -76,6 +76,7 @@
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 20px;
+  flex-shrink: 0;
   transition: border-color 0.15s, background-color 0.15s;
 }
 .eval-page .eval-result:hover, .eval-page .eval-result:focus-visible {
@@ -173,6 +174,9 @@
 
 .trial-conditions { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: normal; line-height: 1.5; color: var(--ce-text-secondary); }
 .eval-cell .trial-conditions { max-width: 190px; padding: 4px; font-size: 11px; }
+.eval-conditions { margin: 0 0 10px; color: var(--ce-text-secondary); font-size: 13px; }
+.eval-conditions p { margin: 0; line-height: 1.7; }
+.eval-conditions span { display: inline-block; margin-right: 1.2em; }
 .eval-significance {
   margin: 24px 0;
   padding: 20px 24px;
@@ -201,7 +205,9 @@
 .eval-segments p + p, .eval-segments details { margin-top: 10px; }
 .eval-segments ol { margin: 12px 0; padding-left: 24px; list-style: decimal; }
 .eval-segments summary { cursor: pointer; color: var(--ce-accent); font-weight: 500; }
-.eval-segment-count { display: block; color: var(--ce-text-muted); margin-top: 5px; font-size: 12px; }
+.eval-set, .eval-segment-count { display: block; color: var(--ce-text-muted); margin-top: 5px; font-size: 12px; }
+.eval-route-notes { display: block; color: var(--ce-text-muted); margin-top: 5px; font-size: 12px; line-height: 1.6; }
+.eval-route-notes > span { display: block; }
 .eval-remote-status { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 12px 0; color: var(--ce-text-secondary); font-size: 13px; }
 .eval-remote-status p { margin: 0; }
 .eval-remote-status button {

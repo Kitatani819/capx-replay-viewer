@@ -21,7 +21,7 @@ function setup(localStatus = 'running') {
   const traceHandler = net.handler;
   const state = {
     enabled: true, configured: true, conflict: false, remoteStatus: 'running', localOnly: false,
-    latency: 5, error: false,
+    missingUntilRefresh: false, latency: 5, error: false,
     listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     status: {
       following: true, run_id: 'r1', episode_id: 'e1', last_ok_at: '2026-11-20T00:00:00Z',
@@ -29,6 +29,7 @@ function setup(localStatus = 'running') {
     } as GmoLiveStatus,
   };
   const leases: { at: number; body: { run_id: string; episode_id: string } }[] = [];
+  const lookups: { episode: string | null; refresh: string | null }[] = [];
   const savedFetch = globalThis.fetch;
   globalThis.fetch = (input, init) => {
     if (String(input) === '/api/gmo/live' && init?.method === 'POST') {
@@ -40,16 +41,22 @@ function setup(localStatus = 'running') {
   };
   net.handler = req => {
     if (req.path === '/api/gmo/config') return { json: { enabled: state.enabled, configured: state.configured } };
-    if (req.path === '/api/gmo/episodes') return { json: state.localOnly ? [] : ['e1', 'e2'].map(id => ({
-      run_id: 'r1', episode_id: id, status: state.remoteStatus, conflict: state.conflict,
-    })) };
+    if (req.path === '/api/gmo/episode') {
+      const refresh = req.query.get('refresh');
+      lookups.push({ episode: req.query.get('episode_id'), refresh });
+      if (req.query.get('run_id') !== 'r1' || state.localOnly || (state.missingUntilRefresh && refresh !== '1')) {
+        return { status: 404, json: { detail: 'Episode not found on GMO' } };
+      }
+      if (state.conflict) return { status: 409, json: { detail: 'Run ID exists in more than one GMO location' } };
+      return { json: { run_id: 'r1', episode_id: req.query.get('episode_id'), status: state.remoteStatus, conflict: false } };
+    }
     if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/live') return state.error
       ? { status: 502, json: { detail: '接続できません' }, latency: state.latency }
       : { json: state.status, latency: state.latency };
     return traceHandler(req);
   };
-  return { episode, state, leases, restore: () => { globalThis.fetch = savedFetch; } };
+  return { episode, state, leases, lookups, restore: () => { globalThis.fetch = savedFetch; } };
 }
 
 function open(event = '') {
@@ -77,19 +84,36 @@ test('a remote running trial starts its lease, renews every ten seconds and poll
   } finally { page.unmount(); remote.restore(); }
 });
 
-test('a cold remote listing keeps discovering the open Live trial until refresh completes', async () => {
+test('Live asks GMO about the open trial only, and asks again when a cached run listing predates it', async () => {
+  const remote = setup();
+  remote.state.missingUntilRefresh = true;
+  const page = open();
+  try {
+    await advance(100);
+    assert.deepEqual(remote.lookups, [{ episode: 'e1', refresh: '0' }, { episode: 'e1', refresh: '1' }]);
+    assert.equal(remote.leases.length, 1);
+    assert.equal(remote.leases[0].body.episode_id, 'e1');
+    // The team listing can take minutes on a busy shared folder; Live never waits on it.
+    assert.equal(requests(/\/api\/gmo\/episodes$/).sent, 0);
+    assert.equal(requests(/\/api\/gmo\/listing-status$/).sent, 0);
+  } finally { page.unmount(); remote.restore(); }
+});
+
+test('a failed GMO lookup is retried rather than ending Live discovery', async () => {
   const remote = setup();
   remote.state.localOnly = true;
-  remote.state.listingStatus = { fetched_at: null, refreshing: true, error: null };
+  const failing = net.handler;
+  let failures = 1;
+  net.handler = req => req.path === '/api/gmo/episode' && failures-- > 0
+    ? { status: 502, json: { detail: 'GMO operation timed out' } } : failing(req);
   const page = open();
   try {
     await advance(100);
     assert.equal(remote.leases.length, 0);
+    assert.match(bar(page).poll.text, /再試行中：.*timed out/);
     remote.state.localOnly = false;
-    remote.state.listingStatus = { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null };
     await advance(2100);
     assert.equal(remote.leases.length, 1);
-    assert.equal(remote.leases[0].body.episode_id, 'e1');
   } finally { page.unmount(); remote.restore(); }
 });
 

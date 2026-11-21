@@ -5,6 +5,7 @@ import { EvalComparison, EvalListTable } from '../../evals/EvalPages';
 import { comparisonTable, delta, summaryDiffers } from '../../evals/model';
 import { CELL_LEGEND } from '../../evals/failureReasons';
 import type { EvalDetail, EvalRecord, EvalSummary, EvalTrial } from '../../evals/api';
+import type { EndClassification } from '../types';
 
 const wordLegend = `${Object.entries(CELL_LEGEND).map(([word, explanation]) => word === explanation ? word : `${word}＝${explanation}`).join('　')}　空欄＝記録なし`;
 
@@ -148,7 +149,7 @@ test('every ending uses the canonical cell word and long accessible label', () =
   }
   assert.doesNotMatch(html, /古い表示名/);
 });
-test('paired current cells offer a separate small compare button beside the trial button', () => {
+test('paired current cells offer a separate small compare button under the trial button', () => {
   const html = renderToStaticMarkup(<EvalComparison detail={detail()} />);
   assert.equal((html.match(/class="eval-compare-link"/g) || []).length, 1);
   assert.match(html, /<div class="eval-cell-actions"><a[^>]+episode=c1-retry[^>]+>[\s\S]*?<\/a><a class="eval-compare-link" href="\/traces\/compare\?run=improved&amp;episode=c1-retry&amp;baseline_run=baseline&amp;baseline_episode=b1" aria-label="cube seed 401を基準と並べて見る">並べて見る<\/a><\/div>/);
@@ -161,6 +162,47 @@ test('list preserves invalid records as errors and completed evaluations have no
   assert.match(html, /読み取れない評価：broken/);
   assert.match(html, /schema が不正です/);
   assert.doesNotMatch(html, /完了/);
+});
+test('list shows each evaluation set below the changed description and omits absent sets', () => {
+  const entries = ['routeB:behavior:bringing_water', 'routeB:robosuite:cube_lifting'].map((evalSet, index) => {
+    const entry = detail();
+    entry.eval = { ...entry.eval!, eval_id: `route-${index}`, eval_set: evalSet };
+    return entry;
+  });
+  const html = renderToStaticMarkup(<EvalListTable entries={entries} />);
+  for (const [index, entry] of entries.entries()) {
+    assert.ok(html.includes(`<a href="/evals/route-${index}">把持位置の修正</a><small class="eval-set">${entry.eval!.eval_set}</small>`));
+  }
+  for (const evalSet of [null, '']) {
+    const entry = detail();
+    entry.eval!.eval_set = evalSet;
+    assert.doesNotMatch(renderToStaticMarkup(<EvalListTable entries={[entry]} />), /class="eval-set"/);
+  }
+});
+test('route B list and evaluation headers explain the referee and BEHAVIOR placement from the evaluation set', () => {
+  const routeNote = '提出の形の評価（経路 B）・成否は審判の判定';
+  const behaviorNote = 'シミュレーターは RTX、モデルと記録は B300';
+  for (const evalSet of ['routeB:behavior:bringing_water', 'routeB:libero:libero_10', 'routeB:robosuite:cube_lifting', 'routeB:future:task']) {
+    const d = detail();
+    d.eval!.eval_set = evalSet;
+    const listHtml = renderToStaticMarkup(<EvalListTable entries={[d]} />);
+    const pageHtml = renderToStaticMarkup(<EvalComparison detail={d} />);
+    for (const html of [listHtml, pageHtml]) {
+      assert.ok(html.includes(`<span class="eval-route-notes"><span>${routeNote}</span>`));
+      assert.equal(html.includes(behaviorNote), evalSet.startsWith('routeB:behavior:'));
+    }
+    assert.ok(listHtml.indexOf('class="eval-set"') < listHtml.indexOf(routeNote));
+    assert.ok(pageHtml.indexOf(routeNote) < pageHtml.indexOf('class="eval-score"'));
+  }
+  for (const evalSet of [null, '', 'routeA:behavior:bringing_water', 'behavior:bringing_water', 'routeBish:behavior:task']) {
+    const d = detail();
+    d.eval!.eval_id = 'routeB-behavior-name-is-not-metadata';
+    d.eval!.eval_set = evalSet;
+    for (const html of [renderToStaticMarkup(<EvalListTable entries={[d]} />), renderToStaticMarkup(<EvalComparison detail={d} />)]) {
+      assert.ok(!html.includes(routeNote));
+      assert.ok(!html.includes(behaviorNote));
+    }
+  }
 });
 test('list and comparison show short commits and distinguish unknown uncommitted changes', () => {
   for (const dirty of [true, false, null]) {
@@ -189,4 +231,31 @@ test('rates compare percentage points and no empty denominator is divided', () =
   assert.equal(delta({ success: 14, trials: 20 }, { success: 13, trials: 20 }), '（+5pt）');
   assert.equal(delta({ success: 0, trials: 0 }, summary), '');
   assert.equal(summaryDiffers({ success: 1, trials: 1 }, [trial('x', 1, 'success')]), false);
+});
+
+test('recorded conditions appear once above the table and per task, not inside every cell', () => {
+  const conditions = (steps: number, limit: number, elapsed: number): EndClassification => ({ reason: 'success', label: '成功', evidence: {},
+    conditions: { step_limit: limit, steps_used: steps, evaluation_budget_s: 21000, evaluation_elapsed_s: elapsed, success_policy: 'per_cycle_sticky' as const } });
+  const d = detail(); d.eval = record('baseline'); d.baseline = null; d.baseline_trials = []; d.differences = []; d.baseline_error = null;
+  d.trials = [trial('a', 401, 'success', { task: 'cube_lifting', end_classification: conditions(94, 1500, 128) }),
+    trial('b', 402, 'success', { task: 'cube_lifting', end_classification: conditions(115, 1500, 4673) }),
+    trial('c', 401, 'failure', { task: 'nut_assembly', end_classification: { ...conditions(1000, 1000, 3839), reason: 'timeout' } })];
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.doesNotMatch(html, /trial-conditions/);
+  assert.equal((html.match(/一度でも成功なら達成/g) || []).length, 1);
+  assert.match(html, /<div class="eval-conditions"><p>評価条件：<span>評価全体の時間 4,673 \/ 21,000 秒<\/span><span>成功判定：制御サイクルごとに判定・一度でも成功なら達成<\/span><\/p><\/div>/);
+  assert.match(html, /cube_lifting<small>ステップ上限 1,500<\/small>/);
+  assert.match(html, /nut_assembly<small>ステップ上限 1,000<\/small>/);
+  assert.ok(html.includes('title="ステップ 94 / 1,500\n試行を開く"'));
+});
+
+test('baseline and current conditions are labelled separately when they differ', () => {
+  const ending = (limit: number, elapsed?: number): EndClassification => ({ reason: 'success', label: '成功', evidence: {},
+    conditions: { step_limit: limit, ...(elapsed == null ? {} : { evaluation_budget_s: 600, evaluation_elapsed_s: elapsed }) } });
+  const d = detail();
+  d.baseline_trials = [trial('b1', 401, 'success', { end_classification: ending(4000) })];
+  d.trials = [trial('c1', 401, 'success', { end_classification: ending(8000, 120) })];
+  const html = renderToStaticMarkup(<EvalComparison detail={d} />);
+  assert.match(html, /<p>基準の評価条件：<span>記録なし<\/span><\/p><p>今回の評価条件：<span>評価全体の時間 120 \/ 600 秒<\/span><\/p>/);
+  assert.match(html, /<small>ステップ上限 基準 4,000 \/ 今回 8,000<\/small>/);
 });

@@ -182,6 +182,55 @@ def test_listing_scope_owner_metadata_and_cache(client, remote):
     assert len(_episodes(client)) == 3
 
 
+def test_single_trial_lookup_lists_only_its_run_and_sees_new_trials(client, remote, monkeypatch):
+    assert _configure(client, remote).status_code == 200
+    seen = []
+    original = gmo.list_remote_episodes
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs.get("run_ids"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gmo, "list_remote_episodes", recording)
+    row = client.get("/api/gmo/episode", params={"run_id": "run_a", "episode_id": "ep_1"}).json()
+    assert (row["run_id"], row["episode_id"], row["status"], row["mine"]) == ("run_a", "ep_1", "ended", True)
+    assert seen == [("run_a",)]
+    _episode(remote["mine"], "run_a", "ep_new")
+    missing = client.get("/api/gmo/episode", params={"run_id": "run_a", "episode_id": "ep_new"})
+    assert missing.status_code == 404
+    fresh = client.get("/api/gmo/episode", params={"run_id": "run_a", "episode_id": "ep_new", "refresh": 1})
+    assert fresh.status_code == 200 and fresh.json()["episode_id"] == "ep_new"
+    assert set(seen) == {("run_a",)}
+    for params in ({"run_id": "../x", "episode_id": "ep_1"}, {"run_id": "run_a", "episode_id": "ep_1", "refresh": 2}):
+        assert client.get("/api/gmo/episode", params=params).status_code == 400
+
+
+def test_single_trial_lookup_does_not_wait_for_a_team_listing(client, remote):
+    assert _configure(client, remote).status_code == 200
+    service = client.app.state.gmo_service
+    with service._refresh_lock:
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(row=service.episode("run_a", "ep_1")))
+        thread.start()
+        thread.join(5)
+        assert not thread.is_alive(), "a single run lookup queued behind the team listing lock"
+    assert result["row"]["episode_id"] == "ep_1"
+
+
+def test_team_listing_gets_the_longer_background_limit(client, remote, monkeypatch):
+    assert _configure(client, remote).status_code == 200
+    seen = []
+    original = gmo.list_remote_episodes
+
+    def recording(*args, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gmo, "list_remote_episodes", recording)
+    _episodes(client)
+    assert seen and set(seen) == {gmo.TEAM_LISTING_TIMEOUT_S}
+
+
 def test_overlapping_scopes_choose_mine_once(client, remote):
     assert _configure(client, remote, team=[str(remote["mine"]), str(remote["team"])]).status_code == 200
     rows = _episodes(client)
@@ -432,7 +481,7 @@ def test_settings_change_discards_inflight_listing(tmp_path, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     calls, errors = [], []
 
-    def listing(runner, settings):
+    def listing(runner, settings, **kwargs):
         calls.append(settings)
         if settings == old:
             entered.set()
