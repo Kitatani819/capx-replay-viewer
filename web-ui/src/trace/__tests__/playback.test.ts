@@ -25,6 +25,24 @@ test('maps simulator frames, not wall-clock inference waits; preserves prompts s
  assert.equal(cueAt(m.prompts,.1)?.node.call?.id,'first','backward seek must restore earlier prompt');
 });
 
+test('frame mapping uses the first repeated-step anchor and interpolates at both boundaries', () => {
+ const r = new Rec(); r.episodeStart();
+ for (const [index, step] of [[0, 0], [10, 10], [20, 10], [29, 20]]) {
+   r.add('frame', {camera:'main',epoch:0,buffer_index:index,sim_step:step});
+ }
+ const map = playbackMap(buildEpisodeModel(r.events), 'video_combined.mp4', 1);
+ assert.equal(map.reason, null);
+ const seconds = map.timeForStep!;
+ assert.equal(seconds(-1), 0);
+ assert.equal(seconds(0), 0);
+ assert.equal(seconds(10), 10 / 30);
+ assert.equal(seconds(15), 24.5 / 30);
+ assert.equal(seconds(20), 29 / 30);
+ assert.equal(seconds(21), 1);
+ assert.equal(seconds(Infinity), 1);
+ assert.equal(seconds(NaN), 1);
+});
+
 test('preserves evaluations beyond the last frame and unanchored model calls as unsynced records', () => {
   const { r } = recording();
   const summary = r.add('evaluator_result', { scope: 'episode', reward: 1, task_completed: true });

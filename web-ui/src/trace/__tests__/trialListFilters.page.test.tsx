@@ -259,3 +259,17 @@ test('remote trial task and evaluation names are distinct from default and escap
   }
   page.unmount();
 });
+
+test('remote relative-date memo refreshes at the local day boundary with unchanged listing data', async () => {
+  setupClock();
+  const page = remotePage([remoteEpisode('today', 21, 'task-today'), remoteEpisode('tomorrow', 22, 'task-tomorrow')]);
+  await advance(100);
+  await change(page.output, '期間', 'today');
+  assert.equal(dataRows(page.output).length, 1);
+  assert.match(text(dataRows(page.output)[0]), /task-today/);
+  clock.now = new Date(2026, 10, 22, 0).getTime();
+  page.update(page.props);
+  assert.equal(dataRows(page.output).length, 1);
+  assert.match(text(dataRows(page.output)[0]), /task-tomorrow/);
+  page.unmount();
+});

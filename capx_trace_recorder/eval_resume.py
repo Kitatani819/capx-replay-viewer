@@ -152,9 +152,10 @@ def same_revision(previous: Any, current: Any) -> bool:
             and previous.get("commit") == current.get("commit"))
 
 
-def finalize_unobserved(trace_root: Path, run_id: str) -> int:
+def finalize_unobserved(trace_root: Path, run_id: str, *, details: dict[str, Any] | None = None) -> int:
     """Persist planned, unrun tuples as explicit failures without an episode_end."""
-    details = reader.run_detail(trace_root, run_id) or {}
+    if details is None:
+        details = reader.run_detail(trace_root, run_id) or {}
     observed = {trial_key(episode) for episode in details.get("episodes", [])}
     count = 0
     with reader.Dir.open_below(trace_root, [run_id]) as run:

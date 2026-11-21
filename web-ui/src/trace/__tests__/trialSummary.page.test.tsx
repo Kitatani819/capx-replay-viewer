@@ -61,7 +61,7 @@ test('paired baseline uses existing per-episode GMO import and then its last fra
   net.handler = req => {
     if (req.path === '/api/evals/current') return { json: detail };
     if (req.path === '/api/gmo/config') return { json: { enabled: true, configured: true } };
-    if (req.path === '/api/gmo/episodes') return { json: [{ run_id: 'baseline', episode_id: 'base_trial', size_bytes: 2048, conflict: false }] };
+    if (req.path === '/api/gmo/episode') return { json: { run_id: 'baseline', episode_id: 'base_trial', size_bytes: 2048, conflict: false } };
     if (req.path === '/api/gmo/fetch') return { json: { job_id: 'base_job' } };
     if (req.path === '/api/gmo/jobs') return { json: [{ job_id: 'base_job', run_id: 'baseline', episode_id: 'base_trial', state: complete ? 'done' : 'running' }] };
     return traceHandler(req);

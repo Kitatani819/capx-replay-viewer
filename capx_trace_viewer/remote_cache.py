@@ -15,6 +15,7 @@ import stat
 import tempfile
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,12 +41,14 @@ class _Entry:
 
 class RemoteListingCache:
     def __init__(self, cache_dir: Path, ttl: float = 30, *,
-                 validate: Callable[[Listing], Listing | None] | None = None) -> None:
+                 validate: Callable[[Listing], Listing | None] | None = None,
+                 max_entries: int = 128) -> None:
         self.cache_dir = cache_dir
         self.ttl = ttl
         self.validate = validate
+        self._max_entries = max(1, max_entries)
         self._condition = threading.Condition()
-        self._entries: dict[str, _Entry] = {}
+        self._entries: OrderedDict[str, _Entry] = OrderedDict()
         self._queue: queue.Queue[tuple[str, _Entry, Callable] | None] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._interactive_queue: queue.Queue[tuple[str, _Entry, Callable] | None] = queue.Queue()
@@ -124,9 +127,22 @@ class RemoteListingCache:
             if os.path.exists(name):
                 os.unlink(name)
 
+    def _prune(self, keep: str | None = None) -> None:
+        if len(self._entries) <= self._max_entries:
+            return
+        # Queued/running refreshes keep their identity so another request cannot
+        # launch a duplicate. Temporary active overflow drains as workers finish.
+        for key in list(self._entries):
+            if len(self._entries) <= self._max_entries:
+                break
+            if key != keep and not self._entries[key].pending:
+                del self._entries[key]
+
     def _entry(self, key: str) -> _Entry:
         if key not in self._entries:
             self._entries[key] = self._load(key)
+        self._entries.move_to_end(key)
+        self._prune(keep=key)
         return self._entries[key]
 
     def snapshot(self, key: str, fetch: Callable[[Listing | None], Listing], *,
@@ -160,15 +176,18 @@ class RemoteListingCache:
                     raise RemoteCacheError("GMO listing is unavailable")
             return entry.data if entry.data is not None else {"episodes": [], "evals": []}
 
+    @staticmethod
+    def _entry_status(entry: _Entry) -> dict[str, Any]:
+        return {
+            "fetched_at": (datetime.fromtimestamp(entry.fetched_at, timezone.utc).isoformat()
+                           if entry.fetched_at is not None else None),
+            "refreshing": entry.pending,
+            "error": entry.error,
+        }
+
     def status(self, key: str) -> dict[str, Any]:
         with self._condition:
-            entry = self._entry(key)
-            return {
-                "fetched_at": (datetime.fromtimestamp(entry.fetched_at, timezone.utc).isoformat()
-                               if entry.fetched_at is not None else None),
-                "refreshing": entry.pending,
-                "error": entry.error,
-            }
+            return self._entry_status(self._entry(key))
 
     def snapshot_with_status(self, key: str, fetch: Callable[[Listing | None], Listing], *,
                              refresh: bool = False, wait: bool = False,
@@ -179,8 +198,12 @@ class RemoteListingCache:
         its worker completes between the page's row and status reads.
         """
         with self._condition:
+            entry = self._entry(key)
             data = self.snapshot(key, fetch, refresh=refresh, wait=wait, interactive=interactive)
-            return data, self.status(key)
+            # An awaited entry may finish and be evicted while wait() releases
+            # the lock. Pair rows with that exact observation, including save
+            # errors that an optional persisted copy cannot recover.
+            return data, self._entry_status(entry)
 
     def invalidate(self, key: str | None = None) -> None:
         """Mark snapshots stale without discarding the last successful listing."""
@@ -223,6 +246,7 @@ class RemoteListingCache:
                 with self._condition:
                     entry.expires = time.monotonic() + self.ttl
                     entry.pending = False
+                    self._prune()
                     self._condition.notify_all()
                 work_queue.task_done()
 

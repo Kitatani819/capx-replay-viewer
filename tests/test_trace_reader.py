@@ -490,6 +490,17 @@ def test_is_unscoped_log_id(value: object, ok: bool) -> None:
     assert reader.is_unscoped_log_id(value) is ok
 
 
+def test_unscoped_summary_reads_process_instance_names(tmp_path: Path) -> None:
+    # The recorder names unscoped logs ``unscoped.<pid>.<instance>.jsonl`` so two
+    # processes with the same PID never share a file; the summary must still read.
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "unscoped.12345.0123456789abcdef.jsonl").write_text("")
+    summary = reader.unscoped_summary("run", run_dir, "unscoped.12345.0123456789abcdef", now=10**10)
+    assert summary["pid"] == 12345
+    assert summary["kind"] == "unscoped"
+
+
 def test_unscoped_summary(demo_root: Path) -> None:
     run_dir = demo_root / RUN_ID
     assert reader.unscoped_events_file(run_dir, "unscoped.412300") == (run_dir / "unscoped.412300.jsonl").resolve()

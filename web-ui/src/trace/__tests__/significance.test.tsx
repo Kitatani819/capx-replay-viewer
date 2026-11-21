@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { exactDiscordanceP, pairedResult, significanceLabel } from '../../evals/significance';
 import { PairedSignificance } from '../../evals/PairedSignificance';
+import { comparisonTable } from '../../evals/model';
 import type { EvalDetail, EvalTrial } from '../../evals/api';
 
 function trial(seed: number, verdict: EvalTrial['verdict'], extra: Partial<EvalTrial> = {}): EvalTrial {
@@ -69,4 +70,15 @@ test('the default null condition pairs only with the same default condition', ()
   assert.equal(result.paired, 1);
   assert.equal(result.improved, 1);
   assert.equal(result.unmatched, 2);
+});
+
+test('shared comparison grouping retains stricter statistical identity exclusions', () => {
+  const unsafeSeed = Number.MAX_SAFE_INTEGER + 1;
+  const current = [trial(1, 'success'), trial(1, 'failure', { attempt: 2 }),
+    trial(2, 'success', { task: null, condition: 'other' }), trial(3, 'success', { seed: null }),
+    trial(unsafeSeed, 'success'), trial(unsafeSeed, 'failure', { attempt: 2 }), trial(4, 'unknown')];
+  const baseline = [trial(1, 'success'), trial(unsafeSeed, 'failure'), trial(4, 'failure'), trial(5, 'success')];
+  const result = pairedResult(current, baseline, comparisonTable(current, baseline));
+  assert.deepEqual(result, { paired: 1, improved: 0, worsened: 1, bothSuccess: 0, bothFailure: 0,
+    unmatched: 1, unjudged: 1, unidentified: 5, omittedRetries: 1, p: 1 });
 });

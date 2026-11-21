@@ -187,7 +187,7 @@ def call_site(block: Any, frame: Any) -> dict[str, Any] | None:
                 break
         f = f.f_back
         n += 1
-    lines = block.code.splitlines() if isinstance(block.code, str) else []
+    lines = block.code_lines
     if module_frame is not None:
         line = module_frame.f_lineno
         site["line"] = line

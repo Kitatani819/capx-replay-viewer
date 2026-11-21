@@ -1,10 +1,11 @@
 import { siteHref } from '../navigation/site';
 import type { EvalDetail } from './api';
+import type { ComparisonTable } from './model';
 import { pairedResult, pText, significanceLabel } from './significance';
 
-export function PairedSignificance({ detail }: { detail: EvalDetail }) {
+export function PairedSignificance({ detail, table }: { detail: EvalDetail; table?: ComparisonTable }) {
   if (!detail.baseline) return null;
-  const result = pairedResult(detail.trials, detail.baseline_trials);
+  const result = pairedResult(detail.trials, detail.baseline_trials, table);
   const provisional = detail.eval?.status === 'running' || detail.baseline.status === 'running';
   const change = result.paired ? (result.improved - result.worsened) / result.paired * 100 : null;
   return <section className="eval-significance" aria-label="差とぶれの確認">

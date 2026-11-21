@@ -232,7 +232,6 @@ class StreamState:
         self.n_chunks = 0
         self.first_chunk: float | None = None
         self.content_parts: list[str] = []
-        self.reasoning_parts: list[str] = []
         self.done: dict[str, Any] | None = None
         self.t_start = time.monotonic()
 
@@ -244,9 +243,10 @@ class StreamState:
             self.n_chunks += 1
             if self.first_chunk is None:
                 self.first_chunk = time.monotonic()
-            text = chunk.get("content")
-            if isinstance(text, str):
-                (self.content_parts if ctype == "content_delta" else self.reasoning_parts).append(text)
+            if ctype == "content_delta":
+                text = chunk.get("content")
+                if isinstance(text, str):
+                    self.content_parts.append(text)
         elif ctype == "done":
             self.done = chunk
 

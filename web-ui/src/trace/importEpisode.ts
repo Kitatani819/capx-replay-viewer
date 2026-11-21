@@ -40,29 +40,22 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
           update(false, '手元にありません。GMO連携を有効にすると自動で取り込みます');
           return;
         }
-        let rows = await gmoApi.episodes('all', false, signal);
-        if (signal.aborted) return;
-        let matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
-        while (!matches.length) {
-          const status = await gmoApi.listingStatus(signal);
+        let row;
+        try { row = await gmoApi.episode(runId, episodeId, false, signal); }
+        catch (error) {
           if (signal.aborted) return;
-          if (status.error && !status.refreshing) throw new Error(status.error);
-          if (status.refreshing) {
-            update(true, `${remoteName()} の一覧を更新中…`);
-            await waitForPoll(signal);
+          if (error instanceof ApiError && error.status === 404) {
+            update(false, 'この試行は手元にも GMO にも見つかりません。'); return;
           }
-          // Completion can fall between the rows and status reads. Always
-          // check the completed cache before reporting a missing episode.
-          rows = await gmoApi.episodes('all', false, signal);
-          if (signal.aborted) return;
-          matches = rows.filter(row => row.run_id === runId && row.episode_id === episodeId);
-          if (!status.refreshing) break;
+          if (error instanceof ApiError && error.status === 409) {
+            update(false, `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません。`); return;
+          }
+          throw error;
         }
-        if (matches.length === 0) { update(false, 'この試行は手元にも GMO にも見つかりません。'); return; }
-        if (matches.length > 1 || matches.some(row => row.conflict)) {
+        if (signal.aborted) return;
+        if (row.conflict) {
           update(false, `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません。`); return;
         }
-        const row = matches[0];
         if (!row.size_approximate && row.size_bytes !== null && row.size_bytes >= 1024 ** 3) { update(false, '1 GiB の上限を超えるため、この試行は自動で取り込めません。'); return; }
         update(true, `GMOから取り込み中（${row.size_approximate ? '約 ' : ''}${fmtBytes(row.size_bytes)}）`);
         let jobId: string;

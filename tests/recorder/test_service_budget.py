@@ -13,10 +13,12 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from capx_trace_recorder import context as C
 from capx_trace_recorder import store as S
 from capx_trace_recorder.config import TraceConfig
+from capx_trace_recorder.hooks import services
 from capx_trace_recorder.hooks.services import make_service_wrapper
 from trace_reader import by_type, read_events
 
@@ -71,3 +73,55 @@ def test_outputs_within_the_budget_leave_the_trace_complete(work_dir):
     assert "array_budget_exceeded" not in end
     assert by_type(events, "trace_warning") == []
     assert doc["trace_complete"] is True
+
+
+def test_service_signature_cache_is_per_wrapper_and_keeps_binding_fallback(monkeypatch):
+    signatures = []
+
+    def capture(service, function, fn, args, kwargs, cache):
+        signatures.append(services._bind(fn, args, kwargs, cache))
+        return None
+
+    monkeypatch.setattr(services, "_service_before", capture)
+    real_signature = services.inspect.signature
+    inspected = []
+
+    def inspect_once(fn):
+        inspected.append(fn)
+        return real_signature(fn)
+
+    monkeypatch.setattr(services.inspect, "signature", inspect_once)
+
+    def first(image, /, *, text="cube"):
+        return image, text
+
+    def second(value, **options):
+        return value, options
+
+    one = make_service_wrapper(first, "sam3", "sam3_seg_fn")
+    two = make_service_wrapper(second, "sam3", "sam3_point_prompt_fn")
+    assert one(1, text="box") == (1, "box")
+    assert one(2) == (2, "cube")
+    assert two(3, label="red") == (3, {"label": "red"})
+    assert signatures == [{"image": 1, "text": "box"}, {"image": 2},
+                          {"value": 3, "options": {"label": "red"}}]
+    assert inspected == [first, second]
+    # A mismatched call still gets the same positional fallback and the
+    # original function's TypeError, rather than a stale binding from a prior call.
+    with pytest.raises(TypeError):
+        one(4, 5)
+    assert signatures[-1] == {"arg0": 4, "arg1": 5}
+    assert inspected == [first, second]
+
+
+def test_uninspectable_service_signature_and_trial_alarm_are_not_confused(monkeypatch):
+    cache = [services._SIGNATURE_UNSET]
+    monkeypatch.setattr(services.inspect, "signature", lambda _fn: (_ for _ in ()).throw(ValueError("unknown")))
+    assert services._bind(object(), (1,), {"text": "cube"}, cache) == {"arg0": 1, "text": "cube"}
+    # Inspect failure is cached on this wrapper, with the positional fallback.
+    monkeypatch.setattr(services.inspect, "signature", lambda _fn: (_ for _ in ()).throw(TimeoutError()))
+    assert services._bind(object(), (2,), {}, cache) == {"arg0": 2}
+    fresh = [services._SIGNATURE_UNSET]
+    with pytest.raises(TimeoutError):
+        services._bind(object(), (), {}, fresh)
+    assert fresh[0] is services._SIGNATURE_UNSET

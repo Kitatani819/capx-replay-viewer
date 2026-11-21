@@ -101,7 +101,7 @@ test('missing baseline uses the existing GMO importer and resumes the comparison
   let fetched = 0;
   net.handler = request => {
     if (request.path === '/api/gmo/config') return { json: { enabled: true, configured: true } };
-    if (request.path === '/api/gmo/episodes') return { json: [{ run_id: 'eval', episode_id: 'baseline', size_bytes: 500, conflict: false }] };
+    if (request.path === '/api/gmo/episode') return { json: { run_id: 'eval', episode_id: 'baseline', size_bytes: 500, conflict: false } };
     if (request.path === '/api/gmo/fetch') { fetched++; return { json: { job_id: 'import' } }; }
     if (request.path === '/api/gmo/jobs') {
       addEpisode(run, 'baseline', { task: 'cube', seed: 7, status: 'ended' }, events('baseline', false));

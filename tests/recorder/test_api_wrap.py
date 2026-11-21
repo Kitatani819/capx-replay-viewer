@@ -102,6 +102,20 @@ class ToyEnv:
     privileged = False
 
 
+def test_call_site_source_cache_is_scoped_to_each_generated_block():
+    globs = {}
+    frame = types.SimpleNamespace(f_globals=globs, f_code=types.SimpleNamespace(co_name="<module>"),
+                                  f_lineno=2, f_back=None)
+    first = C.CodeBlockCtx("block-1", None, "# first\r\napi.move()\r\n", None)
+    second = C.CodeBlockCtx("block-2", None, "# second\napi.stop()\n", None)
+    first.exec_globals = second.exec_globals = globs
+    assert API.call_site(first, frame)["source_line"] == "api.move()"
+    assert API.call_site(second, frame)["source_line"] == "api.stop()"
+    assert API.call_site(first, frame)["source_line"] == "api.move()"
+    frame.f_lineno = 100
+    assert API.call_site(first, frame)["source_line"] is None
+
+
 class ToyApi:
     """Minimal API with the ``functions()`` / ``combined_doc()`` contract."""
 

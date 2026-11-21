@@ -1,6 +1,6 @@
 import type { EndCauseCode, EndClassification, EndReason } from '../trace/types';
 import type { EvalTrial } from './api';
-import { baselineTrialFor } from './model';
+import { baselineTrialFor, indexBaselineTrials, type BaselineTrialIndex } from './model';
 
 export const FAILURE_REASONS = ['error', 'timeout', 'finish_unmet', 'submission_reset', 'regen_limit', 'single_shot', 'unknown'] as const;
 export type FailureReason = typeof FAILURE_REASONS[number];
@@ -147,7 +147,7 @@ export function causeGroupKey(trial: EvalTrial): string {
   return `${cause.code}:${JSON.stringify(cause.limit ?? null)}${observedRewrites ? `:used=${evidenceValue(cause.used)}` : ''}`;
 }
 export function causeCounts(current: EvalTrial[], baseline: EvalTrial[], category: BreakdownCategory) {
-  const rows = new Map<string, { key: string; label: string; current: number; baseline: number; tooltip: string; missingEvidence: string[] }>();
+  const rows = new Map<string, { key: string; label: string; current: number; baseline: number }>();
   for (const [side, trials] of [['current', current], ['baseline', baseline]] as const) {
     for (const trial of trials) {
       if (trialCategory(trial) !== category) continue;
@@ -159,10 +159,7 @@ export function causeCounts(current: EvalTrial[], baseline: EvalTrial[], categor
         label: ending && cause ? ending.reason === 'regen_limit' && cause.limit == null && cause.used != null
           ? causeHeadline(ending) : cause.code === 'trial_time_limit' ? causeHeadline(ending)
           : `${causeLabel(ending)}${cause.limit != null ? `（上限 ${evidenceValue(cause.limit)}）` : limitCause ? '（上限未記録）' : ''}` : '詳細な原因の記録なし',
-        current: 0, baseline: 0, tooltip: '', missingEvidence: [] };
-      const tooltip = ending ? causeTooltip(ending) : '';
-      if (tooltip && !row.tooltip.includes(tooltip)) row.tooltip += `${row.tooltip ? '\n\n' : ''}${tooltip}`;
-      row.missingEvidence = [...new Set([...row.missingEvidence, ...(cause?.missing_evidence ?? [])])];
+        current: 0, baseline: 0 };
       row[side]++;
       rows.set(key, row);
     }
@@ -192,9 +189,10 @@ export function baselineBreakdownTrials(baseline: EvalTrial[], category: Breakdo
   return baseline.filter(trial => trialCategory(trial) === category);
 }
 
-export function breakdownTrials(current: EvalTrial[], baseline: EvalTrial[], category: BreakdownCategory) {
+export function breakdownTrials(current: EvalTrial[], baseline: EvalTrial[] | BaselineTrialIndex, category: BreakdownCategory) {
+  const index = Array.isArray(baseline) ? indexBaselineTrials(baseline) : baseline;
   return current.filter(trial => trialCategory(trial) === category).map(trial => {
-    const paired = baselineTrialFor(trial, baseline) ?? undefined;
+    const paired = baselineTrialFor(trial, index) ?? undefined;
     return { trial, baseline: paired, tag: changeTag(paired, trial) };
   });
 }

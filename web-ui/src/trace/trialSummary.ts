@@ -124,8 +124,16 @@ export function trialSummaryFacts(model: EpisodeModel, summary: EpisodeSummary) 
   const durationSeconds = typeof duration === 'number' && duration >= 0 ? duration :
     typeof wallStart === 'number' && typeof wallEnd === 'number' && wallEnd >= wallStart ? wallEnd - wallStart : null;
   const flow: TurnFlow[] = [];
+  const eventsByTurn = new Map<number, TraceEvent[]>();
+  for (const event of ordered) {
+    const turn = eventTurn(model, event);
+    if (turn === null) continue;
+    const events = eventsByTurn.get(turn);
+    if (events) events.push(event);
+    else eventsByTurn.set(turn, [event]);
+  }
   for (const turn of turns) {
-    const events = ordered.filter(event => eventTurn(model, event) === turn);
+    const events = eventsByTurn.get(turn) ?? [];
     const labels: string[] = [];
     let anchor = events[0];
     for (const event of events) {

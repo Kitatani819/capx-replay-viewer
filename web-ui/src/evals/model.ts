@@ -16,9 +16,30 @@ function later(trial: EvalTrial, previous: EvalTrial): boolean {
   if (typeof trial.runner_invocation === 'number' && typeof previous.runner_invocation === 'number' && trial.runner_invocation !== previous.runner_invocation) return trial.runner_invocation > previous.runner_invocation;
   return (trial.attempt ?? 0) >= (previous.attempt ?? 0);
 }
+/** Latest attempts by task, seed and condition, built once for a comparison. */
+export type BaselineTrialIndex = ReadonlyMap<string, ReadonlyMap<number, ReadonlyMap<string | null, EvalTrial>>>;
+export function indexBaselineTrials(trials: EvalTrial[]): BaselineTrialIndex {
+  const tasks = new Map<string, Map<number, Map<string | null, EvalTrial>>>();
+  for (const trial of trials) {
+    if (!trial.task || typeof trial.seed !== 'number' || !Number.isInteger(trial.seed)) continue;
+    let seeds = tasks.get(trial.task);
+    if (!seeds) tasks.set(trial.task, seeds = new Map());
+    let conditions = seeds.get(trial.seed);
+    if (!conditions) seeds.set(trial.seed, conditions = new Map());
+    const previous = conditions.get(trial.condition);
+    if (!previous || later(trial, previous)) conditions.set(trial.condition, trial);
+  }
+  return tasks;
+}
 /** Pair a known task/seed, preferring its condition and refusing ambiguous alternatives. */
-export function baselineTrialFor(trial: Pick<EvalTrial, 'task' | 'seed' | 'condition'>, baselineTrials: EvalTrial[]): EvalTrial | null {
+export function baselineTrialFor(trial: Pick<EvalTrial, 'task' | 'seed' | 'condition'>, baselineTrials: EvalTrial[] | BaselineTrialIndex): EvalTrial | null {
   if (!trial.task || typeof trial.seed !== 'number' || !Number.isInteger(trial.seed)) return null;
+  if (!Array.isArray(baselineTrials)) {
+    const conditions = baselineTrials.get(trial.task)?.get(trial.seed);
+    if (!conditions) return null;
+    return (trial.condition !== null ? conditions.get(trial.condition) : undefined)
+      ?? (conditions.size === 1 ? conditions.values().next().value : null) ?? null;
+  }
   const candidates = baselineTrials.filter(candidate => candidate.task === trial.task && candidate.seed === trial.seed);
   const exact = trial.condition !== null ? candidates.filter(candidate => candidate.condition === trial.condition) : [];
   const matching = exact.length ? exact : new Set(candidates.map(candidate => candidate.condition)).size === 1 ? candidates : [];
@@ -53,6 +74,7 @@ export function comparisonTable(current: EvalTrial[], baseline: EvalTrial[]) {
   const omittedRetries = current.length + baseline.length - currentTrials.length - baselineTrials.length;
   return { rows: sorted, seeds, showConditions, regressions, currentTrials, baselineTrials, omittedRetries };
 }
+export type ComparisonTable = ReturnType<typeof comparisonTable>;
 export function isRegression(row: ComparisonRow, seed: number | null): boolean {
   return row.baseline.get(seed)?.trial.verdict === 'success' && row.current.get(seed)?.trial.verdict === 'failure';
 }

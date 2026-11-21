@@ -92,8 +92,8 @@ export function VideoPlayback({model, videos, camera, onCameraChange, onSelect, 
   // A paused player must never invent a selected row from its initial time=0.
   // The same parent selection drives both the row and the right-hand inspector.
   const playbackCurrent=cueAt(cues,time);
-  const visible=cues.filter(c=>turn===null || turnOf(c.node)===turn);
-  const groups=groupCues(visible);
+  const visible=useMemo(()=>cues.filter(c=>turn===null || turnOf(c.node)===turn),[cues,turn]);
+  const groups=useMemo(()=>groupCues(visible),[visible]);
   const showProcessRows = !map.pending || mediaError;
   const visibleWithoutTime = !apiMode && showProcessRows
     ? withoutTime.filter(node => turn === null || turnOf(node) === turn) : [];

@@ -269,7 +269,8 @@ def _safe_str(exc: BaseException) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _media_source(ctx: Any, media: Media, pix: str | None, used: set[str]) -> dict[str, Any]:
+def _media_source(ctx: Any, media: Media, pix: str | None, used: set[str],
+                  content_sha256: str | None = None) -> dict[str, Any]:
     """Where a sent image came from, by exact hash match only (section 6.2).
 
     Two harness renders of an unchanged scene have the same pixels, so one hash
@@ -281,7 +282,8 @@ def _media_source(ctx: Any, media: Media, pix: str | None, used: set[str]) -> di
     """
     wep = ctx.wep
     if media.kind == "video":
-        entry = wep.video_encodes.get(hashlib.sha256(media.data).hexdigest())
+        entry = wep.video_encodes.get(content_sha256 if content_sha256 is not None
+                                      else hashlib.sha256(media.data).hexdigest())
         if entry is not None:
             return dict(entry)
         if wep.dropped_kinds.get("video_encode"):
@@ -329,22 +331,21 @@ def _build_request(ctx: Any, *, body: Any, segments: tuple, event_id: str) -> No
     images: list[dict[str, Any]] = []
     summary_images: list[dict[str, Any]] = []
     n_images = n_videos = 0
-    decoded: list[tuple[Any, Any, Any, str | None]] = []
+    decoded: list[tuple[Any, Any, Any, str | None, str]] = []
     for m in media:
         width, height, fmt = image_dimensions(m.data) if m.kind == "image" else (None, None, None)
         pix = pixel_sha256(m.data, width, height, fmt) if m.kind == "image" else None
-        decoded.append((width, height, fmt, pix))
+        decoded.append((width, height, fmt, pix, hashlib.sha256(m.data).hexdigest()))
     # sources are assigned from the last media part to the first (see _media_source)
     used: set[str] = set()
     sources: list[dict[str, Any]] = [{}] * len(media)
     for i in range(len(media) - 1, -1, -1):
-        sources[i] = _media_source(ctx, media[i], decoded[i][3], used)
-    for m, (width, height, _fmt, pix), source in zip(media, decoded, sources):
+        sources[i] = _media_source(ctx, media[i], decoded[i][3], used, decoded[i][4])
+    for m, (width, height, _fmt, pix, sha), source in zip(media, decoded, sources):
         ext = ext_for_mime(m.mime)
         label = "model_input" if m.kind in ("image", "video") else "payload"
         art = ctx.write_asset(m.data, ext, label=label, kind=m.kind, mime=m.mime, binary=True,
-                              extra={"json_path": m.path, "order": m.order})
-        sha = hashlib.sha256(m.data).hexdigest()
+                              extra={"json_path": m.path, "order": m.order}, content_sha256=sha)
         fill_placeholder(m, art["path"] if art["written"] else None, sha, art["written"],
                          art.get("reason"))
         entry = {"path": m.path, "order": m.order, "kind": m.kind, "asset": art["path"],
