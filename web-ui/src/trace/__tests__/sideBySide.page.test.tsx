@@ -59,10 +59,10 @@ test('the comparison route reads both requested episodes and falls back to run b
   assert.equal(props.current.ref.episodeId, 'current');
   assert.equal(props.current.model.events.length, 4);
   const crumbs = propsOf<Parameters<typeof Breadcrumb>[0]>(page.output, Breadcrumb);
-  assert.deepEqual(crumbs.items.map(item => item.label), ['試行を選ぶ', 'eval', 'cube · seed 7', '基準と並べて比べる']);
+  assert.deepEqual(crumbs.items.map(item => item.label), ['評価一覧', '試行を選ぶ', 'eval', 'cube · seed 7', '基準と並べて比べる']);
   const breadcrumb = mount(Breadcrumb, crumbs);
   assert.equal(findAll(breadcrumb.output, 'nav')[0].props['aria-label'], '現在の場所');
-  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/traces?site=b300', '/traces?run=eval&site=b300', '/traces?run=eval&episode=current&site=b300']);
+  assert.deepEqual(findAll(breadcrumb.output, 'a').map(link => link.props.href), ['/evals?site=b300', '/traces?site=b300', '/traces?run=eval&site=b300', '/traces?run=eval&episode=current&site=b300']);
   const currentPage = findAll(breadcrumb.output, 'span').find(item => item.props['aria-current'] === 'page');
   assert.equal(text(currentPage), '基準と並べて比べる');
   assert.doesNotMatch(text(page.output), /← 試行の要約へ戻る|評価の一覧/);

@@ -25,6 +25,7 @@ test('simple view hides diagnostics; details switch preserves episode and is rev
   const evalLinks=findAll(page.output,'a').filter(e=>e.props.href==='/evals');
   assert.equal(evalLinks.length,0);
   assert.deepEqual(propsOf<Parameters<typeof Breadcrumb>[0]>(page.output,Breadcrumb).items,[
+    {label:'評価一覧',href:'/evals'},
     {label:'試行を選ぶ',href:'/traces'},
     {label:'r1',href:'/traces?run=r1'},
     {label:'cube_lift · seed 1'},

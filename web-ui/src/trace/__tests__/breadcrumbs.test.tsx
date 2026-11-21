@@ -57,11 +57,13 @@ test('side-by-side breadcrumb runs through the current evaluation and a linked c
 
 test('trial without an evaluation links through the picker and run, including encoded run ids', () => {
   const items = trialBreadcrumbs({ runId: 'run / old', episodeId: 'trial', evaluation: null, task: 'cube', seed: 0 });
-  assert.deepEqual(items[0], { label: '試行を選ぶ', href: '/traces' });
-  assert.equal(items[1].label, 'run / old');
-  assert.equal(new URL(items[1].href!, 'http://localhost').searchParams.get('run'), 'run / old');
-  assert.deepEqual(items[2], { label: 'cube · seed 0' });
-  assert.ok(!items.some(item => item.href?.startsWith('/evals')));
+  assert.deepEqual(items[0], { label: '評価一覧', href: '/evals' });
+  assert.deepEqual(items[1], { label: '試行を選ぶ', href: '/traces' });
+  assert.equal(items[2].label, 'run / old');
+  assert.equal(new URL(items[2].href!, 'http://localhost').searchParams.get('run'), 'run / old');
+  assert.deepEqual(items[3], { label: 'cube · seed 0' });
+  // Only the root links to the evaluation list; no evaluation is invented for the run.
+  assert.equal(items.filter(item => item.href?.startsWith('/evals')).length, 1);
 });
 
 test('a trial whose run looks like an evaluation ID shows the evaluation trail while the record loads', () => {
@@ -72,5 +74,5 @@ test('a trial whose run looks like an evaluation ID shows the evaluation trail w
     { label: 'cube · seed 7' },
   ]);
   const other = trialBreadcrumbs({ runId: 'my-run', episodeId: 'ep', evaluation: undefined, task: 'cube', seed: 7 });
-  assert.equal(other[0].label, '試行を選ぶ');
+  assert.deepEqual(other.slice(0, 2).map(item => item.label), ['評価一覧', '試行を選ぶ']);
 });
