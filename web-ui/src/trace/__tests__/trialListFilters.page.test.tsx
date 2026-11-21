@@ -68,6 +68,7 @@ function remoteEpisode(id: string, day: number, task = 'task-a', run = 'run-a', 
 }
 function remotePage(episodes: GmoEpisodeSummary[]) {
   net.handler = req => {
+    if (req.path.endsWith('/names')) return { json: {} };
     if (req.path.endsWith('/episodes')) return { json: episodes };
     if (req.path.endsWith('/jobs')) return { json: [] };
     if (req.path.endsWith('/listing-status')) return { json: { fetched_at: null, refreshing: false, error: null } };

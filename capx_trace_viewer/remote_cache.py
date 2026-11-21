@@ -21,7 +21,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-Listing = dict[str, list[dict[str, Any]]]
+from capx_trace_recorder.names import validate_names
+
+Listing = dict[str, Any]
 MAX_CACHE_BYTES = 64 * 1024 * 1024
 
 
@@ -59,11 +61,14 @@ class RemoteListingCache:
         return self.cache_dir / (hashlib.sha256(key.encode("utf-8")).hexdigest() + ".json")
 
     def _check_listing(self, value: Any, *, persisted: bool = False) -> Listing:
-        if (not isinstance(value, dict) or set(value) != {"episodes", "evals"}
+        if (not isinstance(value, dict) or not {"episodes", "evals"} <= set(value)
+                or set(value) - {"episodes", "evals", "names"}
                 or any(not isinstance(value[name], list)
                        or any(not isinstance(row, dict) for row in value[name])
                        for name in ("episodes", "evals"))):
             raise ValueError("Invalid cached remote listing")
+        if "names" in value:
+            value = {**value, "names": validate_names(value["names"])}
         if persisted and self.validate is not None:
             try:
                 normalized = self.validate(value)

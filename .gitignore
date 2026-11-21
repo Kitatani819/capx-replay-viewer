@@ -6,6 +6,7 @@ web-ui/node_modules/
 web-ui/dist/
 *.egg-info/
 .env
+names.json
 outputs/
 build/
 dist/

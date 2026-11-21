@@ -1,4 +1,5 @@
 import { remoteName } from '../../navigation/site';
+import { runnerLabel, runnerName } from '../../runnerNames';
 /** GMO discovery and imports inside the trial picker. Transfers stay on the server. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dateHeading, dateKey, listOptionValue, matchesPeriod, type DateFilter, type Period } from '../../listFilters';
@@ -110,7 +111,8 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     try {
       const rows = await gmoApi.episodes('all', refresh, signal);
       const status = await gmoApi.listingStatus(signal);
-      return { rows, status, recheckingJobs };
+      const names = await gmoApi.names(signal);
+      return { rows, status, names, recheckingJobs };
     } catch (error) { return handleError(error, signal); }
   } : null, [config?.settings]);
   const remoteStatus = listing.data?.status;
@@ -214,7 +216,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
       (taskFilter === 'all' || listOptionValue(row.task ?? '') === taskFilter) &&
       (runFilter === 'all' || listOptionValue(row.run_id) === runFilter) &&
       matchesPeriod(row.start_wall_time, dateFilter, filterNow) &&
-      (!q || [row.task, row.seed, row.owner, row.mine ? '自分' : ''].some(value => String(value ?? '').toLowerCase().includes(q))),
+      (!q || [row.task, row.seed, row.owner, row.owner && runnerName(row.owner, listing.data?.names), row.mine ? '自分' : ''].some(value => String(value ?? '').toLowerCase().includes(q))),
     // Newest first, so the first page and its date headers start from today and paging goes back in time.
     ).sort((left, right) => (right.start_wall_time ?? -Infinity) - (left.start_wall_time ?? -Infinity));
   }, [listing.data, scope, resultFilter, query, taskFilter, runFilter, dateFilter, filterNow]);
@@ -425,7 +427,7 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
                 </td>
                 <td className="py-2 px-3"><TaskOutcomeBadge verdict={episodeVerdict(row)} /></td>
                 <td className="py-2 px-3"><div>{row.task ?? '—'} · seed {row.seed ?? '—'}</div><div className="text-[11px] text-text-tertiary font-mono break-all">{row.run_id} / {row.episode_id}</div></td>
-                <td className="py-2 px-3">{row.mine ? '自分' : row.owner || '—'}</td>
+                <td className="py-2 px-3">{row.mine ? '自分' : runnerLabel(row.owner, listing.data?.names)}</td>
                 <td className="py-2 px-3 whitespace-nowrap">{fmtWall(row.start_wall_time)}</td>
                 <td className="py-2 px-3 whitespace-nowrap">{row.size_approximate ? '約 ' : ''}{fmtBytes(row.size_bytes)}</td>
                 <td className="py-2 px-3"><div className="flex flex-wrap gap-1 whitespace-nowrap"><SmallButton disabled={!!reason || !!busy} title={reason ?? undefined} onClick={() => row.local_state === 'local' ? onPick(row.run_id, row.episode_id) : void fetchEpisode(row.run_id, row.episode_id)}>{busy ? '取り込み中…' : row.local_state === 'local' ? '開く' : row.local_state === 'stale' ? '更新を取り込む' : '取り込む'}</SmallButton></div>

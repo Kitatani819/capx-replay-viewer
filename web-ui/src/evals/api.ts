@@ -1,4 +1,5 @@
 import { apiRoot } from '../navigation/site';
+import type { RunnerNames } from '../runnerNames';
 /** Evaluation records are validated by /api/evals before being displayed. */
 import { getJson, type RemoteListingStatus } from '../trace/api';
 import type { TaskVerdict } from '../trace/outcome';
@@ -95,6 +96,7 @@ export interface EvalTrial {
 }
 export interface EvalDifference { field: string; baseline: unknown; current: unknown }
 export interface EvalDetail extends EvalListEntry {
+  names?: RunnerNames;
   baseline: EvalRecord | null;
   baseline_evaluation_failure?: EvaluationFailure | null;
   baseline_error: string | null;
@@ -106,7 +108,7 @@ export interface EvalDetail extends EvalListEntry {
   loading_remote?: boolean;
   repeat_references?: { side: 'current' | 'baseline'; eval: EvalRecord; trials: EvalTrial[] }[];
 }
-export interface EvalList { evals: EvalListEntry[]; error?: string | null; remote_status?: RemoteListingStatus | null }
+export interface EvalList { names?: RunnerNames; evals: EvalListEntry[]; error?: string | null; remote_status?: RemoteListingStatus | null }
 export const evalApi = {
   list: (signal?: AbortSignal, refresh = false): Promise<EvalList> => getJson(`${apiRoot()}/evals${refresh ? '?refresh=1' : ''}`, signal),
   detail: (id: string, signal?: AbortSignal, refresh = false): Promise<EvalDetail> => getJson(`${apiRoot()}/evals/${encodeURIComponent(id)}${refresh ? '?refresh=1' : ''}`, signal),

@@ -259,3 +259,27 @@ test('baseline and current conditions are labelled separately when they differ',
   assert.match(html, /<p>基準の評価条件：<span>記録なし<\/span><\/p><p>今回の評価条件：<span>評価全体の時間 120 \/ 600 秒<\/span><\/p>/);
   assert.match(html, /<small>ステップ上限 基準 4,000 \/ 今回 8,000<\/small>/);
 });
+
+
+test('evaluation names replace account IDs with title tooltips and fall back to IDs', () => {
+  const d = detail();
+  d.eval!.by = 'user_00099_test';
+  const names = { user_00099_test: '山田太郎' };
+  const named = renderToStaticMarkup(<EvalListTable entries={[d]} names={names} />);
+  assert.match(named, /title="user_00099_test">山田太郎<\/span>/);
+  assert.doesNotMatch(named, />user_00099_test</);
+  const fallback = renderToStaticMarkup(<EvalListTable entries={[d]} />);
+  assert.match(fallback, />user_00099_test</);
+  const comparison = renderToStaticMarkup(<EvalComparison detail={{ ...d, names }} />);
+  assert.match(comparison, /title="user_00099_test">山田太郎<\/span>/);
+});
+
+test('evaluation names are escaped as text and inherited object properties are not names', () => {
+  const d = detail();
+  d.eval!.by = 'user_00099_test';
+  const html = renderToStaticMarkup(<EvalListTable entries={[d]} names={{ user_00099_test: '<img src=x onerror="test">' }} />);
+  assert.match(html, /&lt;img src=x onerror=&quot;test&quot;&gt;/);
+  assert.doesNotMatch(html, /<img/);
+  d.eval!.by = 'toString';
+  assert.match(renderToStaticMarkup(<EvalListTable entries={[d]} names={{}} />), />toString</);
+});

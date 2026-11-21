@@ -1,3 +1,4 @@
+import { runnerName, type RunnerNames } from '../runnerNames';
 import { listOptionValue, matchesPeriod, validDate, type DateFilter, type Period } from '../listFilters';
 import type { EvalListEntry, EvalRecord } from './api';
 
@@ -68,7 +69,7 @@ export function evaluationStatus(entry: EvalListEntry): EvalFilters['status'] {
   if (entry.eval?.status === 'running') return 'running';
   return entry.eval?.status === 'completed' ? 'completed' : 'stopped';
 }
-export function filterEvaluations(entries: EvalListEntry[], filters: EvalFilters, now: number): EvalListEntry[] {
+export function filterEvaluations(entries: EvalListEntry[], filters: EvalFilters, now: number, names?: RunnerNames): EvalListEntry[] {
   const q = filters.q.trim().toLocaleLowerCase();
   return entries.filter(entry => {
     const record = entry.eval;
@@ -78,6 +79,6 @@ export function filterEvaluations(entries: EvalListEntry[], filters: EvalFilters
     if (filters.kind !== 'all' && (!record || isRouteB(record) !== (filters.kind === 'b'))) return false;
     if (filters.task !== 'all' && !evaluationTasks(entry).some(task => listOptionValue(task) === filters.task)) return false;
     if (filters.status !== 'all' && (!record || evaluationStatus(entry) !== filters.status)) return false;
-    return !q || [record?.changed, record?.eval_set, entry.eval_id, record?.by].some(value => value?.toLocaleLowerCase().includes(q));
+    return !q || [record?.changed, record?.eval_set, entry.eval_id, record?.by, record?.by && runnerName(record.by, names)].some(value => value?.toLocaleLowerCase().includes(q));
   });
 }

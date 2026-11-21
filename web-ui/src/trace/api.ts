@@ -1,3 +1,4 @@
+import type { RunnerNames } from '../runnerNames';
 /**
  * HTTP client for the trace API (docs/trace-format.md section 9.2).
  *
@@ -340,6 +341,10 @@ export const gmoApi = {
   episode(runId: string, episodeId: string, refresh = false, signal?: AbortSignal): Promise<GmoEpisodeSummary> {
     const params = new URLSearchParams({ run_id: runId, episode_id: episodeId, refresh: refresh ? '1' : '0' });
     return gmoJson(`/episode?${params.toString()}`, signal);
+  },
+
+  names(signal?: AbortSignal): Promise<RunnerNames> {
+    return gmoJson('/names', signal);
   },
 
   listingStatus(signal?: AbortSignal): Promise<RemoteListingStatus> {

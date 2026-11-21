@@ -33,7 +33,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
   resetBrowser();
   const state = { config: config(configured), disabled: false, configError: '', configStatus: 502, configLatency: 5,
     legacyRuns: [] as { run_id: string; root_index: number; n_trials: number }[], legacyError: false, legacyLatency: 5, episodesLatency: 0,
-    rows, jobs: [] as GmoJob[],
+    rows, names: {} as Record<string, string>, jobs: [] as GmoJob[],
     listingStatus: { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null } as RemoteListingStatus,
     auto: { enabled: configured, paused: false, interval_s: 120, running: false, last_run_at: null,
       next_run_at: new Date(Date.now() + 120_000).toISOString(), last_error: null, queued_in_last_run: 0, skipped_large: [] } as GmoAutoStatus,
@@ -71,6 +71,7 @@ function setup(rows: GmoEpisodeSummary[] = [], configured = true) {
       return { json: state.config, latency: state.configLatency };
     }
     if (req.path === '/api/gmo/check') return { json: state.check };
+    if (req.path === '/api/gmo/names') return { json: state.names };
     if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/episodes') return { json: state.rows, latency: state.episodesLatency };
     if (req.path === '/api/gmo/jobs') return { json: state.jobs };
@@ -946,4 +947,31 @@ test('GMO can repair an unreadable configuration by saving editable connection s
   assert.match(text(page.output), /接続できました：自分 2 件、チーム 3 件/);
   assert.doesNotMatch(text(page.output), /Invalid JSON in GMO settings/);
   assertGmoHeaders(state.sent); page.unmount();
+});
+
+
+test('GMO runner names have ID titles, fall back to IDs and keep own trials labelled 自分', async () => {
+  const state = setup([
+    episode('named', { owner: 'user_00099_test', mine: false }),
+    episode('fallback', { owner: 'user_00098_test', mine: false }),
+    episode('own', { owner: 'user_00097_test', mine: true }),
+  ]);
+  state.names = { user_00099_test: '山田太郎', user_00097_test: '山田太郎' };
+  const page = mountGmo(state.config); await advance(100);
+  const runner = (task: string) => findAll(rowFor(page.output, task), 'td')[3];
+  assert.equal(text(runner('task_named')), '山田太郎');
+  const name = findAll(runner('task_named'), 'span')[0];
+  assert.equal(name.props.title, 'user_00099_test');
+  assert.equal(text(runner('task_fallback')), 'user_00098_test');
+  assert.equal(text(runner('task_own')), '自分');
+  for (const [q, expected] of [['山田', ['山田太郎', '自分']], ['USER_00099_TEST', ['山田太郎']], ['user_00097_test', ['自分']]] as const) {
+    change(page.output, 'GMO の試行を検索', q); await advance(0);
+    assert.deepEqual(rowsOf(page.output).map(row => text(findAll(row, 'td')[3])), [...expected]);
+  }
+  change(page.output, 'GMO の試行を検索', 'user_00098_test'); await advance(0);
+  assert.deepEqual(rowsOf(page.output).map(row => text(findAll(row, 'td')[3])), ['user_00098_test']);
+  change(page.output, 'GMO の試行を検索', '自分'); await advance(0);
+  assert.deepEqual(rowsOf(page.output).map(row => text(findAll(row, 'td')[3])), ['自分']);
+  assertGmoHeaders(state.sent);
+  page.unmount();
 });

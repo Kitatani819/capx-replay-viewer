@@ -10,6 +10,7 @@ from typing import Any, Sequence
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from capx_trace_recorder.evaluation_failure import evaluation_failure, preserve_evaluation_failure
+from capx_trace_recorder.names import read_names, validate_names
 from capx_trace_viewer import evals, reader, repeat_reference
 from capx_trace_viewer.trace_api import (
     client_is_local, host_is_loopback, json_response, origin_is_loopback,
@@ -44,8 +45,8 @@ class EvalService:
         statuses.extend(self.gmo_service.listing_status("run", (run_id,)) for run_id in run_ids)
         return self._merge_status(statuses)
 
-    def _remote(self, *, refresh: bool = False) -> tuple[dict[str, list[dict[str, Any]]], str | None, dict[str, Any] | None]:
-        empty: dict[str, list[dict[str, Any]]] = {"episodes": [], "evals": []}
+    def _remote(self, *, refresh: bool = False) -> tuple[dict[str, Any], str | None, dict[str, Any] | None]:
+        empty: dict[str, Any] = {"episodes": [], "evals": [], "names": {}}
         if self.gmo_service is None:
             return empty, None, None
         from capx_trace_viewer import gmo
@@ -65,6 +66,7 @@ class EvalService:
                 listing = self.gmo_service.remote_listing()
                 status = self._status()
             remote = {"evals": list(listing["evals"]), "episodes": list(listing["episodes"]),
+                      "names": validate_names(listing.get("names")),
                       "_statuses": [status] if status else []}
             return remote, status["error"] if status else None, status
         except (gmo.FetchError, OSError):
@@ -240,6 +242,10 @@ class EvalService:
     def _public(entry: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in entry.items() if not key.startswith("_")}
 
+    def _names(self, remote: dict[str, Any]) -> dict[str, str]:
+        # The site's shared mapping is authoritative for imported records too.
+        return {**read_names(self.trace_root), **validate_names(remote.get("names"))}
+
     def listing(self, *, refresh: bool = False) -> dict[str, Any]:
         entries, remote, error, status = self._snapshot(refresh=refresh)
         for entry in entries.values():
@@ -253,7 +259,7 @@ class EvalService:
             if entry["eval"] else entry["_mtime"], entry["eval_id"],
         ), reverse=True)
         return {"evals": [self._public(entry) for entry in ordered], "error": error,
-                "remote_status": status}
+                "remote_status": status, "names": self._names(remote)}
 
     def _trials(self, run_id: str, remote: dict[str, Any], *, conflict: bool = False,
                 evaluation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -321,7 +327,7 @@ class EvalService:
                         "display_status": None, "summary": None, "baseline_summary": None,
                         "baseline": None, "baseline_error": None, "trials": [], "baseline_trials": [],
                         "differences": [], "repeat_references": [], "remote_error": error,
-                        "remote_status": status, "loading_remote": True}
+                        "remote_status": status, "loading_remote": True, "names": self._names(remote)}
             return None
         record = entry["eval"]
         baseline_id = record["baseline_eval_id"] if record else None
@@ -350,6 +356,7 @@ class EvalService:
             "remote_error": (status["error"] if status else None) or error,
             "remote_status": status,
             "repeat_references": references,
+            "names": self._names(remote),
         }
 
     def code_changes(self, eval_id: str) -> dict[str, Any] | None:

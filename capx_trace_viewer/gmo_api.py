@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from capx_trace_recorder.names import read_names, validate_names
 from capx_trace_viewer import gmo, reader
 from capx_trace_viewer.remote_cache import RemoteCacheError, RemoteListingCache
 from capx_trace_viewer.trace_api import (
@@ -47,7 +48,7 @@ class GmoService:
         self._lock = threading.Lock()
         self._refresh_lock = threading.Lock()
         self._transfer_lock = threading.Lock()
-        self._cache: dict[str, list[dict[str, Any]]] | None = None
+        self._cache: dict[str, Any] | None = None
         self._cache_settings: gmo.GmoSettings | None = None
         self._cache_until = 0.0
         # Config files normally live side by side. Namespace by the full path,
@@ -508,13 +509,22 @@ class GmoService:
     def remote_rows(self, *, refresh: bool = False, wait: bool = True) -> list[dict[str, Any]]:
         return self.remote_listing(refresh=refresh, wait=wait)["episodes"]
 
+    def names(self) -> dict[str, str]:
+        names = read_names(self.dest)
+        try:
+            # Reuse the picker's nonblocking discovery cache and refresh cycle.
+            names.update(validate_names(self.remote_listing(wait=False).get("names")))
+        except (gmo.FetchError, OSError):
+            pass
+        return names
+
     def remote_evals(self, *, refresh: bool = False) -> list[dict[str, Any]]:
         return self.remote_eval_listing(refresh=refresh, wait=True)["evals"]
 
-    def remote_listing(self, *, refresh: bool = False, wait: bool = True) -> dict[str, list[dict[str, Any]]]:
+    def remote_listing(self, *, refresh: bool = False, wait: bool = True) -> dict[str, Any]:
         return self._remote_snapshot(refresh=refresh, wait=wait)[0]
 
-    def remote_eval_listing(self, *, refresh: bool = False, wait: bool = False) -> dict[str, list[dict[str, Any]]]:
+    def remote_eval_listing(self, *, refresh: bool = False, wait: bool = False) -> dict[str, Any]:
         return self._remote_snapshot(kind="evals", refresh=refresh, wait=wait)[0]
 
     def remote_eval_snapshot(self, *, refresh: bool = False):
@@ -522,7 +532,7 @@ class GmoService:
         listing = self._remote_snapshot(kind="evals", refresh=refresh, wait=False, status_out=status)[0]
         return listing, status
 
-    def eval_episode_listing(self, run_id: str, *, refresh: bool = False) -> dict[str, list[dict[str, Any]]]:
+    def eval_episode_listing(self, run_id: str, *, refresh: bool = False) -> dict[str, Any]:
         if not reader.is_valid_id(run_id):
             raise gmo.FetchError("Invalid run ID")
         return self._remote_snapshot(kind="run", run_ids=(run_id,), refresh=refresh, wait=False)[0]
@@ -553,7 +563,7 @@ class GmoService:
     def _remote_snapshot(self, *, refresh: bool = False, wait: bool = True,
                          kind: str = "episodes", run_ids: tuple[str, ...] = (),
                          status_out: dict[str, Any] | None = None
-                         ) -> tuple[dict[str, list[dict[str, Any]]], gmo.GmoSettings, int]:
+                         ) -> tuple[dict[str, Any], gmo.GmoSettings, int]:
         with self._lock:
             if self._closed:
                 raise gmo.FetchError("GMO service is shutting down")
@@ -567,7 +577,8 @@ class GmoService:
                 if (not refresh and self._cache is not None and self._cache_settings == settings
                         and time.monotonic() < self._cache_until):
                     rows = {"episodes": [row for row in self._cache["episodes"] if row["run_id"] in run_ids],
-                            "evals": [row for row in self._cache["evals"] if row["run_id"] in run_ids]}
+                            "evals": [row for row in self._cache["evals"] if row["run_id"] in run_ids],
+                            "names": self._cache.get("names", {})}
                     if rows["episodes"]:
                         return rows, settings, generation
 
@@ -876,6 +887,10 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False,
             return json_response(service.episodes(scope, refresh=bool(refresh), wait=False))
         except (gmo.FetchError, OSError) as exc:
             raise HTTPException(502, str(exc)[-300:]) from exc
+
+    @router.get("/names")
+    def names():
+        return json_response(service.names())
 
     @router.get("/episode")
     def episode(run_id: str, episode_id: str, refresh: int = 0):

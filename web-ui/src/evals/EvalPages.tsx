@@ -1,4 +1,5 @@
 import { remoteName } from '../navigation/site';
+import { runnerLabel, runnerName, type RunnerNames } from '../runnerNames';
 import { siteHref } from '../navigation/site';
 import { SiteTabs } from '../navigation/SiteTabs';
 /** Calm, read-only evaluation list and baseline comparison. */
@@ -76,7 +77,7 @@ function RouteBNotes({ record }: { record: EvalRecord }) {
   return <span className="eval-route-notes"><span>提出の形の評価（経路 B）・成否は審判の判定</span>
     {suite === 'behavior' && <span>シミュレーターは RTX、モデルと記録は B300</span>}</span>;
 }
-export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
+export function EvalListTable({ entries, names }: { entries: EvalListEntry[]; names?: RunnerNames }) {
   const ordered = [...entries].sort((left, right) => {
     const started = (entry: EvalListEntry) => {
       const time = Date.parse(entry.eval?.started_at ?? '');
@@ -99,7 +100,7 @@ export function EvalListTable({ entries }: { entries: EvalListEntry[] }) {
       if (!record) return <tr key={`${entry.eval_id}-${index}`}><td colSpan={6} className="eval-error">読み取れない評価：{entry.eval_id}<br />{entry.error || '記録が不正です'}</td></tr>;
       const href = siteHref(`/evals/${encodeURIComponent(record.eval_id)}`);
       return <tr key={`${entry.eval_id}-${index}`} onClick={() => { window.location.href = href; }}>
-        <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{record.by || '—'}</td>
+        <td><time dateTime={record.started_at}>{date(record.started_at)}</time></td><td>{runnerLabel(record.by, names)}</td>
         <td><a href={href}>{evaluationTitle(record)}</a>{record.eval_set && <small className="eval-set">{record.eval_set}</small>}<RouteBNotes record={record} />{(record.segments?.length ?? 0) > 1 && <small className="eval-segment-count">{record.segments!.length}回に分けて実行</small>}</td><td className="eval-numbers"><Rate entry={entry} /></td>
         <td><GitCommit git={record.git} /></td>
         <td>{entry.display_status && <span title={failureTooltip(entry.evaluation_failure)} className={entry.evaluation_failure ? 'eval-error' : undefined}>{entry.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[entry.display_status]}</span>}{entry.error && <span className="eval-error">{entry.error}</span>}</td>
@@ -146,8 +147,8 @@ export function EvalListPage() {
   const active = evalFiltersActive(filters);
   // All comparisons in this render share one clock reading (including fake clocks).
   const now = Date.now();
-  const filtered = filterEvaluations(entries ?? [], filters, now);
-  const people = [...new Set(entries?.flatMap(entry => entry.eval?.by ? [entry.eval.by] : []) ?? [])].sort((a, b) => a.localeCompare(b, 'ja'));
+  const filtered = filterEvaluations(entries ?? [], filters, now, listing.data?.names);
+  const people = [...new Set(entries?.flatMap(entry => entry.eval?.by ? [entry.eval.by] : []) ?? [])].sort((a, b) => runnerName(a, listing.data?.names).localeCompare(runnerName(b, listing.data?.names), 'ja'));
   const tasks = [...new Set(entries?.flatMap(evaluationTasks) ?? [])].sort((a, b) => a.localeCompare(b, 'ja'));
   const status = listing.data?.remote_status;
   return <main className="eval-page"><div className="eval-content">
@@ -168,7 +169,7 @@ export function EvalListPage() {
           <span aria-hidden="true">〜</span><label>終了日<input aria-label="終了日" type="date" value={filters.to} min={filters.from || undefined} onChange={event => changeFilters({ to: event.target.value })} /></label>
         </div>}
         <label>実行者<select aria-label="実行者" value={filters.by} onChange={event => changeFilters({ by: event.target.value })}>
-          <option value="all">すべて</option><option value="mine">自分</option>{people.map(person => <option key={person} value={listOptionValue(person)}>{person}</option>)}
+          <option value="all">すべて</option><option value="mine">自分</option>{people.map(person => <option key={person} value={listOptionValue(person)} title={person}>{runnerName(person, listing.data?.names)}</option>)}
         </select></label>
         <label>種類<select aria-label="種類" value={filters.kind} onChange={event => changeFilters({ kind: event.target.value as EvalFilters['kind'] })}>
           <option value="all">すべて</option><option value="a">自分たちの評価（経路 A）</option><option value="b">提出の形（経路 B）</option>
@@ -184,7 +185,7 @@ export function EvalListPage() {
       <div className="eval-filter-summary"><p role="status">{active ? `${listing.data.evals.length} 件中 ${filtered.length} 件` : `${listing.data.evals.length} 件`}</p>
         {active && <button type="button" onClick={resetFilters}>絞り込みを解除</button>}
       </div>
-      {filtered.length ? <EvalListTable entries={filtered} /> : active ? <div className="eval-empty"><p>条件に合う評価はありません</p><button type="button" onClick={resetFilters}>絞り込みを解除</button></div> : <p>評価の記録がありません。</p>}
+      {filtered.length ? <EvalListTable entries={filtered} names={listing.data.names} /> : active ? <div className="eval-empty"><p>条件に合う評価はありません</p><button type="button" onClick={resetFilters}>絞り込みを解除</button></div> : <p>評価の記録がありません。</p>}
     </>}
   </div></main>;
 }
@@ -232,7 +233,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const officialNotes = [...ruleDifferences];
   const renderOfficialNotes = (notes: typeof officialNotes) => <ul>{notes.map(([key, diff]) => <li key={key}>{diff.sides.join('・')}：{diff.text} <a href={ruleSourceHref(diff.source)} target="_blank" rel="noreferrer">公開ルール</a></li>)}</ul>;
   return <>
-    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{record.by || '—'} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · <span title={failureTooltip(detail.evaluation_failure)}>{detail.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[detail.display_status]}</span></>}</p><RouteBNotes record={record} /></div>
+    <div className="eval-comparison-heading"><div><h1>{evaluationTitle(record)}</h1><p className="eval-meta">{runnerLabel(record.by, detail.names)} · <time dateTime={record.started_at}>{date(record.started_at)}</time> · <GitCommit git={record.git} />{detail.display_status && <> · <span title={failureTooltip(detail.evaluation_failure)}>{detail.evaluation_failure?.kind === 'incomplete' ? '未完了' : STATUS[detail.display_status]}</span></>}</p><RouteBNotes record={record} /></div>
       <p className="eval-score">{baseline && <>基準 <Counts value={detail.baseline_summary} /> → </>}今回 <Counts value={detail.summary} />{delta(detail.summary, detail.baseline_summary)}</p>
     </div>
     {detail.evaluation_failure && <p role="note" className="eval-note eval-failure-note">{failureLine(detail.evaluation_failure)}</p>}
