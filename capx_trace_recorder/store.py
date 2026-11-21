@@ -1258,11 +1258,18 @@ class TraceStore:
         read permission. The caller owns the returned descriptor.
         """
         relative = Path(os.path.abspath(path)).relative_to(self._trace_path)
-        absolute = self._destination_root / relative
         flags = getattr(os, "O_PATH", getattr(os, "O_SEARCH", os.O_RDONLY)) | os.O_DIRECTORY | os.O_NOFOLLOW
-        directory = os.open(absolute.anchor, flags)
+        # Open the resolved root by path: that needs only search permission on its
+        # ancestors, also where O_PATH is missing (macOS). Below it, every component
+        # is opened relative to its parent without following symlinks.
+        root = str(self._destination_root)
         try:
-            for name in absolute.parts[1:]:
+            directory = os.open(root, flags)
+        except FileNotFoundError:
+            os.makedirs(root, exist_ok=True)
+            directory = os.open(root, flags)
+        try:
+            for name in relative.parts:
                 try:
                     os.mkdir(name, dir_fd=directory)
                 except FileExistsError:
