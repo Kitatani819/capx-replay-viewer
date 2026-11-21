@@ -89,7 +89,7 @@ def auto_source(tmp_path, monkeypatch):
         service.close()
 
 
-def test_auto_only_remote_and_stale_mine_one_listing(auto_source):
+def test_auto_only_remote_and_stale_mine_bounded_listings(auto_source):
     if shutil.which("rsync") is None:
         pytest.skip("rsync is not installed")
     service, mine, team, log, _, _ = auto_source
@@ -106,14 +106,14 @@ def test_auto_only_remote_and_stale_mine_one_listing(auto_source):
     _done(service)
     assert {j["episode_id"] for j in service.jobs()} == {"remote", "stale"}
     assert not (service.dest / "team_run").exists()
-    assert log.read_text().splitlines().count("list") == 1
+    assert log.read_text().splitlines().count("list") == 2
     assert log.read_text().splitlines().count("rsync") == 2
     assert service.run_auto_once()["queued_in_last_run"] == 0
 
 
 @pytest.mark.parametrize("importer", ["startup", "auto"])
 @pytest.mark.parametrize("folder", ["traces", "submission_evals/_viewer"])
-def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monkeypatch, importer, folder):
+def test_defaults_expand_remote_home_and_fetch_with_bounded_listings(auto_source, monkeypatch, importer, folder):
     if shutil.which("rsync") is None:
         pytest.skip("rsync is not installed")
     service, mine, _, log, _, _ = auto_source
@@ -135,7 +135,7 @@ def test_defaults_expand_remote_home_and_fetch_in_one_listing(auto_source, monke
         assert state["enabled"] is True and state["interval_s"] == 120
         assert state["queued_in_last_run"] == 1
         _done(service)
-        assert log.read_text().splitlines() == ["list", "rsync"]
+        assert log.read_text().splitlines() == ["list", "list", "rsync"]
     else:
         assert gmo.prefetch_mine(service.dest) == 0
         assert log.read_text().splitlines() == ["list", "list", "rsync"]
@@ -164,7 +164,7 @@ def test_shared_root_auto_only_mine_and_manual_team(auto_source, username, teamm
     _done(service)
     assert (service.dest / "run_a" / "ep_own" / "events.jsonl").read_bytes() == (own / "events.jsonl").read_bytes()
     assert not (service.dest / "team_run").exists()
-    assert log.read_text().splitlines() == ["list", "rsync"]
+    assert log.read_text().splitlines() == ["list", "list", "rsync"]
     rows = {row["run_id"]: row for row in service.episodes("all")}
     assert rows["run_a"]["owner"] == username and rows["run_a"]["mine"] is True
     assert rows["team_run"]["owner"] == teammate and rows["team_run"]["mine"] is False
@@ -216,7 +216,7 @@ def test_shared_root_alias_resolves_remote_username_in_one_ssh(auto_source, monk
     assert log.read_text().splitlines() == ["list"]
 
 
-def test_shared_root_auto_detects_team_collision_in_one_listing(auto_source, monkeypatch):
+def test_shared_root_auto_detects_team_collision_in_bounded_listings(auto_source, monkeypatch):
     service, mine, _, log, _, _ = auto_source
     shared = mine.parent / "shared"
     _episode(shared / "trace_user", "ep_own")
@@ -225,7 +225,7 @@ def test_shared_root_auto_detects_team_collision_in_one_listing(auto_source, mon
     monkeypatch.setattr(gmo, "_transfer_episode", lambda *a, **kw: pytest.fail("conflicting run copied"))
     state = service.run_auto_once()
     assert state["queued_in_last_run"] == 0 and state["last_error"] is None
-    assert log.read_text().splitlines() == ["list"]
+    assert log.read_text().splitlines() == ["list", "list"]
     assert service.jobs() == [] and not service.dest.exists()
     rows = service.episodes("all")
     assert len(rows) == 2 and all(row["conflict"] for row in rows)
@@ -299,7 +299,7 @@ def test_auto_skips_run_collision_with_team_without_overwriting(auto_source, mon
     assert state["queued_in_last_run"] == 0 and state["last_error"] is None
     assert service.jobs() == []
     assert {p.relative_to(service.dest): p.read_bytes() for p in service.dest.rglob("*") if p.is_file()} == before
-    assert log.read_text().splitlines() == ["list"]
+    assert log.read_text().splitlines() == ["list", "list"]
 
 
 @pytest.mark.parametrize("metadata", [None, b'{"partial":'])
@@ -330,7 +330,7 @@ def test_auto_repairs_run_metadata_without_episode_changes(auto_source, monkeypa
     assert [rel for rel, _, _ in copied] == [name]
     assert local_metadata.read_bytes() == (first.parent / name).read_bytes()
     assert service.run_auto_once()["queued_in_last_run"] == 0
-    assert log.read_text().splitlines() == ["list", "list"]
+    assert log.read_text().splitlines() == ["list", "list", "list", "list"]
 
 
 def test_auto_budget_newest_fit_shared_run_metadata_and_skipped(auto_source, monkeypatch):
@@ -360,7 +360,7 @@ def test_auto_budget_newest_fit_shared_run_metadata_and_skipped(auto_source, mon
     assert state["queued_in_last_run"] == 2
     assert [(row["run_id"], row["episode_id"]) for row in state["skipped_large"]] == [("run_a", "middle")]
     assert state["skipped_large"][0]["size_bytes"] >= sizes["middle"]
-    assert log.read_text().splitlines() == ["list"]
+    assert log.read_text().splitlines() == ["list", "list"]
 
 
 def test_auto_budget_includes_runner_records(auto_source, monkeypatch):
@@ -517,8 +517,8 @@ def test_running_episode_next_cycle_catches_up_in_place(auto_source):
     assert local.read_bytes() == (ep / "events.jsonl").read_bytes()
     assert local.stat().st_ino == inode
     assert service.episodes("mine", refresh=True)[0]["local_state"] == "local"
-    # Two cycles plus the two explicit list refreshes above; no per-job preflight SSH.
-    assert log.read_text().splitlines().count("list") == 4
+    # Cheap + exact in both cycles plus two explicit refreshes; no per-job preflight SSH.
+    assert log.read_text().splitlines().count("list") == 6
 
 
 @pytest.mark.parametrize("change_settings", [False, True], ids=["pause", "settings"])
@@ -581,7 +581,7 @@ def test_scheduler_observes_zero_pause_resume_and_changed_interval(auto_source):
     previous = service.auto_status()["last_run_at"]
     time.sleep(1.1)
     assert service.auto_status()["last_run_at"] == previous
-    assert log.read_text().splitlines() == ["list", "list"]
+    assert log.read_text().splitlines() == ["list", "list", "list"]
 
 
 @pytest.mark.parametrize("interval", [10**12, 10**1000])
@@ -684,22 +684,219 @@ def test_auto_file_listing_gets_its_own_longer_time_limit(auto_source, monkeypat
     original = gmo.list_remote_episodes
 
     def recording(*args, **kwargs):
-        seen.append(kwargs.get("timeout"))
+        seen.append(kwargs.get("timeout", gmo.LISTING_TIMEOUT_S))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(gmo, "list_remote_episodes", recording)
     monkeypatch.setattr(gmo, "_transfer_episode", lambda *args, **kwargs: 0)
     service.run_auto_once()
-    assert seen == [gmo.FILE_LISTING_TIMEOUT_S]
+    assert seen == [gmo.FILE_LISTING_TIMEOUT_S, gmo.FILE_LISTING_TIMEOUT_S]
     assert gmo.FILE_LISTING_TIMEOUT_S > gmo.LISTING_TIMEOUT_S
 
 
 def test_listing_timeout_says_how_long_it_waited():
     class SlowRunner:
-        def run(self, command, *, timeout):
+        def run(self, command, *, timeout, input=None):
             raise gmo.FetchError("GMO operation timed out")
 
     settings = gmo.GmoSettings(host="gmo", shared_root="~/shared-storage/traces")
     with pytest.raises(gmo.FetchError) as error:
         gmo.list_remote_episodes(SlowRunner(), settings, include_files=True, timeout=600)
     assert "Host gmo" in str(error.value) and "600 秒以内に応答がありませんでした" in str(error.value)
+
+
+def _record_auto_listings(monkeypatch):
+    calls = []
+    original = gmo.list_remote_episodes
+
+    def recording(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gmo, "list_remote_episodes", recording)
+    return calls
+
+
+def _copy_manifest(_runner, _settings, run, _episode_id, dest, **_kwargs):
+    for rel, _size, _mtime in run.files:
+        target = dest / run.run_id / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(Path(run.path) / rel, target)
+    return sum(size for _rel, size, _mtime in run.files)
+
+
+def test_auto_noop_does_not_invalidate_team_or_detail_listings(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    episode = _episode(mine, "synced")
+    shutil.copytree(episode.parent, service.dest / episode.parent.name)
+    service.episodes("all")
+    service.remote_evals()
+    service._episode_row("run_a", "synced")
+    invalidations = []
+    original = service._listings.invalidate
+
+    def invalidate():
+        invalidations.append(True)
+        return original()
+
+    monkeypatch.setattr(service._listings, "invalidate", invalidate)
+    for _ in range(2):
+        status = service.run_auto_once()
+        assert status["queued_in_last_run"] == 0 and status["last_error"] is None
+    assert invalidations == []
+    assert service.episodes("all")[0]["local_state"] == "local"
+
+
+def test_auto_queued_import_invalidates_and_completed_state_uses_cached_listing(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    _episode(mine, "remote")
+    assert service.episodes("all")[0]["local_state"] == "remote"
+    calls = _record_auto_listings(monkeypatch)
+    invalidations = []
+    original = service._listings.invalidate
+    entered, release = threading.Event(), threading.Event()
+
+    def invalidate():
+        invalidations.append(True)
+        return original()
+
+    def transfer(*args, **kwargs):
+        entered.set()
+        assert release.wait(3)
+        return _copy_manifest(*args, **kwargs)
+
+    monkeypatch.setattr(service._listings, "invalidate", invalidate)
+    monkeypatch.setattr(gmo, "_transfer_episode", transfer)
+    try:
+        assert service.run_auto_once()["queued_in_last_run"] == 1
+        assert entered.wait(2)
+        assert invalidations == [True]
+        assert service.episodes("all")[0]["local_state"] == "fetching"
+        _until(lambda: not service.listing_status()["refreshing"])
+        after_refresh = len(calls)
+        release.set()
+        _done(service)
+        assert service.episodes("all")[0]["local_state"] == "local"
+        assert len(calls) == after_refresh
+    finally:
+        release.set()
+
+
+def test_auto_unchanged_fingerprints_skip_exact_and_changed_episode_filters_run(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    first = _episode(mine, "first", run="run_a")
+    second = _episode(mine, "second", run="run_b")
+    for episode in (first, second):
+        shutil.copytree(episode.parent, service.dest / episode.parent.name)
+    calls = _record_auto_listings(monkeypatch)
+    monkeypatch.setattr(gmo, "_transfer_episode", _copy_manifest)
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[0].get("previous") is None
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert len(calls) == 1 and not calls[0].get("include_files")
+    assert len(calls[0]["previous"]["episodes"]) == 2
+    calls.clear()
+    with (second / "events.jsonl").open("a") as stream:
+        stream.write('{"seq":2}\n')
+    assert service.run_auto_once()["queued_in_last_run"] == 1
+    _done(service)
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[1]["run_ids"] == ("run_b",)
+    assert (service.dest / "run_b" / "second" / "events.jsonl").read_bytes() == (second / "events.jsonl").read_bytes()
+
+
+def test_auto_unconfirmed_episode_is_exact_checked_again_until_in_sync(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    _episode(mine, "new")
+    calls = _record_auto_listings(monkeypatch)
+    monkeypatch.setattr(gmo, "_transfer_episode", _copy_manifest)
+    assert service.run_auto_once()["queued_in_last_run"] == 1
+    _done(service)
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[1]["run_ids"] == ("run_a",)
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert len(calls) == 1 and not calls[0].get("include_files")
+
+
+def test_auto_thirty_minute_full_check_repairs_local_file(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    first = _episode(mine, "first", run="run_a")
+    second = _episode(mine, "second", run="run_b")
+    for episode in (first, second):
+        shutil.copytree(episode.parent, service.dest / episode.parent.name)
+    calls = _record_auto_listings(monkeypatch)
+    monkeypatch.setattr(gmo, "_transfer_episode", _copy_manifest)
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    (service.dest / "run_a" / "first" / "events.jsonl").unlink()
+    service._auto_last_full_check -= 30 * 60 + 1
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 1
+    _done(service)
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[1].get("run_ids") is None
+    assert (service.dest / "run_a" / "first" / "events.jsonl").read_bytes() == (first / "events.jsonl").read_bytes()
+
+
+@pytest.mark.parametrize("reset", ["api_settings", "file_settings", "generation"])
+def test_auto_settings_and_generation_reset_to_full_check(auto_source, monkeypatch, reset):
+    service, mine, _, _, _, settings = auto_source
+    episode = _episode(mine, "synced")
+    shutil.copytree(episode.parent, service.dest / episode.parent.name)
+    calls = _record_auto_listings(monkeypatch)
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    changed = replace(settings, interval_s=settings.interval_s + 1)
+    if reset == "api_settings":
+        service.update_settings(changed)
+    elif reset == "file_settings":
+        gmo.save_settings(changed)
+    else:
+        service.invalidate()
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[0].get("previous") is None
+    assert calls[1].get("run_ids") is None
+
+
+def test_auto_deleted_confirmed_destination_is_reimported(auto_source, monkeypatch):
+    service, mine, _, _, _, _ = auto_source
+    episode = _episode(mine, "synced")
+    local = service.dest / episode.parent.name
+    shutil.copytree(episode.parent, local)
+    calls = _record_auto_listings(monkeypatch)
+    monkeypatch.setattr(gmo, "_transfer_episode", _copy_manifest)
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    shutil.rmtree(local / episode.name)
+    calls.clear()
+    assert service.run_auto_once()["queued_in_last_run"] == 1
+    _done(service)
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[1].get("run_ids") is None
+    assert (local / episode.name / "events.jsonl").read_bytes() == (episode / "events.jsonl").read_bytes()
+
+
+@pytest.mark.parametrize("location", ["run", "episode"])
+def test_auto_confirmed_destination_replaced_by_symlink_is_rejected(auto_source, monkeypatch, location):
+    service, mine, _, _, _, _ = auto_source
+    episode = _episode(mine, "synced")
+    local = service.dest / episode.parent.name
+    shutil.copytree(episode.parent, local)
+    calls = _record_auto_listings(monkeypatch)
+    assert service.run_auto_once()["queued_in_last_run"] == 0
+    target = local if location == "run" else local / episode.name
+    source = episode.parent if location == "run" else episode
+    shutil.rmtree(target)
+    target.symlink_to(source, target_is_directory=True)
+    calls.clear()
+    status = service.run_auto_once()
+    assert status["queued_in_last_run"] == 0
+    assert "symlink" in status["last_error"]
+    assert service.jobs() == []
+    assert [bool(call.get("include_files")) for call in calls] == [False, True]
+    assert calls[1].get("run_ids") is None

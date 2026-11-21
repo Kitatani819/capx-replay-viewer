@@ -37,12 +37,13 @@ MAX_METADATA_BYTES = 256 * 1024
 MAX_FETCH_BYTES = 1024**3
 MAX_INTERVAL_S = 24 * 60 * 60
 LISTING_TIMEOUT_S = 60
-# The background import lists every file of every own trial, which takes over a
-# minute once a few large evaluations have run; it runs off the request path.
+# Exact background import checks can take over a minute for large evaluations;
+# they run off the request path, with a separate limit from cheap listings.
 FILE_LISTING_TIMEOUT_S = 600
 # The team listing refreshes in the background behind a cached copy. On a shared
 # folder with large evaluations it takes one to three minutes.
 TEAM_LISTING_TIMEOUT_S = 600
+MAX_LISTING_PREVIOUS_BYTES = 8 * 1024 * 1024
 CONNECTION_ERROR = (
     "GMOに接続できません。公式GENIACチュートリアルの Host gmo をSSH設定に追加するか、"
     "接続設定で接続先を指定してください。"
@@ -403,7 +404,7 @@ class ProcessRunner:
         except subprocess.TimeoutExpired:
             # A descendant that created a separate session may retain the pipes
             # even after killpg. Do not let cleanup block the next queued job.
-            for stream in (proc.stdout, proc.stderr):
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
                     stream.close()
             try:
@@ -411,18 +412,20 @@ class ProcessRunner:
             except subprocess.TimeoutExpired:
                 pass
 
-    def run(self, command: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
+    def run(self, command: list[str], *, timeout: float,
+            input: str | None = None) -> subprocess.CompletedProcess[str]:
         if timeout <= 0:
             raise FetchError("GMO operation timed out")
         with self._lock:
             if self._closed:
                 raise FetchError("GMO service is shutting down")
-            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            proc = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else None,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     text=True, start_new_session=True)
             self._children.add(proc)
         try:
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                stdout, stderr = proc.communicate(input=input, timeout=timeout)
             except subprocess.TimeoutExpired as exc:
                 self._kill(proc)
                 self._reap(proc)
@@ -600,7 +603,7 @@ def cheap_stats(directory, run, previous=None):
     result = (len(top) + len(nested), size, newest, digest(content), bool(nested))
     return result, fingerprint(directories), directories
 
-config = json.loads(sys.argv[1])
+config = json.loads(sys.stdin.read() if sys.argv[1] == '-' else sys.argv[1])
 mine, team = config['mine'], config['team']
 eval_only = config.get('eval_only', False)
 metadata_only = config.get('metadata_only', False)
@@ -810,12 +813,13 @@ def _validate_run_path(run_id: str, path: str) -> None:
 
 
 def _remote_python(runner: ProcessRunner, settings: GmoSettings, code: str,
-                   args: list[str], *, timeout: float) -> Any:
+                   args: list[str], *, timeout: float, input: str | None = None) -> Any:
     if not settings.host or settings.host.startswith("-") or not SAFE_HOST.fullmatch(settings.host):
         raise FetchError("GMO host is not configured")
     remote = "python3 -c " + shlex.quote(code) + " " + " ".join(shlex.quote(arg) for arg in args)
     try:
-        proc = runner.run([*api_ssh_argv(settings), settings.host, remote], timeout=timeout)
+        stdin = {"input": input} if input is not None else {}
+        proc = runner.run([*api_ssh_argv(settings), settings.host, remote], timeout=timeout, **stdin)
     except OSError as exc:
         raise FetchError(CONNECTION_ERROR) from exc
     except FetchError as exc:
@@ -866,9 +870,9 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
                      for row in (previous or {}).get("episodes", []) if row.get("fingerprint")}
     compact = [[path, episode, row["fingerprint"], row.get("fingerprint_directories", [])]
                for (path, episode), row in previous_rows.items()]
-    # SSH passes the program and config as one shell argument. Stay below the
-    # per-argument limit even for very large listings; a full cheap scan is safe.
-    if len(json.dumps(compact)) > 48 * 1024:
+    # Config travels over stdin, so hundreds of fingerprints fit without shell
+    # argument limits. Bound memory for unusually large listings; a cold scan is safe.
+    if len(json.dumps(compact).encode("utf-8")) > MAX_LISTING_PREVIOUS_BYTES:
         compact = []
     payload = json.dumps({
         "mine": settings.mine, "team": settings.team, "shared_root": settings.shared_root,
@@ -876,8 +880,8 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
         "username": settings.host.rsplit("@", 1)[0] if "@" in settings.host else "",
         "eval_only": eval_only, "run_ids": run_ids, "previous": compact, "metadata_only": metadata_only,
     })
-    args = [payload, 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
-    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=timeout)
+    args = ['-', 'files' if include_files else 'summary', 'mine' if mine_only else 'all']
+    listing = _remote_python(runner, settings, REMOTE_EPISODE_LISTER, args, timeout=timeout, input=payload)
     if isinstance(listing, dict) and isinstance(listing.get("episodes"), list):
         merged = []
         for row in listing["episodes"]:

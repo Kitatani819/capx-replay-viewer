@@ -67,6 +67,19 @@ def test_plain_ssh_destinations_are_accepted(host):
     assert gmo.GmoSettings.from_dict({"host": host}).host == host
 
 
+def test_runner_sends_large_input_through_stdin():
+    payload = "fingerprint\n" * 100_000
+    runner = gmo.ProcessRunner()
+    try:
+        proc = runner.run([sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"],
+                          input=payload, timeout=5)
+        assert proc.returncode == 0
+        assert proc.stdout == f"{len(payload)}\n"
+        assert not runner._children
+    finally:
+        runner.close()
+
+
 @pytest.mark.parametrize("mine_only", [False, True], ids=["all", "mine-only"])
 def test_shared_root_skips_unreadable_user_directory(tmp_path, monkeypatch, mine_only):
     shared = tmp_path / "shared"
@@ -241,7 +254,8 @@ os._exit(0)
 
 @pytest.mark.parametrize("killpg_errno", [None, errno.EPERM, errno.EIO],
                          ids=["real-killpg", "eperm", "other-oserror"])
-def test_timeout_cleanup_is_bounded_when_descendant_escapes_group(tmp_path, monkeypatch, killpg_errno):
+@pytest.mark.parametrize("input", [None, "x" * 1024 * 1024], ids=["no-stdin", "blocked-stdin"])
+def test_timeout_cleanup_is_bounded_when_descendant_escapes_group(tmp_path, monkeypatch, killpg_errno, input):
     pid_file = tmp_path / "escaped.pid"
     code = """
 import os, sys, time
@@ -277,13 +291,14 @@ os._exit(0)
     started = time.monotonic()
     try:
         with pytest.raises(gmo.FetchError, match="timed out"):
-            runner.run([sys.executable, "-c", code, str(pid_file)], timeout=0.2)
+            runner.run([sys.executable, "-c", code, str(pid_file)], timeout=0.2, input=input)
         assert time.monotonic() - started < 2.5
         assert pid_file.exists()
         proc, = reaped
         assert killpg_calls == [(proc.pid, signal.SIGKILL)]
         assert proc.returncode == 0
         assert proc.stdout.closed and proc.stderr.closed
+        assert proc.stdin is None or proc.stdin.closed
         assert not runner._children
         assert runner.run([sys.executable, "-c", "pass"], timeout=1).returncode == 0
     finally:

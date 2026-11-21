@@ -270,7 +270,7 @@ def test_shared_root_api_rejects_invalid_input(client, remote, shared_root):
 
 
 def test_check_connection_failure_reports_actionable_error(client, monkeypatch):
-    def failed(command, *, timeout):
+    def failed(command, *, timeout, input=None):
         return subprocess.CompletedProcess(command, 255, "", "unresolvable alias")
     monkeypatch.setattr(client.app.state.gmo_service.runner, "run", failed)
     response = client.post("/api/gmo/check", json={}, headers=WRITE)
@@ -354,14 +354,14 @@ def test_fetch_running_episode_finishes_when_events_and_heartbeat_change(remote,
     service.update_settings(gmo.GmoSettings(host="fakehost", mine=(str(remote["mine"]),)))
     original = service.runner.run
 
-    def recording_during_transfer(command, *, timeout):
+    def recording_during_transfer(command, *, timeout, input=None):
         if command[0] == "rsync":
             # The file manifest is already captured; the recorder keeps running
             # while rsync is about to start its single SSH connection.
             with events.open("ab") as stream:
                 stream.write(appended)
             os.utime(episode / "heartbeat", (heartbeat_mtime, heartbeat_mtime))
-        return original(command, timeout=timeout)
+        return original(command, timeout=timeout, input=input)
 
     monkeypatch.setattr(service.runner, "run", recording_during_transfer)
     try:

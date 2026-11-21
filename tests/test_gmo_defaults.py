@@ -122,7 +122,7 @@ def test_gmo_server_starts_and_serves_local_records_on_connection_failure(config
     (episode / "episode.json").write_text('{"status":"ended","trace_complete":true}')
     calls = []
 
-    def failed(command, *, timeout):
+    def failed(command, *, timeout, input=None):
         calls.append(command)
         assert command[-2] == "gmo"
         if failure == "timeout":
