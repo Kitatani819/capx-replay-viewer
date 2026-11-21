@@ -57,37 +57,27 @@ def test_legacy_transfer_only_copies_approved_manifest(transfer):
     assert not (dest / "trial" / unlisted.name).exists()
 
 
-def test_legacy_transfer_copies_same_size_update_within_second(transfer):
-    transport, root, _run, dest = transfer
-    source = root / "run_a" / "trial" / "events.jsonl"
-    os.utime(source, ns=(1_700_000_000_125_000_000, 1_700_000_000_125_000_000))
-    run, = gmo.list_remote(str(transport), "alias", [str(root)])[0]
-    gmo.rsync_run(str(transport), "alias", run, dest)
-    source.write_text('{"seq":2}\n')
-    os.utime(source, ns=(1_700_000_000_625_000_000, 1_700_000_000_625_000_000))
-    updated, = gmo.list_remote(str(transport), "alias", [str(root)])[0]
-    assert [rel for rel, _, _ in gmo.changed_files(updated, dest)] == ["trial/events.jsonl"]
-    gmo.rsync_run(str(transport), "alias", updated, dest)
-    assert (dest / "trial" / "events.jsonl").read_text() == '{"seq":2}\n'
-
-
-def test_episode_transfer_copies_same_size_update_within_second(transfer, monkeypatch):
+def test_whole_second_copies_stay_imported(transfer, monkeypatch):
+    # macOS's default rsync (and some filesystems) keep only whole-second mtimes.
+    # A copy like that must still count as imported, or automatic imports would
+    # copy the same files again on every cycle.
     transport, root, _run, dest = transfer
     monkeypatch.setenv("CAPX_GMO_SSH_COMMAND", str(transport))
     source = root / "run_a" / "trial" / "events.jsonl"
     settings = gmo.GmoSettings(host="alias", mine=(str(root),), shared_root="", submission_root="")
     row = {"run_id": "run_a", "episode_id": "trial", "path": str(source.parent.parent)}
-    os.utime(source, ns=(1_700_000_000_125_000_000, 1_700_000_000_125_000_000))
+    os.utime(source, ns=(1_700_000_000_625_000_000, 1_700_000_000_625_000_000))
     runner = gmo.ProcessRunner()
     try:
         gmo.fetch_episode(runner, settings, row, dest.parent)
-        source.write_text('{"seq":2}\n')
-        os.utime(source, ns=(1_700_000_000_625_000_000, 1_700_000_000_625_000_000))
-        gmo.fetch_episode(runner, settings, row, dest.parent)
-        assert (dest / "trial" / "events.jsonl").read_text() == '{"seq":2}\n'
-        # The manifest and local fingerprints must agree after the import.
+        for path in (dest / "trial").rglob("*"):
+            if path.is_file():
+                whole = int(path.stat().st_mtime) * 1_000_000_000
+                os.utime(path, ns=(whole, whole))
         listing = gmo.list_remote_episodes(runner, settings, include_files=True)
         assert gmo.local_state(listing["episodes"][0], dest.parent) == "local"
+        run, = gmo.list_remote(str(transport), "alias", [str(root)])[0]
+        assert gmo.changed_files(run, dest) == []
     finally:
         runner.close()
 

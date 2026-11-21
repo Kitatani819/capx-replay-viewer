@@ -72,7 +72,7 @@ for pattern in sys.argv[1:]:
                     if os.path.islink(p) or not os.path.isfile(p):
                         continue
                     st = os.stat(p)
-                    files.append([os.path.relpath(p, run), st.st_size, st.st_mtime])
+                    files.append([os.path.relpath(p, run), st.st_size, int(st.st_mtime)])
             if any(f[0] == "run.json" or f[0].endswith("/events.jsonl") for f in files):
                 out["runs"].append({"run_id": name, "path": os.path.realpath(run), "files": files})
 print(json.dumps(out))
@@ -156,9 +156,7 @@ def changed_files(run: RemoteRun, local_run: Path) -> list[tuple[str, int, int |
             changed.append((rel, size, mtime))
             continue
         # Older cached manifests contain integer seconds. New manifests retain
-        # fractions so equal-size updates within a second are still selected.
-        local_mtime = st.st_mtime if type(mtime) is float else int(st.st_mtime)
-        if st.st_size != size or local_mtime != mtime:
+        if st.st_size != size or int(st.st_mtime) != mtime:
             changed.append((rel, size, mtime))
     return changed
 
@@ -190,8 +188,8 @@ def rsync_run(ssh: str, host: str, run: RemoteRun, local_run: Path, rsync: str =
 def _rsync_manifest(runner: ProcessRunner, ssh: str, host: str, run: RemoteRun,
                     local_run: Path, files: list[tuple[str, int, int | float]], *,
                     timeout: float, rsync: str = "rsync") -> None:
-    # Never recurse into a listed file that changed into a directory. Force the
-    # selected files: rsync's whole-second quick check can miss fractional changes.
+    # Never recurse into a listed file that changed into a directory. Copy every
+    # selected file (-I): the manifest comparison already decided what changed.
     with tempfile.TemporaryDirectory(prefix="capx-gmo-files-") as temp:
         manifest = Path(temp) / "files"
         manifest.write_bytes(b"".join(os.fsencode(rel) + b"\x00" for rel, _, _ in files))
@@ -589,11 +587,11 @@ def stats(directory):
             if st is not None:
                 count += 1
                 size += st.st_size
-                mtime = st.st_mtime
+                mtime = int(st.st_mtime)
                 newest = mtime if newest is None else max(newest, mtime)
                 files.append((os.path.relpath(path, directory), st.st_size, mtime))
-    # Keep the representation identical to local_episode_stats, including
-    # fractional mtimes for same-size updates within a second.
+    # Keep the representation identical to local_episode_stats. Whole-second
+    # mtimes match what every rsync (including macOS's default) preserves.
     digest = hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(',', ':')).encode('ascii')).hexdigest()
     return count, size, newest, digest, files
 
@@ -617,7 +615,7 @@ def cheap_stats(directory, run, previous=None):
         for entry in entries:
             if entry.is_file(follow_symlinks=False):
                 st = entry.stat(follow_symlinks=False)
-                top.append((entry.name, st.st_size, st.st_mtime, st.st_mtime_ns))
+                top.append((entry.name, st.st_size, int(st.st_mtime), st.st_mtime_ns))
             elif entry.is_dir(follow_symlinks=False):
                 child_dirs.append(entry.name)
     metadata = []
@@ -789,7 +787,7 @@ for scope, patterns in (('mine', mine), ('team', team)):
                         for metadata in ('run.json', 'eval.json', 'runner_records.jsonl', 'code_changes.json'):
                             st = regular(os.path.join(run, metadata))
                             if st and (metadata != 'code_changes.json' or st.st_size <= 131072):
-                                manifest.append([metadata, st.st_size, st.st_mtime])
+                                manifest.append([metadata, st.st_size, int(st.st_mtime)])
                         rows[-1]['files'] = manifest
                 out.extend(rows)
 remote_now = time.time()
@@ -820,14 +818,14 @@ files = []
 for metadata in ('run.json', 'eval.json', 'runner_records.jsonl', 'code_changes.json'):
     st = regular(os.path.join(run, metadata))
     if st and (metadata != 'code_changes.json' or st.st_size <= 131072):
-        files.append([metadata, st.st_size, st.st_mtime])
+        files.append([metadata, st.st_size, int(st.st_mtime)])
 for base, dirs, names in os.walk(episode):
     dirs[:] = sorted(d for d in dirs if not os.path.islink(os.path.join(base, d)))
     for name in sorted(names):
         path = os.path.join(base, name)
         st = regular(path)
         if st:
-            files.append([os.path.relpath(path, run), st.st_size, st.st_mtime])
+            files.append([os.path.relpath(path, run), st.st_size, int(st.st_mtime)])
 print(json.dumps({'files': files}, ensure_ascii=True))
 """
 
@@ -1049,7 +1047,7 @@ def local_episode_stats(episode: Path) -> tuple[int, int, float | None, str] | N
             if stat.S_ISREG(st.st_mode):
                 count += 1
                 size += st.st_size
-                mtime = st.st_mtime
+                mtime = int(st.st_mtime)
                 newest = mtime if newest is None else max(newest, mtime)
                 files.append(((Path(base) / name).relative_to(episode).as_posix(), st.st_size, mtime))
     # Identical to the exact transfer-manifest stats in REMOTE_EPISODE_LISTER.
@@ -1071,7 +1069,7 @@ def _local_listing_digest(episode: Path) -> str | None:
                     pending.append((Path(entry.path), rel + "/"))
                 elif entry.is_file(follow_symlinks=False):
                     info = entry.stat(follow_symlinks=False) if not prefix else None
-                    files.append((rel, info.st_size if info else None, info.st_mtime if info else None))
+                    files.append((rel, info.st_size if info else None, int(info.st_mtime) if info else None))
     return hashlib.sha256(json.dumps(sorted(files), ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
 
 
@@ -1138,7 +1136,7 @@ def episode_manifest(row: dict[str, Any], data: dict[str, Any]) -> RemoteRun:
         if any(not isinstance(rel, str) or "\x00" in rel
                or any(part in ("", ".", "..") for part in rel.split("/"))
                or type(size) is not int or size < 0
-               or type(mtime) not in (int, float) or not math.isfinite(mtime)
+               or type(mtime) is not int
                for rel, size, mtime in run.files):
             raise FetchError("Unexpected episode files from GMO")
         check_runs([run])
