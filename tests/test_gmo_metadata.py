@@ -23,14 +23,14 @@ class LocalPythonRunner:
         self.now = now
         self.preamble = preamble
 
-    def run(self, command: list[str], *, timeout: float):
+    def run(self, command: list[str], *, timeout: float, input: str | None = None):
         argv = shlex.split(command[-1])
         assert argv[:2] == ["python3", "-c"]
         argv[0] = sys.executable
         if self.now is not None:
             argv[2] = f"import time; time.time = lambda: {self.now!r}\n" + argv[2]
         argv[2] = self.preamble + argv[2]
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, input=input)
 
     def close(self):
         pass

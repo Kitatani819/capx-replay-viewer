@@ -25,6 +25,7 @@ CACHE_SECONDS = 30
 LIVE_INTERVAL_S = 2.0
 LIVE_LEASE_S = 30.0
 LIVE_MAX_BACKOFF_S = 30.0
+AUTO_FULL_CHECK_S = 30 * 60
 
 
 def _timestamp(value: float | None = None) -> str:
@@ -71,6 +72,10 @@ class GmoService:
         self._auto_queued = 0
         self._auto_jobs_pending = 0
         self._auto_skipped: list[dict[str, Any]] = []
+        self._auto_listing: dict[str, list[dict[str, Any]]] | None = None
+        self._auto_listing_generation = self._generation
+        self._auto_confirmed: set[tuple[str, str]] = set()
+        self._auto_last_full_check: float | None = None
         self._live: dict[str, Any] | None = None
         self._live_settings: gmo.GmoSettings | None = None
         self._live_thread: threading.Thread | None = None
@@ -100,6 +105,7 @@ class GmoService:
         self._cache_settings = None
         self._cache_until = 0
         self._listings.invalidate()
+        self._reset_auto_listing_locked()
 
     def update_settings(self, settings: gmo.GmoSettings) -> None:
         # Publication of settings and invalidation must be atomic with respect to
@@ -272,9 +278,16 @@ class GmoService:
         self._auto_next = time.monotonic() + delay
         self._auto_next_at = _timestamp(time.time() + delay)
 
+    def _reset_auto_listing_locked(self) -> None:
+        self._auto_listing = None
+        self._auto_listing_generation = self._generation
+        self._auto_confirmed.clear()
+        self._auto_last_full_check = None
+
     def _sync_auto_settings_locked(self, settings: gmo.GmoSettings) -> None:
         if settings != self._auto_settings:
             self._auto_settings = settings
+            self._reset_auto_listing_locked()
             self._auto_failures = 0
             self._auto_last_error = None
             self._schedule_auto_locked(settings)
@@ -344,50 +357,98 @@ class GmoService:
             batch = {"run_id": self._auto_run_id, "generation": self._generation,
                      "failed": False, "remaining": 0}
             generation = self._generation
+            if self._auto_listing_generation != generation:
+                self._reset_auto_listing_locked()
+            previous = self._auto_listing
+            confirmed = set(self._auto_confirmed)
+            started = time.monotonic()
+            full_check = (self._auto_last_full_check is None
+                          or started - self._auto_last_full_check >= AUTO_FULL_CHECK_S)
             self._auto_last_run_at = _timestamp()
             self._auto_next = self._auto_next_at = None
             self._auto_queued = 0
             self._auto_skipped = []
         try:
             with self._refresh_lock:
-                rows = gmo.list_remote_episodes(self.runner, settings, include_files=True,
-                                               mine_only=True, timeout=gmo.FILE_LISTING_TIMEOUT_S)["episodes"]
-                plans = []
-                for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
-                                  reverse=True):
-                    if not row["mine"] or row["conflict"]:
-                        continue
-                    run = gmo.episode_manifest(row, row)
-                    files = gmo._episode_changes(run, row["episode_id"], self.dest)
-                    if files:
-                        plans.append((row, run, files))
+                listing = gmo.list_remote_episodes(self.runner, settings, mine_only=True, previous=previous,
+                                                  timeout=gmo.FILE_LISTING_TIMEOUT_S)
+            prior = {(row["path"], row["episode_id"]): row
+                     for row in (previous or {}).get("episodes", [])}
+            # Recheck if a confirmed directory was removed or replaced with a
+            # symlink, so the exact preflight still enforces safe destinations.
+            local_episodes = (self.dest / prior[key]["run_id"] / key[1]
+                              for key in confirmed if key in prior)
+            if any(local.parent.is_symlink() or local.is_symlink() or not local.is_dir()
+                   for local in local_episodes):
+                full_check = True
+            unchanged = {
+                (row["path"], row["episode_id"]) for row in listing["episodes"]
+                if row.get("fingerprint") is not None
+                and row["fingerprint"] == prior.get((row["path"], row["episode_id"]), {}).get("fingerprint")
+                and row["mine"] and not row["conflict"]
+            }
+            confirmed.intersection_update(unchanged)
+            run_ids = tuple(sorted({row["run_id"] for row in listing["episodes"]
+                                    if row["mine"] and not row["conflict"]
+                                    and (row["path"], row["episode_id"]) not in confirmed}))
+            rows = []
+            if full_check or run_ids:
                 with self._lock:
                     if self._closed or self._auto_paused:
                         raise gmo.FetchError("GMO automatic import was stopped")
                     if generation != self._generation or settings != self.load_settings():
                         raise gmo.FetchError("GMO settings changed during listing; please retry")
-                    # A mine-only scan must not pretend to be a complete team listing.
+                with self._refresh_lock:
+                    rows = gmo.list_remote_episodes(
+                        self.runner, settings, include_files=True, mine_only=True,
+                        **({} if full_check else {"run_ids": run_ids}),
+                        timeout=gmo.FILE_LISTING_TIMEOUT_S,
+                    )["episodes"]
+                confirmed.difference_update((row["path"], row["episode_id"]) for row in listing["episodes"]
+                                            if full_check or row["run_id"] in run_ids)
+            plans = []
+            for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
+                              reverse=True):
+                if not row["mine"] or row["conflict"]:
+                    continue
+                run = gmo.episode_manifest(row, row)
+                files = gmo._episode_changes(run, row["episode_id"], self.dest)
+                if files:
+                    plans.append((row, run, files))
+                else:
+                    confirmed.add((row["path"], row["episode_id"]))
+            with self._lock:
+                if self._closed or self._auto_paused:
+                    raise gmo.FetchError("GMO automatic import was stopped")
+                if generation != self._generation or settings != self.load_settings():
+                    raise gmo.FetchError("GMO settings changed during listing; please retry")
+                self._auto_listing = listing
+                self._auto_confirmed = confirmed
+                if full_check:
+                    self._auto_last_full_check = started
+                reserved: set[tuple[str, str]] = set()
+                budget = 0
+                for row, run, files in plans:
+                    key = (row["run_id"], row["episode_id"])
+                    if key in self._pending:
+                        continue
+                    files = [f for f in files if (run.path, f[0]) not in reserved]
+                    if not files:
+                        continue
+                    size = sum(f[1] for f in files)
+                    if budget + size >= self.max_fetch_bytes:
+                        self._auto_skipped.append({"run_id": key[0], "episode_id": key[1], "size_bytes": size})
+                        continue
+                    budget += size
+                    reserved.update((run.path, rel) for rel, _, _ in files)
+                    self._enqueue_locked(row, settings, gmo.RemoteRun(run.run_id, run.path, files), batch)
+                    self._auto_queued += 1
+                # A mine-only scan must not replace a complete team snapshot.
+                if self._auto_queued:
                     self._listings.invalidate()
-                    reserved: set[tuple[str, str]] = set()
-                    budget = 0
-                    for row, run, files in plans:
-                        key = (row["run_id"], row["episode_id"])
-                        if key in self._pending:
-                            continue
-                        files = [f for f in files if (run.path, f[0]) not in reserved]
-                        if not files:
-                            continue
-                        size = sum(f[1] for f in files)
-                        if budget + size >= self.max_fetch_bytes:
-                            self._auto_skipped.append({"run_id": key[0], "episode_id": key[1], "size_bytes": size})
-                            continue
-                        budget += size
-                        reserved.update((run.path, rel) for rel, _, _ in files)
-                        self._enqueue_locked(row, settings, gmo.RemoteRun(run.run_id, run.path, files), batch)
-                        self._auto_queued += 1
-                    if self._auto_jobs_pending == 0:
-                        self._auto_last_error = None
-                        self._auto_failures = 0
+                if self._auto_jobs_pending == 0:
+                    self._auto_last_error = None
+                    self._auto_failures = 0
         except Exception as exc:
             with self._lock:
                 if (not self._closed and not self._auto_paused and generation == self._generation

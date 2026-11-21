@@ -30,7 +30,7 @@ class BenchmarkRunner:
         self.legacy = legacy
         self.stats = 0
 
-    def run(self, command, *, timeout):
+    def run(self, command, *, timeout, input=None):
         argv = shlex.split(command[-1])
         code = argv[2]
         if self.legacy:
@@ -38,12 +38,12 @@ class BenchmarkRunner:
             # for auto-import's exact transfer manifest, for the old listing cost.
             code = code.replace("cheap, fingerprint, directories = cheap_stats(",
                                 "cheap, fingerprint, directories = legacy_stats(")
-            code = code.replace("config = json.loads(sys.argv[1])", """
+            config_line = "config = json.loads(sys.stdin.read() if sys.argv[1] == '-' else sys.argv[1])"
+            code = code.replace(config_line, """
 def legacy_stats(directory, run, previous=None):
     count, size, newest, digest, files = stats(directory)
     return (count, size, newest, digest, False), digest, []
-config = json.loads(sys.argv[1])
-""")
+""" + config_line)
         # Route explicit DirEntry.stat calls through the counter too. Both are
         # lstat-equivalent here (regular entries and follow_symlinks=False).
         code = code.replace("entry.stat(follow_symlinks=False)", "os.lstat(entry.path)")
@@ -64,7 +64,7 @@ os.stat, os.lstat = _count_stats(_original_stat), _count_stats(_original_lstat)
         code = code.replace("print(json.dumps({'episodes': out, 'evals': evals}, ensure_ascii=True))",
                             "print(json.dumps({'episodes': out, 'evals': evals, '_benchmark_stats': _benchmark_stats}, ensure_ascii=True))")
         proc = subprocess.run([sys.executable, "-c", preamble + code, *argv[3:]],
-                              capture_output=True, text=True, timeout=max(timeout, 300))
+                              capture_output=True, text=True, timeout=max(timeout, 300), input=input)
         if proc.returncode == 0:
             self.stats = json.loads(proc.stdout)["_benchmark_stats"]
         return proc

@@ -17,10 +17,10 @@ class LocalRunner:
     def __init__(self, preamble=""):
         self.preamble = preamble
 
-    def run(self, command, *, timeout):
+    def run(self, command, *, timeout, input=None):
         argv = shlex.split(command[-1])
         return subprocess.run([sys.executable, "-c", self.preamble + argv[2], *argv[3:]],
-                              capture_output=True, text=True, timeout=timeout)
+                              capture_output=True, text=True, timeout=timeout, input=input)
 
 
 @pytest.fixture
@@ -106,6 +106,78 @@ os.scandir = guarded
     assert updated["episodes"][0]["fingerprint"] == listing["episodes"][0]["fingerprint"]
     assert updated["episodes"][0]["file_count"] == 22
     assert updated["episodes"][0]["remote_now"] >= listing["episodes"][0]["remote_now"]
+
+
+def test_hundreds_of_fingerprints_reach_remote_stdin(tree):
+    episode, settings = tree
+    for root in ("assets", "frames"):
+        for index in range(19):
+            (episode / root / f"camera_{index:02d}").mkdir(parents=True)
+    listing = gmo.list_remote_episodes(LocalRunner(), settings)
+    row, = listing["episodes"]
+    assert len(row["fingerprint_directories"]) == 40
+    # Pad the real listing with realistic, validated rows, keeping one live
+    # fingerprint that must still skip frame enumeration on the remote side.
+    listing["episodes"].extend({
+        **row, "run_id": f"evaluation_{index:03d}",
+        "path": f"/shared-storage/traces/user/evaluation_{index:03d}",
+        "episode_id": f"trial_{index:03d}",
+    } for index in range(399))
+    captured = []
+
+    class RecordingRunner(LocalRunner):
+        def run(self, command, *, timeout, input=None):
+            captured.append((command, input))
+            return super().run(command, timeout=timeout, input=input)
+
+    preamble = """
+import os
+old_scandir = os.scandir
+def guarded(path):
+    if str(path).endswith('/frames'):
+        raise AssertionError('large previous listing was dropped')
+    return old_scandir(path)
+os.scandir = guarded
+"""
+    updated = gmo.list_remote_episodes(RecordingRunner(preamble), settings, previous=listing)
+    command, payload = captured[0]
+    previous = json.loads(payload)["previous"]
+    assert len(previous) == 400
+    assert all(len(item[3]) == 40 for item in previous)
+    assert 48 * 1024 < len(json.dumps(previous).encode("utf-8")) < gmo.MAX_LISTING_PREVIOUS_BYTES
+    assert payload not in command[-1]
+    assert shlex.split(command[-1])[3:] == ["-", "summary", "all"]
+    assert updated["episodes"][0]["fingerprint"] == row["fingerprint"]
+
+
+def test_previous_above_stdin_cap_falls_back_to_full_scan(tree):
+    _episode, settings = tree
+    listing = gmo.list_remote_episodes(LocalRunner(), settings)
+    listing["episodes"][0]["fingerprint_directories"] = ["x" * gmo.MAX_LISTING_PREVIOUS_BYTES]
+    captured = []
+
+    class RecordingRunner(LocalRunner):
+        def run(self, command, *, timeout, input=None):
+            captured.append(json.loads(input))
+            return super().run(command, timeout=timeout, input=input)
+
+    updated = gmo.list_remote_episodes(RecordingRunner(), settings, previous=listing)
+    assert captured[0]["previous"] == []
+    assert updated["episodes"][0]["file_count"] == 22
+
+
+def test_remote_lister_still_accepts_argv_config_without_stdin(tree):
+    _episode, settings = tree
+    config = {
+        "mine": settings.mine, "team": settings.team, "shared_root": settings.shared_root,
+        "submission_root": settings.submission_root, "username": "",
+    }
+    proc = subprocess.run([sys.executable, "-c", gmo.REMOTE_EPISODE_LISTER,
+                           json.dumps(config), "summary", "all"],
+                          capture_output=True, text=True, input="", timeout=10)
+    assert proc.returncode == 0, proc.stderr
+    listing = gmo.validate_remote_listing(json.loads(proc.stdout))
+    assert listing["episodes"][0]["file_count"] == 22
 
 
 @pytest.mark.parametrize("change", ["metadata", "frame_added", "nested_directory", "run_metadata"])
