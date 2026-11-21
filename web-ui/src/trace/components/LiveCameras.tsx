@@ -1,5 +1,5 @@
 /**
- * Saved frames of each camera while a trial is running in Live mode.
+ * Saved frames of each camera in Live mode, including the final playback at end.
  *
  * The recorder saves every frame the simulator renders (a few per second), but a
  * remote copy arrives in batches every ~2 s. Showing only the newest frame skips
@@ -41,7 +41,12 @@ export function frameAt(frames: FrameRec[], playhead: number | null): FrameRec |
   return timed.findLast(frame => wallOf(frame)! <= playhead) ?? timed[0];
 }
 
-export function LiveCameras({ model, ep }: { model: EpisodeModel; ep: EpisodeRef }) {
+export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
+  model: EpisodeModel;
+  ep: EpisodeRef;
+  ended?: boolean;
+  onCaughtUp?: () => void;
+}) {
   // The main camera first, then the others by name; only frames whose image was saved.
   const cameras = useMemo(() => {
     const main = mainCameraOf(model);
@@ -80,6 +85,12 @@ export function LiveCameras({ model, ep }: { model: EpisodeModel; ep: EpisodeRef
     const index = frame ? frames.indexOf(frame) : -1;
     return { camera, frame, upcoming: index < 0 ? [] : frames.slice(index + 1, index + 1 + PREFETCH) };
   });
+  // Compare the frames actually shown: a camera with only one frame is already
+  // done, even when the delayed playhead is still before that frame's time.
+  const caughtUp = cameras.every(({ frames }, index) => shown[index].frame === frameAt(frames, Infinity));
+  useEffect(() => {
+    if (ended && caughtUp) onCaughtUp?.();
+  }, [ended, caughtUp, onCaughtUp]);
   const prefetchKey = shown.flatMap(({ upcoming }) => upcoming.map(frame => frame.path)).join('\n');
   useEffect(() => {
     if (typeof Image === 'undefined') return;

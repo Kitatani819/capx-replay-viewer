@@ -638,7 +638,7 @@ export default function TraceViewerPage() {
               </div>
             ) : (
               <ErrorBoundary label="録画と処理ログ" resetKey={epKey}>
-                <MediaPane model={model} ep={ep} camera={camera} onCameraChange={onCameraChange} selection={selection} live3d={live3d} follow={live && running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonVisibleChange={setApiPythonVisible}
+                <MediaPane model={model} ep={ep} camera={camera} onCameraChange={onCameraChange} selection={selection} live3d={live3d} follow={live && running} running={running} videos={videos} onPlaybackSelect={onPlaybackSelect} onPlaybackClear={onPlaybackClear} seekRequest={replaySeek} onApiPythonVisibleChange={setApiPythonVisible}
                   assetStates={shownAssetStates} onRetryAsset={assets.retry}
                   selectionFromPlayback={playbackSelection?.eventId === eventParam}
                   replayLive={live && running} allowReplayInitialSelection={status!==null && !running && !eventParam} onReplayInteract={onReplayInteract} logPanel={<Timeline
