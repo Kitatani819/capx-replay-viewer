@@ -398,7 +398,8 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
           <input type="search" name="gmo-filter" aria-label={`${remoteName()} の試行を検索`} value={query} onChange={event => setQuery(event.target.value)} placeholder="絞り込み（task / seed / 実行者）" className={`${INPUT_CLASS} flex-1 min-w-40`} />
         </div>
         {listing.data && <p role="status" className="trial-list-count">{filtersActive ? `${listing.data.rows.length} 件中 ${rows.length} 件` : `${listing.data.rows.length} 件`}</p>}
-        {listing.loading && <div className="p-3"><Spinner label="一覧を読み込み中" /></div>}
+        {/* Only the first load shows a spinner; the 2 s polls while GMO refreshes are reported in the status line and must not shift the rows. */}
+        {listing.loading && !listing.data && <div className="p-3"><Spinner label="一覧を読み込み中" /></div>}
         <div className="trial-list-scroll min-h-0 overflow-x-auto">
           <table aria-label={`${remoteName()} の試行`} className="w-full text-xs">
             <thead className="sticky top-0 bg-surface-raised"><tr className="text-left text-text-tertiary border-b border-surface-border">

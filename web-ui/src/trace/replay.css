@@ -28,7 +28,8 @@
   --replay-text-secondary: 78 99 88;
   --replay-text-tertiary: 107 127 116;
   --replay-text-muted: 107 127 116;
-  --replay-process-height: clamp(220px, 42dvh, 460px);
+  /* The log uses most of the screen instead of a blank spacer below the page. */
+  --replay-process-height: clamp(240px, 65dvh, 820px);
   color-scheme: light dark;
   font: 15px/1.65 var(--ce-font-sans);
   -webkit-font-smoothing: antialiased;
@@ -197,7 +198,6 @@
   border-radius: 6px;
 }
 .replay-workspace > .replay-layout { margin: 24px 42px 20px; align-items: flex-start; }
-.replay-workspace::after { content: ''; display: block; flex-shrink: 0; height: 30dvh; }
 .replay-workspace .replay-layout > [role="separator"] { width: 32px; align-self: stretch; background: transparent; overflow: hidden; }
 .replay-workspace .replay-layout > [role="separator"]:hover {
   background: linear-gradient(90deg, transparent 47%, var(--ce-accent-border) 47%, var(--ce-accent-border) 53%, transparent 53%);
