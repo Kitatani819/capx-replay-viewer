@@ -63,8 +63,12 @@ export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
     })).sort((a, b) => Number(b.camera === main) - Number(a.camera === main) || a.camera.localeCompare(b.camera));
   }, [model]);
   const newest = useMemo(() => {
-    const walls = cameras.flatMap(({ frames }) => frames.map(wallOf)).filter((wall): wall is number => wall !== null);
-    return walls.length ? Math.max(...walls) : null;
+    let latest: number | null = null;
+    for (const { frames } of cameras) for (const frame of frames) {
+      const wall = wallOf(frame);
+      if (wall !== null && (latest === null || wall > latest)) latest = wall;
+    }
+    return latest;
   }, [cameras]);
 
   const newestRef = useRef(newest);

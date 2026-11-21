@@ -58,7 +58,7 @@ test('repeat observations are linked and never added to significance counts', ()
   assert.match(html, /はっきり改善/);
   assert.match(html, /判定済み 6組/);
   assert.match(html, /p値 0.0313/);
-  assert.match(html, /href="\/evals\/ev-repeat"/);
+  assert.match(html, /href="\/evals\/ev-repeat\?site=b300"/);
   assert.match(html, /6組中 6組（100.0%）/);
   assert.match(html, /判定には加えていません/);
 });

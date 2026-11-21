@@ -16,8 +16,8 @@ test('shared breadcrumb uses real ancestor links and plain current-page text in 
     { label: 'cube · seed 7' },
   ]} />);
   assert.match(html, /<nav[^>]*aria-label="現在の場所"/);
-  assert.match(html, /<a[^>]*href="\/evals"[^>]*>評価一覧<\/a>/);
-  assert.match(html, /<a[^>]*href="\/evals\/changed%20run"[^>]*>把持位置の修正<\/a>/);
+  assert.match(html, /<a[^>]*href="\/evals\?site=b300"[^>]*>評価一覧<\/a>/);
+  assert.match(html, /<a[^>]*href="\/evals\/changed%20run\?site=b300"[^>]*>把持位置の修正<\/a>/);
   assert.match(html, /<span[^>]*aria-current="page"[^>]*>cube · seed 7<\/span>/);
   assert.equal((html.match(/aria-current="page"/g) ?? []).length, 1);
   assert.equal((html.match(/<a /g) ?? []).length, 2);

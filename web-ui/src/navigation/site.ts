@@ -22,8 +22,7 @@ export function currentSiteName(): string {
   const name = explicit && SITE_NAME.test(explicit) ? explicit
     : saved && SITE_NAME.test(saved) ? saved : primaryName;
   rememberSite(name);
-  if (name === primaryName) params.delete('site');
-  else params.set('site', name);
+  params.set('site', name);
   const search = params.toString();
   const url = `${window.location.pathname}${search ? `?${search}` : ''}${window.location.hash}`;
   if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
@@ -56,8 +55,7 @@ export function apiRoot(name = currentSiteName()): string {
 export function siteHref(href: string, name = currentSiteName()): string {
   if (!href.startsWith('/') || href.startsWith('//')) return href;
   const url = new URL(href, 'http://localhost');
-  if (name === primaryName) url.searchParams.delete('site');
-  else url.searchParams.set('site', name);
+  url.searchParams.set('site', name);
   return `${url.pathname}${url.search}${url.hash}`;
 }
 

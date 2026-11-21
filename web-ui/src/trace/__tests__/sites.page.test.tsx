@@ -28,7 +28,7 @@ test('site API root defaults to primary and restores session selection into shar
   assert.equal(window.location.hash, '#seed');
   setLocation('/evals?site=b300');
   assert.equal(apiRoot(), '/api');
-  assert.equal(window.location.search, '');
+  assert.equal(window.location.search, '?site=b300');
   setLocation('/traces');
   assert.equal(currentSiteName(), 'b300');
 });
@@ -42,7 +42,7 @@ test('site selection handles blocked storage and rejects malformed names', () =>
     assert.equal(apiRoot(), '/api/sites/rtx');
     setLocation('/evals?site=../private');
     assert.equal(currentSiteName(), 'b300');
-    assert.equal(currentParams().has('site'), false);
+    assert.equal(currentParams().get('site'), 'b300');
   } finally { Object.defineProperty(window, 'sessionStorage', descriptor); }
 });
 

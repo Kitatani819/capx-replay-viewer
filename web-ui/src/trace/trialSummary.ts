@@ -20,13 +20,14 @@ export function eventTurn(model: EpisodeModel, event: TraceEvent): number | null
   const turn = event.refs?.turn_index ?? object(event.data).turn_index;
   return typeof turn === 'number' && Number.isInteger(turn) && turn >= 0 ? turn : null;
 }
-export function recordedDecision(model: EpisodeModel, event: TraceEvent): 'FINISH' | 'REGENERATE' | null {
+export function recordedDecision(model: EpisodeModel, event: TraceEvent): 'FINISH' | 'REGENERATE' | '終了扱い' | null {
   if (event.event_type !== 'model_output_parsed') return null;
   const call = model.callOfEvent.get(event.event_id);
   const data = dataOf(event, 'model_output_parsed');
   if (call && call.role !== 'code_generator') return null;
   if (!call && data.parser !== '_parse_multi_turn_decision') return null;
   const decision = data.decision?.toUpperCase();
+  if (decision === 'FINISH' && data.model_said_finish !== true) return '終了扱い';
   return decision === 'FINISH' || decision === 'REGENERATE' ? decision : null;
 }
 function errorValue(event: TraceEvent): TextValue | null {
@@ -39,29 +40,48 @@ export function isRecordedError(event: TraceEvent): boolean {
   return event.status === 'error' || ['api_call_error', 'service_call_error', 'model_error'].includes(event.event_type) || !!data.exception;
 }
 export function lastRecordedFrame(model: EpisodeModel, camera?: string | null): SummaryFrame | null {
+  type Candidate = SummaryFrame & { epoch: number | null; index: number | null; step: number | null };
+  const latestByCamera = new Map<string | null, Candidate>();
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const consider = (candidate: Candidate) => {
+    if (camera && candidate.camera !== camera) return;
+    const key = candidate.camera ?? null;
+    const latest = latestByCamera.get(key);
+    let order = candidate.event.seq - (latest?.event.seq ?? -Infinity);
+    // A late call can refer to an older saved buffer entry. Prefer recorded
+    // frame identity when both candidates belong to the same camera.
+    if (latest) {
+      if (candidate.epoch !== null && latest.epoch !== null && candidate.epoch !== latest.epoch) order = candidate.epoch - latest.epoch;
+      else if (candidate.epoch !== null && candidate.epoch === latest.epoch) {
+        if (candidate.index !== null && latest.index !== null && candidate.index !== latest.index) order = candidate.index - latest.index;
+        else if (candidate.step !== null && latest.step !== null && candidate.step !== latest.step) order = candidate.step - latest.step;
+      }
+    }
+    if (!latest || order > 0) latestByCamera.set(key, candidate);
+  };
   // Snapshots are harness renders too. Exclude model-input and perception artifacts.
-  for (const event of [...model.events].sort((a, b) => b.seq - a.seq)) {
-    if (event.event_type !== 'frame' && event.event_type !== 'observation_snapshot') continue;
-    const recordedCamera = object(event.data).camera;
-    if (camera && recordedCamera !== camera) continue;
-    const image = event.artifacts?.find(a => a.path && a.written !== false &&
-      (a.mime?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(a.path)));
-    if (image?.path) return { event, path: image.path, camera: typeof recordedCamera === 'string' ? recordedCamera : null };
-  }
-  // Older or partial records can retain a written frame reference without its
-  // separate frame event. Keep that reference anchored to the call that saved it.
-  for (const event of [...model.events].sort((a, b) => b.seq - a.seq)) {
+  for (const event of [...model.events].sort((a, b) => a.seq - b.seq)) {
     const data = object(event.data);
+    if (event.event_type === 'frame' || event.event_type === 'observation_snapshot') {
+      const image = event.artifacts?.find(a => a.path && a.written !== false &&
+        (a.mime?.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(a.path)));
+      const recordedCamera = data.camera ?? image?.camera;
+      if (image?.path) consider({ event, path: image.path, camera: typeof recordedCamera === 'string' ? recordedCamera : null,
+        epoch: number(data.epoch ?? event.sim_epoch), index: number(data.buffer_index), step: number(data.sim_step ?? event.sim_step) });
+    }
+    // Partial records can retain a written reference without its frame event.
+    // Compare these with explicit frames rather than using them only as a fallback.
     for (const value of [data.frame_ref, data.frame_refs]) {
       for (const ref of Array.isArray(value) ? value : [value]) {
         const image = object(ref);
-        if ((!camera || image.camera === camera) && typeof image.path === 'string' && image.written === true) {
-          return { event, path: image.path, camera: typeof image.camera === 'string' ? image.camera : null };
+        if (typeof image.path === 'string' && image.written === true) {
+          consider({ event, path: image.path, camera: typeof image.camera === 'string' ? image.camera : null,
+            epoch: number(image.epoch), index: number(image.buffer_index), step: number(image.frame_sim_step) });
         }
       }
     }
   }
-  return null;
+  return [...latestByCamera.values()].sort((a, b) => b.event.seq - a.event.seq)[0] ?? null;
 }
 export function trialSummaryFacts(model: EpisodeModel, summary: EpisodeSummary) {
   const ordered = [...model.events].sort((a, b) => a.seq - b.seq);
@@ -112,7 +132,7 @@ export function trialSummaryFacts(model: EpisodeModel, summary: EpisodeSummary) 
       const choice = recordedDecision(model, event);
       const label = choice === 'REGENERATE' ? '書き直し' : choice === 'FINISH' ?
         summary.end_classification?.reason === 'finish_unmet' && decision?.event.event_id === event.event_id ? END_LABELS.finish_unmet : '終了' :
-        isRecordedError(event) ? 'エラー' : null;
+        choice === '終了扱い' ? choice : isRecordedError(event) ? 'エラー' : null;
       if (label && labels[labels.length - 1] !== label) { labels.push(label); anchor = event; }
     }
     if (!labels.length) labels.push('実行');

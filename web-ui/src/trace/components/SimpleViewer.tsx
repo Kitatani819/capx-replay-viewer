@@ -22,7 +22,7 @@ export function SimplePicker({onPick, onDetails}: {onPick:(run:string,episode:st
   const rows = useMemo(() => (detail.data?.episodes ?? []).map(episode => ({episode, verdict: episodeVerdict(episode, detail.data?.runner_records ?? [])})), [detail.data]);
   const counts = rows.reduce((total, row) => ({...total, [row.verdict]: total[row.verdict] + 1}), {success:0, failure:0, unknown:0, running:0});
   return <div className="h-full overflow-auto p-6 max-w-4xl mx-auto">
-    <div className="flex items-center justify-between mb-4"><h1 className="text-xl font-semibold">見る試行を選ぶ</h1><SmallButton onClick={runs.reload}>一覧を更新</SmallButton></div>
+    <div className="flex items-center justify-between mb-4"><h1 className="text-xl font-semibold">見る試行を選ぶ</h1><SmallButton onClick={() => { runs.reload(); detail.reload(); }}>一覧を更新</SmallButton></div>
     <p className="text-sm text-text-tertiary mb-5">実験を選び、その中の試行を開いてください。</p>
     <label className="text-sm block mb-5">実験
       <select aria-label="実験を選ぶ" className="mt-2 block w-full bg-surface-raised border border-surface-border rounded-lg p-3" value={run ?? ''} onChange={e=>setRun(e.target.value||null)}>

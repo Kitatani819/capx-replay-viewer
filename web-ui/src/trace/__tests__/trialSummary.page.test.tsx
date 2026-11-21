@@ -24,7 +24,7 @@ test('summary event link selects that event, with ordinary anchor modifier behav
   const page = mount(TrialSummaryCard, { ep, model: buildEpisodeModel([error]), summary, verdict: 'failure' as const, onJump: (id: string) => { selected = id; } });
   const link = findAll(page.output, 'a').find(anchor => text(anchor) === 'ログで見る');
   assert.ok(link);
-  assert.equal(link!.props.href, '/traces?run=current&episode=trial&event=trial_1');
+  assert.equal(link!.props.href, '/traces?run=current&episode=trial&event=trial_1&site=b300');
   let prevented = false;
   const click = link!.props.onClick as (event: { button: number; ctrlKey?: boolean; preventDefault: () => void }) => void;
   click({ button: 0, ctrlKey: true, preventDefault: () => { prevented = true; } });

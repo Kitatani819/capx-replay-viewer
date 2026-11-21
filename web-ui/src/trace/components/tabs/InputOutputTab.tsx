@@ -96,7 +96,7 @@ export function RecordedModelOutput(props: TabProps) {
   const call = props.selection.node.call;
   if (!call) return <NotRecorded/>;
   const attempt = props.selection.attempt ?? mainAttempt(call);
-  const response = attempt?.responses[0];
+  const response = attempt?.responses.find(event => event.event_id === props.selection.eventId) ?? attempt?.responses[0];
   const data = dataOf(response, 'model_response');
   const outcome = callOutcome(call);
   const errors = [...(attempt?.errors ?? []), ...(attempt ? logicalErrorsOfAttempt(call, attempt) : call.logicalErrors)];
