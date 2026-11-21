@@ -121,6 +121,21 @@ def test_selected_same_code_baseline_itself_is_a_repeat_reference(tmp_path):
     assert [(item["side"], item["eval"]["eval_id"]) for item in references] == [("current", "ev-base")]
 
 
+def test_repeat_reference_chooses_newest_instant_across_time_zones(tmp_path):
+    import json
+    for eval_id, started_at in (("ev-original", "2026-11-19T00:00:00Z"),
+                                ("ev-older", "2026-11-20T12:00:00+09:00"),
+                                ("ev-newer", "2026-11-20T10:00:00Z")):
+        value = valid_record(eval_id)
+        value["started_at"] = started_at
+        run = write_record(tmp_path, value)
+        directory = run / "trial"
+        directory.mkdir()
+        (directory / "episode.json").write_text(json.dumps(metadata()), encoding="utf-8")
+    references = EvalService(tmp_path).detail("ev-original")["repeat_references"]
+    assert [item["eval"]["eval_id"] for item in references] == ["ev-newer"]
+
+
 def test_default_null_condition_can_identify_a_repeat():
     raw = metadata()
     raw["condition"] = None

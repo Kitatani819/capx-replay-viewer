@@ -5,7 +5,7 @@ async (p) => {
   const d = window.__demo;
   const B = 'button,[role="button"],[role="tab"]';
   await d.sleep(500);
-  await d.click(B, '詳細を見る', 1200);
+  await d.click(B, 'リプレイを見る', 1200);
   await d.click(B, p.apiCall, 900);
   await d.click(B, 'API/実行ログ', 1000);
   await d.click(B, p.serviceCall, 1000);

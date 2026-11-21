@@ -63,7 +63,7 @@ export function useMissingEpisodeImport(runId: string | null, episodeId: string 
           update(false, `同じ run ID が ${remoteName()} の複数の場所にあるため取り込めません。`); return;
         }
         const row = matches[0];
-        if (!row.size_approximate && row.size_bytes >= 1024 ** 3) { update(false, '1 GiB の上限を超えるため、この試行は自動で取り込めません。'); return; }
+        if (!row.size_approximate && row.size_bytes !== null && row.size_bytes >= 1024 ** 3) { update(false, '1 GiB の上限を超えるため、この試行は自動で取り込めません。'); return; }
         update(true, `GMOから取り込み中（${row.size_approximate ? '約 ' : ''}${fmtBytes(row.size_bytes)}）`);
         let jobId: string;
         try { jobId = (await gmoApi.fetch(runId, episodeId, signal)).job_id; }

@@ -57,6 +57,27 @@ def test_legacy_transfer_only_copies_approved_manifest(transfer):
     assert not (dest / "trial" / unlisted.name).exists()
 
 
+def test_legacy_cli_copies_zero_byte_changes(transfer, capsys):
+    transport, root, _run, dest = transfer
+    argv = ["--host", "alias", "--ssh", str(transport), "--traces", str(root), "--dest", str(dest.parent)]
+    assert gmo.main(argv) == 0
+    capsys.readouterr()
+    source = root / "run_a" / "trial"
+    heartbeat = source / "heartbeat"
+    heartbeat.touch()
+    assert gmo.main(argv) == 0
+    local = dest / "trial"
+    assert (local / "heartbeat").is_file()
+    capsys.readouterr()
+    stamp = int(heartbeat.stat().st_mtime) + 60
+    os.utime(heartbeat, (stamp, stamp))
+    (source / "new_empty").touch()
+    assert gmo.main(argv) == 0
+    assert "copy 0 B" in capsys.readouterr().out
+    assert int((local / "heartbeat").stat().st_mtime) == stamp
+    assert (local / "new_empty").is_file()
+
+
 def test_whole_second_copies_stay_imported(transfer, monkeypatch):
     # macOS's default rsync (and some filesystems) keep only whole-second mtimes.
     # A copy like that must still count as imported, or automatic imports would

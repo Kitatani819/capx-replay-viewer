@@ -21,6 +21,7 @@ Related: ``capx_trace_recorder/hooks/trial.py`` (installs H10 at episode start),
 from __future__ import annotations
 
 import functools
+import hashlib
 import sys
 import threading
 import time
@@ -62,7 +63,15 @@ def _camera_names(low_env: Any) -> tuple[str, str]:
     wrist = getattr(low_env, "_wrist_camera_name", None)
     if not isinstance(wrist, str) or not wrist:
         wrist = "wrist"
-    return sanitize_id(main), sanitize_id(wrist)
+    return main, wrist
+
+
+def _camera_storage_id(camera: str) -> str:
+    # Preserve ordinary paths; reserve the digest prefix so a literal camera
+    # name cannot collide with an encoded label.
+    if sanitize_id(camera) == camera and not camera.startswith("camera-sha256-"):
+        return camera
+    return "camera-sha256-" + hashlib.sha256(camera.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 class FrameTap:
@@ -191,12 +200,12 @@ class FrameTap:
             return []
         frame_step = state.steps[index] if index < len(state.steps) else None
         if isinstance(entry, dict):
-            items = [(sanitize_id(str(k)), v) for k, v in entry.items()]
+            items = [(str(k), v) for k, v in entry.items()]
         else:
             items = [(state.camera, entry)]
         refs = []
         for camera, frame in items:
-            path = f"frames/{camera}/e{state.epoch}_{index}.jpg"
+            path = f"frames/{_camera_storage_id(camera)}/e{state.epoch}_{index}.jpg"
             ref = {"epoch": state.epoch, "buffer_index": index, "camera": camera,
                    "frame_sim_step": frame_step, "path": path}
             refs.append(ref)

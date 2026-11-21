@@ -721,3 +721,19 @@ def test_finalizer_preserves_success_from_a_flushed_terminal_event(tmp_path):
     outcome = json.loads((directory / 'episode.json').read_text())['trial_outcome']
     assert outcome['task_success'] is True and outcome['resumable'] is False
     assert outcome['reason'] == 'terminal_event_recovered'
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires POSIX permission modes")
+def test_finalizer_preserves_episode_group_readability_under_private_umask(tmp_path):
+    directory = tmp_path / "ev-permissions" / "episode"
+    directory.mkdir(parents=True)
+    path = directory / "episode.json"
+    path.write_text(json.dumps({"episode_id": "episode", "episode_end_written": False}))
+    path.chmod(0o640)
+    previous_umask = os.umask(0o077)
+    try:
+        assert wrapper.finalize_trial_outcomes(tmp_path, "ev-permissions") == 1
+    finally:
+        os.umask(previous_umask)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert json.loads(path.read_text())["trial_outcome"]["task_success"] is False

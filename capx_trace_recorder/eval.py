@@ -238,6 +238,7 @@ def finalize_trial_outcomes(trace_root: Path, run_id: str) -> int:
                 try:
                     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IMODE(_st.st_mode), dir_fd=directory.fd)
                     with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                        os.fchmod(stream.fileno(), stat.S_IMODE(_st.st_mode))
                         json.dump(raw, stream, ensure_ascii=True)
                         stream.write("\n")
                     os.replace(temporary, "episode.json", src_dir_fd=directory.fd, dst_dir_fd=directory.fd)

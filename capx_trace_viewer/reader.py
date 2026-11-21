@@ -624,7 +624,7 @@ def _read_events_page_fd(fd: int, after_offset: int, max_bytes: int, max_events:
 
     def consume(line: bytes, offset: int) -> None:
         nonlocal n_corrupt
-        parsed = parse_event_line(line)
+        parsed = parse_event_line(line) if len(line) <= MAX_LINE_BYTES else None
         if parsed is None:
             n_corrupt += 1
             if len(corrupt_offsets) < MAX_CORRUPT_OFFSETS:

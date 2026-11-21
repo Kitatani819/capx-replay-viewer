@@ -102,7 +102,7 @@ def screenshots(browser, base: str, args: argparse.Namespace) -> None:
         page.get_by_role("button", name=tab, exact=True).click()
         page.wait_for_timeout(700)
         shot(name)
-    page.get_by_role("button", name="詳細を見る").click()
+    page.get_by_role("button", name="リプレイを見る").click()
     page.wait_for_timeout(2000)
     # The shortest matching element is the timeline card of the call, not a code block
     # whose source mentions the same name (same rule as demo_helpers.js).
@@ -130,10 +130,10 @@ def encode(raw: Path, start: float, end: float, out_mp4: Path, out_gif: Path) ->
 
 def main() -> None:
     args = parse_args()
-    base = args.base_url.rstrip("/") + "/traces"
+    base = args.base_url.rstrip("/") + "/traces?view=simple"
     jobs = {
         "simple": (base, HERE / "scenario_simple.js"),
-        "details": (base + "?" + urlencode({"run": args.run, "episode": args.episode}),
+        "details": (base + "&" + urlencode({"run": args.run, "episode": args.episode}),
                     HERE / "scenario_details.js"),
     }
     params = {"run": args.run, "trialLabel": args.trial_label, "blockLabel": args.block_label,

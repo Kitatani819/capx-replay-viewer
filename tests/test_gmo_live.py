@@ -58,7 +58,7 @@ def _cycle(service):
 def test_start_renew_replace_and_changed_files(manual, monkeypatch):
     service, episode, remote = manual
     assert set(service.live_status()) == {
-        "following", "run_id", "episode_id", "last_ok_at", "last_error", "interval_s", "copied_bytes", "stopped_reason"}
+        "following", "run_id", "episode_id", "last_ok_at", "last_error", "interval_s", "copied_bytes", "stopped_reason", "lease_token"}
     live = service._live
     first = _cycle(service)
     local_events = service.dest / "run_a" / "ep_1" / "events.jsonl"
