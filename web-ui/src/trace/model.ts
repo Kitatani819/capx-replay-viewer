@@ -70,6 +70,9 @@ export interface LogicalCall {
   callKind: string;
   turnIndex: number | null;
   model: string | null;
+  /** Parallel reasoning: this candidate's 1-based position and its group's size (ensemble members only). */
+  ensembleIndex?: number;
+  ensembleSize?: number;
   attempts: Attempt[];
   /** `model_error` with scope `logical`: the call's final failure (after all attempts). */
   logicalErrors: TraceEvent[];
@@ -639,6 +642,7 @@ export function buildEpisodeModel(input: TraceEvent[]): EpisodeModel {
     }
   }
   calls.sort((a, b) => a.node.seq - b.node.seq);
+  numberEnsembleMembers(calls);
 
   // Pass 4: parents.
   for (const n of allNodes) {
@@ -1244,11 +1248,46 @@ export function camerasOf(model: EpisodeModel): string[] {
 // Display helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Numbers the candidates of each parallel-reasoning group (calls sorted by seq).
+ * A group is the members of one turn up to that turn's synthesis.
+ */
+function numberEnsembleMembers(calls: LogicalCall[]): void {
+  const open = new Map<string, LogicalCall[]>();
+  const close = (key: string) => {
+    const group = open.get(key);
+    if (!group) return;
+    group.forEach((call, i) => { call.ensembleIndex = i + 1; call.ensembleSize = group.length; });
+    open.delete(key);
+  };
+  for (const call of calls) {
+    const key = String(call.turnIndex);
+    if (call.callKind === 'ensemble_member') {
+      const group = open.get(key);
+      if (group) group.push(call);
+      else open.set(key, [call]);
+    } else if (call.callKind === 'ensemble_synthesis') {
+      close(key);
+    }
+  }
+  for (const key of Array.from(open.keys())) close(key);
+}
+
+/** Team name for a parallel-reasoning call; null for other calls. */
+export function parallelReasoningTitle(call: LogicalCall, withIndex = true): string | null {
+  if (call.callKind === 'ensemble_synthesis') return 'パラレルリーズニング：統合';
+  if (call.callKind !== 'ensemble_member') return null;
+  return withIndex && call.ensembleIndex !== undefined && call.ensembleSize !== undefined
+    ? `パラレルリーズニング：候補 ${call.ensembleIndex}/${call.ensembleSize}`
+    : 'パラレルリーズニング：候補';
+}
+
 export function nodeTitle(n: TNode): string {
   switch (n.kind) {
     case 'model_call': {
       const c = n.call;
-      return c ? `${c.role}${c.callKind ? ` · ${c.callKind}` : ''}` : 'model call';
+      if (!c) return 'model call';
+      return parallelReasoningTitle(c) ?? `${c.role}${c.callKind ? ` · ${c.callKind}` : ''}`;
     }
     case 'code_block': {
       const d = dataOf(n.primary, 'code_block_start');
