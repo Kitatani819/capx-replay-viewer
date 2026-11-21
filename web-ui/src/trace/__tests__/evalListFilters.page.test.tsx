@@ -45,11 +45,11 @@ function ids(page: Page): string[] {
   const tables = findAll(page.output, EvalListTable);
   return tables.length ? (tables[0].props.entries as EvalListEntry[]).map(item => item.eval_id) : [];
 }
-async function open(url = '/evals', entries = fixtures()): Promise<Page> {
+async function open(url = '/evals', entries = fixtures(), names: Record<string, string> = {}): Promise<Page> {
   resetBrowser();
   clock.now = new Date(2026, 10, 21, 12).getTime();
   setLocation(url);
-  net.handler = req => req.path.endsWith('/evals') ? { json: { evals: entries } } : null;
+  net.handler = req => req.path.endsWith('/evals') ? { json: { evals: entries, names } } : null;
   const page = mount(EvalListPage, {});
   await advance(100);
   return page;
@@ -348,4 +348,27 @@ test('evaluation literal reserved person and task names stay distinct from all a
   assert.equal(control(restored.output, '実行者').props.value, 'value:mine');
   assert.equal(control(restored.output, 'タスク').props.value, 'value:all');
   restored.unmount();
+});
+
+
+test('evaluation runner options show names while filter values and keyword search retain account IDs', async () => {
+  const entries = [entry('named', 21, 'user_00099_test', ['cube']), entry('fallback', 21, 'user_00098_test', ['cube'])];
+  const names = { user_00099_test: '山田太郎' };
+  const page = await open('/evals?site=rtx', entries, names);
+  const options = findAll(control(page.output, '実行者'), 'option');
+  assert.ok(options.some(option => option.props.value === 'user_00099_test' && text(option) === '山田太郎'));
+  assert.ok(options.some(option => option.props.value === 'user_00098_test' && text(option) === 'user_00098_test'));
+  assert.deepEqual(findAll(page.output, EvalListTable)[0].props.names, names);
+  await change(page, '実行者', 'user_00099_test');
+  assert.deepEqual(ids(page), ['named']);
+  assert.equal(currentParams().get('by'), 'user_00099_test');
+  await change(page, '実行者', 'all');
+  for (const q of ['山田', 'USER_00099_TEST']) {
+    await change(page, 'キーワード', q);
+    assert.deepEqual(ids(page), ['named']);
+  }
+  await change(page, 'キーワード', 'user_00098_test');
+  assert.deepEqual(ids(page), ['fallback']);
+  assert.ok(net.log.every(req => req.path === '/api/sites/rtx/evals'));
+  page.unmount();
 });

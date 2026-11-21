@@ -72,6 +72,18 @@ hype-agent以外でCaP-Xを直接動かす場合は、従来どおり[記録器�
 
 記録器を通した評価の開始時と終了時に、全員の結果を1ファイルにまとめた `~/shared-storage/traces/index.html` も更新します。同じ共有先の `submission_evals/_viewer` にある提出の形の評価（経路 B）も含みます。提出の形の評価を書き出す側で、評価の終わりに `index` コマンドを実行すれば、すぐ一覧に入ります（チームの評価スクリプトでは実行しています）。それ以外は、次の再生成時（記録器を通した評価の開始・終了時、または `index` コマンド）に一覧へ反映します。GMO上で直接開くかPCへコピーすると、Viewerを起動せず一覧を読めます。失敗した試行はViewerで開けます。手動の再生成は `python -m capx_trace_recorder index --root ~/shared-storage/traces`、経路 B を含めずに再生成する場合は `--submission-root ''` を付けます。自動更新の停止は `CAPX_EVAL_INDEX=0` または `eval --no-index` です（[HTML一覧の使い方](docs/evals.md#viewerを起動せず一覧を見る)）。
 
+### 実行者を名前で表示する
+
+チームだけが読める共有フォルダーの直下に `names.json` を作ると、評価一覧・評価の詳細・GMOの試行一覧でアカウントIDを名前に置き換えます。GMOでは設定の `shared_root`（既定は `~/shared-storage/traces`）直下、ローカルやRTXではそのサイトのトレースルート直下に置きます。内容はアカウントIDと表示名を対応させるJSONオブジェクトです（次は架空の例です）。
+
+```json
+{"user_00099_test": "山田太郎"}
+```
+
+作成時は `umask 027` を設定し、保存後の権限を `chmod 0640 names.json`（チームで編集する場合は `0660`）にしてください。個人情報を含むため、ファイルも生成した名前入りHTMLもチーム専用の共有フォルダーだけで管理し、全員が読める権限にせず、公開リポジトリへコミットしないでください。
+
+通常のファイルのみ読み込み、シンボリックリンクや64 KiBを超えるファイル、不正・読み取り不能なJSONは無視します。IDと名前は前後の空白を除いて1〜200文字の文字列にします。未登録のIDはそのまま表示し、名前にマウスを重ねるとIDを確認できます。GMOでは `shared_root`、`submission_root` の順に読み、同じIDは先の設定を使います。Viewerは次の一覧更新で、HTML一覧は次の再生成で反映します。すぐHTMLへ反映する場合は `python -m capx_trace_recorder index --root ~/shared-storage/traces` を実行してください。
+
 ## 対応環境
 
 | サーバーを動かす環境 | 起動方法 |

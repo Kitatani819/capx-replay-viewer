@@ -30,6 +30,7 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
     await gmoApi.live(controller.signal);
     await gmoApi.follow('run_a', 'ep_1', controller.signal);
     await gmoApi.listingStatus(controller.signal);
+    await gmoApi.names(controller.signal);
     assert.deepEqual(calls.map(call => [call.init.method, call.url]), [
       ['GET', '/api/gmo/config'],
       ['PUT', '/api/gmo/config'],
@@ -43,6 +44,7 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
       ['GET', '/api/gmo/live'],
       ['POST', '/api/gmo/live'],
       ['GET', '/api/gmo/listing-status'],
+      ['GET', '/api/gmo/names'],
     ]);
     for (const { init } of calls) {
       const headers = new Headers(init.headers);
@@ -77,7 +79,7 @@ test('GMO route-not-found answers identify a disabled integration on every endpo
       () => gmoApi.episodes(), () => gmoApi.fetch('r', 'e'), () => gmoApi.jobs(),
       () => gmoApi.auto(), () => gmoApi.setAutoPaused(false),
       () => gmoApi.live(), () => gmoApi.follow('r', 'e'),
-      () => gmoApi.listingStatus(),
+      () => gmoApi.listingStatus(), () => gmoApi.names(),
     ];
     for (const call of calls) {
       await assert.rejects(call, (error: unknown) => {

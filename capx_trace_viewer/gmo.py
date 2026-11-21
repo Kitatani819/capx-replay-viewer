@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from capx_trace_recorder.names import validate_names
+
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_DEST = PROJECT_DIR / "outputs" / "gmo" / "traces"
 DEFAULT_MAX_GB = 1.0
@@ -525,7 +527,7 @@ class ProcessRunner:
 REMOTE_EPISODE_LISTER = r"""
 import errno, glob, hashlib, json, os, pwd, re, stat, sys, time
 
-def read_json(path, strict=False):
+def read_json(path, strict=False, max_bytes=256 * 1024):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0)
                      | getattr(os, 'O_NONBLOCK', 0))
@@ -533,13 +535,13 @@ def read_json(path, strict=False):
             st = os.fstat(fd)
             if not stat.S_ISREG(st.st_mode):
                 return None, 'not_a_regular_file', None
-            if st.st_size > 256 * 1024:
+            if st.st_size > max_bytes:
                 return None, 'too_large', st.st_mtime
             with os.fdopen(fd, 'rb', closefd=False) as stream:
-                data = stream.read(256 * 1024 + 1)
+                data = stream.read(max_bytes + 1)
         finally:
             os.close(fd)
-        if len(data) > 256 * 1024:
+        if len(data) > max_bytes:
             return None, 'too_large', st.st_mtime
         try:
             replacements = {'NaN': 'nan', 'Infinity': 'inf', '-Infinity': '-inf'}
@@ -554,6 +556,18 @@ def read_json(path, strict=False):
         return None, 'missing', None
     except OSError as exc:
         return None, 'not_a_regular_file' if exc.errno == errno.ELOOP else 'unreadable', None
+
+def read_names(root):
+    value, error, _ = read_json(os.path.join(root, 'names.json'), strict=True, max_bytes=64 * 1024)
+    if error or not isinstance(value, dict):
+        return {}
+    result = {}
+    for key, name in value.items():
+        if isinstance(key, str) and isinstance(name, str):
+            key, name = key.strip(), name.strip()
+            if 0 < len(key) <= 200 and 0 < len(name) <= 200:
+                result[key] = name
+    return result
 
 def regular(path):
     try:
@@ -682,6 +696,11 @@ run_ids = config.get('run_ids')
 previous = {(path, episode): (fingerprint, directories) for path, episode, fingerprint, directories in config.get('previous', [])}
 shared_roots = [os.path.realpath(os.path.expanduser(config[key]))
                 for key in ('shared_root', 'submission_root') if config[key]]
+runner_names = {}
+for root in shared_roots:
+    if os.path.isdir(root):
+        for account, name in read_names(root).items():
+            runner_names.setdefault(account, name)
 if shared_roots:
     # Resolve ssh aliases' User on the remote host during this same listing.
     username = config['username'] or pwd.getpwuid(os.geteuid()).pw_name
@@ -797,7 +816,7 @@ remote_now = time.time()
 for row in out + evals:
     row['conflict'] = len(run_paths[row['run_id']]) > 1
     row['remote_now'] = remote_now
-print(json.dumps({'episodes': out, 'evals': evals}, ensure_ascii=True))
+print(json.dumps({'episodes': out, 'evals': evals, 'names': runner_names}, ensure_ascii=True))
 """
 
 
@@ -914,13 +933,13 @@ def list_remote_episodes(runner: ProcessRunner, settings: GmoSettings, *,
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
                          metadata_only: bool = False,
-                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, Any]:
     return _list_remote_records(runner, settings, include_files=include_files, mine_only=mine_only,
                                 run_ids=run_ids, previous=previous, metadata_only=metadata_only,
                                 timeout=timeout)
 
 
-def list_remote_evals(runner: ProcessRunner, settings: GmoSettings) -> dict[str, list[dict[str, Any]]]:
+def list_remote_evals(runner: ProcessRunner, settings: GmoSettings) -> dict[str, Any]:
     """Read only bounded eval.json records; never enumerate episode directories."""
     return _list_remote_records(runner, settings, eval_only=True)
 
@@ -930,7 +949,7 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
                          run_ids: tuple[str, ...] | None = None,
                          previous: dict[str, Any] | None = None,
                          metadata_only: bool = False,
-                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, list[dict[str, Any]]]:
+                         timeout: float = LISTING_TIMEOUT_S) -> dict[str, Any]:
     if include_files and metadata_only:
         raise FetchError("An exact manifest cannot be metadata-only")
     if not settings.configured:
@@ -968,7 +987,7 @@ def _list_remote_records(runner: ProcessRunner, settings: GmoSettings, *, includ
     return validate_remote_listing(listing, include_files=include_files)
 
 
-def validate_remote_listing(listing: Any, *, include_files: bool = False) -> dict[str, list[dict[str, Any]]]:
+def validate_remote_listing(listing: Any, *, include_files: bool = False) -> dict[str, Any]:
     """Apply the same validation to transport replies and private disk caches."""
     if (not isinstance(listing, dict) or not isinstance(listing.get("episodes"), list)
             or not isinstance(listing.get("evals"), list)):
@@ -1031,7 +1050,7 @@ def validate_remote_listing(listing: Any, *, include_files: bool = False) -> dic
         valid_evals.append(row)
     for row in valid + valid_evals:
         row["conflict"] = bool(row.get("conflict")) or len(locations[row["run_id"]]) > 1
-    return {"episodes": valid, "evals": valid_evals}
+    return {"episodes": valid, "evals": valid_evals, "names": validate_names(listing.get("names"))}
 
 
 def local_episode_stats(episode: Path) -> tuple[int, int, float | None, str] | None:

@@ -28,6 +28,7 @@ from urllib.parse import urlsplit, urlunsplit
 from capx_trace_recorder.evaluation_failure import (
     evaluation_failure, failure_description, preserve_evaluation_failure,
 )
+from capx_trace_recorder.names import read_names
 
 MAX_EVAL_BYTES = 256 * 1024
 HEARTBEAT_STALE_S = 300
@@ -589,7 +590,7 @@ def _status(record: dict[str, Any], now: dt.datetime) -> str:
 
 
 def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer_url: str,
-            now: dt.datetime) -> str:
+            now: dt.datetime, names: dict[str, str] | None = None) -> str:
     # Ambiguous IDs must not produce a misleading baseline comparison.
     by_id: dict[str, list[dict[str, Any]]] = {}
     for record in records:
@@ -611,10 +612,13 @@ def _render(records: list[dict[str, Any]], errors: list[tuple[str, str]], viewer
         eval_set = _escape(record.get("eval_set") or "—")
         if record.get("_index_route_b"):
             eval_set += '<small class="route-tag">提出の形（経路 B）</small>'
+        account = record.get("by") or ""
+        name = (names or {}).get(account)
+        runner = f'<span title="{_escape(account)}">{_escape(name)}</span>' if name else _escape(account or "—")
         cells = [
             f'<time datetime="{_escape(record["started_at"])}">{_escape(_time(record["started_at"]).astimezone(JST).strftime("%Y-%m-%d %H:%M:%S"))}</time>'
             f'<small class="eval-id">{_escape(identity)}</small>',
-            _escape(record.get("by") or "—"), _escape(record.get("changed") or "—"),
+            runner, _escape(record.get("changed") or "—"),
             eval_set, _status(record, now), _score(summary),
             _escape(_duration(record, now)), _escape(commit), baseline_html,
             f'<a href="{link}">Viewerで開く</a>',
@@ -710,7 +714,7 @@ def build_index(root: Path, out: Path | None = None,
                         errors.extend((f"submission_evals/_viewer/{path}", reason)
                                       for path, reason in submission_errors)
                 records.sort(key=lambda item: (_time(item["started_at"]), item["eval_id"]), reverse=True)
-                page = _render(records, errors, viewer_url, dt.datetime.now(dt.timezone.utc))
+                page = _render(records, errors, viewer_url, dt.datetime.now(dt.timezone.utc), read_names(root))
                 temporary = f".{out.name}.{os.urandom(12).hex()}.tmp"
                 created = False
                 try:
