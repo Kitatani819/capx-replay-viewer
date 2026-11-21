@@ -83,6 +83,45 @@ test('an opened API card shows the definition first and keeps argument values in
   assert.match(other, /<\/details><div class="text-\[11px\] font-mono text-red-300[^>]*>✕ RuntimeError: error-marker/);
 });
 
+test('an opened API card shows its recorded signature and doc above the closed value toggle', () => {
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null, 'grasp_widget(label)');
+  const api = r.apiStart(block, 'grasp_widget', { label: 'recorded-label' }, null, {
+    signature: '(label: str, *, safe: bool = True) -> bool',
+    doc: 'Grasp the requested widget safely.',
+  });
+  r.apiEnd(api, 'recorded-result');
+  const model = buildEpisodeModel(r.events);
+  const node = model.nodeOfEvent.get(api.event_id)!;
+  const html = renderToStaticMarkup(<Timeline model={model} ep={{ runId: 'run', episodeId: 'ep' }} running={false}
+    selectedKey={node.key} selectedEventId={api.event_id} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  assert.match(html, /data-api-signature="" title="Grasp the requested widget safely\.">grasp_widget\(label: str, \*, safe: bool = True\) -&gt; bool<\/div>/);
+  assert.match(html, /class="text-\[10px\] text-text-muted truncate" data-api-doc="" title="Grasp the requested widget safely\.">Grasp the requested widget safely\.<\/div>/);
+  assert.doesNotMatch(html, /定義は未登録/);
+  const toggle = html.match(/<details[^>]*data-api-values=""[^>]*>[\s\S]*?<\/details>/)?.[0] ?? '';
+  assert.ok(toggle, 'the recorded values remain in their own toggle');
+  assert.doesNotMatch(toggle, /<details[^>]*\bopen(?:=|\s|>)/);
+  assert.match(toggle, /引数と戻り値/);
+  assert.match(toggle, /label = &quot;recorded-label&quot;/);
+  assert.match(toggle, /→ &quot;recorded-result&quot;/);
+  assert.ok(html.indexOf('data-api-doc') < html.indexOf('data-api-values'));
+});
+
+test('a recorded signature overrides the reference signature and retains its Japanese summary title', () => {
+  const r = new Rec(); r.episodeStart();
+  const block = r.blockStart(null, 'goto_pose(target)');
+  const api = r.apiStart(block, 'goto_pose', { target: 'widget' }, null, {
+    signature: '(target: str) -> bool', doc: 'Move to the widget target.',
+  });
+  const model = buildEpisodeModel(r.events);
+  const node = model.nodeOfEvent.get(api.event_id)!;
+  const html = renderToStaticMarkup(<Timeline model={model} ep={{ runId: 'run', episodeId: 'ep' }} running={false}
+    selectedKey={node.key} selectedEventId={api.event_id} onSelect={() => {}} scrollToken={0} showTaskText={false} />);
+  assert.match(html, /data-api-signature="" title="逆運動学を使ってロボットの手先を指定した位置・姿勢へ移動します。">goto_pose\(target: str\) -&gt; bool<\/div>/);
+  assert.match(html, /data-api-doc="" title="Move to the widget target\.">Move to the widget target\./);
+  assert.doesNotMatch(html, /goto_pose\(position: np\.ndarray/);
+});
+
 test('parallel reasoning candidates fold into one closed row that opens for a selected candidate', () => {
   const r = new Rec();
   r.episodeStart();

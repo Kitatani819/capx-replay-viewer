@@ -1295,6 +1295,8 @@ class EpisodeBuilder:
         line: int | None = None,
         source_line: str | None = None,
         qualname_owner: str = "FrankaControlApiReduced",
+        signature: str | None = None,
+        doc: str | None = None,
     ) -> dict[str, Any]:
         depth = len(self.api_stack)
         parent = self.api_stack[-1] if self.api_stack else block
@@ -1320,6 +1322,8 @@ class EpisodeBuilder:
             "state_ref": self.state_ref(scene) if depth == 0 else None,
             "units": UNITS.get(name),
         }
+        if signature is not None or doc is not None:
+            data.update(signature=signature, doc=doc)
         event = self.emit(
             "api_call_start",
             "started",
@@ -2353,6 +2357,8 @@ def build_episode_a(run_dir: Path, now: float) -> EpisodeBuilder:
         line=block1_line('    verify_demo_alignment("red cube", "green cube")'),
         source_line='    verify_demo_alignment("red cube", "green cube")',
         qualname_owner="FrankaControlApiReducedSkillLibrary",
+        signature="(top: str, bottom: str) -> None",
+        doc="Check that the contact points between two stacked objects are within 2 mm.",
     )
     ep.api_end(call, scene=scene, error=("ValueError", ALIGNMENT_MESSAGE, TRACEBACK_ALIGNMENT), duration_s=0.05)
     ep.print_out(f"alignment check failed: {ALIGNMENT_MESSAGE[:60]}\n")

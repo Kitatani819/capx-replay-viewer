@@ -507,6 +507,8 @@ export interface ApiCallStartData {
   api_call_id?: string | null;
   name?: string | null;
   qualname?: string | null;
+  signature?: string | null;
+  doc?: string | null;
   api_class?: string | null;
   depth?: number | null;
   privileged?: boolean | null;

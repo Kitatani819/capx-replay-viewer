@@ -48,7 +48,12 @@ export function RecordedApiDetails({ node, ep, ...access }: { node: TNode; ep: E
         <pre>{definition.signature}</pre>
         <a href={definition.sourceUrl} target="_blank" rel="noreferrer">{definition.sourceLabel}</a>
         <p className="api-python-muted">{definition.scopeNote}</p>
-      </> : <p>説明未登録</p>}
+      </> : !start.signature && <p>説明未登録</p>}
+      {start.signature && <>
+        <pre>{`${apiName(node)}${start.signature}`}</pre>
+        {start.doc && <p>{start.doc}</p>}
+        <p className="api-python-muted">この試行で記録された定義です。</p>
+      </>}
     </section>
     <section data-api-recorded-evidence="">
       <h4>今回の実行ログ</h4>
@@ -150,7 +155,7 @@ export function ApiPythonPanel({ model, ep, apiCues, selectedKey, onSelect, turn
 
   const preview = (node: TNode, target: HTMLButtonElement) => {
     const box = target.getBoundingClientRect();
-    setHover({ key: node.key, text: apiDefinition(node)?.summaryJa ?? '説明未登録',
+    setHover({ key: node.key, text: apiDefinition(node)?.summaryJa ?? dataOf(node.primary, 'api_call_start').doc ?? '説明未登録',
       left: Math.max(12, Math.min(box.left, (window.innerWidth || 1024) - 370)),
       top: Math.max(12, Math.min(box.bottom + 6, (window.innerHeight || 768) - 110)) });
   };

@@ -100,7 +100,8 @@ def build(root: Path, *, evals: bool = False, camera_count: int = 1) -> dict:
             latency_s=.2,http_attempts=[{"status":200,"latency_s":.2,"error":None}])
         ids[f"sam_{turn}"]=service["parent_event_id"]
         ep.api_end(api,scene=scene,result={"detected":True},duration_s=.2)
-        move=ep.api_start("goto_pose",{"position":target.tolist()},block=block,scene=scene,line=3,source_line=code.splitlines()[2])
+        move=ep.api_start("goto_pose",{"position":target.tolist()},block=block,scene=scene,line=3,source_line=code.splitlines()[2],
+            signature="(position: list[float]) -> None",doc="Move the synthetic gripper to the requested position.")
         sim_start=ep.sim_step
         origin=scene.gripper.copy()
         for i in range(1,61):

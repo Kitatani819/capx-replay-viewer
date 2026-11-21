@@ -995,10 +995,16 @@ function apiArgumentLines(args: unknown): string[] {
   return entries.map(([key, value]) => (key === '<truncated>' ? '…（記録上限のため、ほかの引数は省略）' : `${key} = ${valueSummary(value, 240)}`));
 }
 
-/** The API's definition: the registered CaP-X signature, else the name with the recorded argument names. */
+/** Prefer the definition recorded for this call, then the registered CaP-X definition. */
 function ApiSignature({ node }: { node: TNode }) {
   const d = dataOf(node.primary, 'api_call_start');
   const definition = apiDefinition(node);
+  if (d.signature) {
+    return <>
+      <div className="text-[12px] font-mono text-text-primary break-all" data-api-signature="" title={definition?.summaryJa ?? d.doc ?? undefined}>{`${d.name ?? d.qualname ?? 'API'}${d.signature}`}</div>
+      {d.doc && <div className="text-[10px] text-text-muted truncate" data-api-doc="" title={d.doc}>{d.doc}</div>}
+    </>;
+  }
   if (definition) {
     return <div className="text-[12px] font-mono text-text-primary break-all" data-api-signature="" title={definition.summaryJa}>{definition.signature}</div>;
   }
