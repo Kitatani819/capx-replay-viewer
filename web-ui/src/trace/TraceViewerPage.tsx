@@ -519,6 +519,7 @@ export default function TraceViewerPage() {
   const compareHref = runId && episodeId && baseline && evaluation.data?.baseline
     ? comparisonUrl(runId, episodeId, evaluation.data.baseline.eval_id, baseline.episode_id, camera) : undefined;
   const breadcrumbs = showLegacy ? [
+    { label: '評価一覧', href: '/evals' },
     { label: '試行を選ぶ', href: '/traces' },
     { label: legacyRun, href: `/traces?${new URLSearchParams({ legacy_run: legacyRun })}` },
     { label: `${legacyTrial.task} · ${legacyTrial.trialDir}` },

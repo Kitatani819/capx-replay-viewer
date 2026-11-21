@@ -42,7 +42,8 @@ export function trialBreadcrumbs({ runId, episodeId, evaluation, task, seed, com
     ? [{ label: '評価一覧', href: '/evals' }, { label: evaluationTitle(evaluation), href: `/evals/${encodeURIComponent(evaluation.eval_id)}` }]
     : looksLikeEval
       ? [{ label: '評価一覧', href: '/evals' }, { label: runId!, href: `/evals/${encodeURIComponent(runId!)}` }]
-      : [{ label: '試行を選ぶ', href: '/traces' }];
+      // Every trail starts at the evaluation list, so the trial list can always get back to it.
+      : [{ label: '評価一覧', href: '/evals' }, { label: '試行を選ぶ', href: '/traces' }];
   if (!evaluation && !looksLikeEval && runId) items.push({ label: runId, href: `/traces?${new URLSearchParams({ run: runId })}` });
   if (runId && episodeId) items.push({
     label: `${task || episodeId}${typeof seed === 'number' ? ` · seed ${seed}` : ''}`,

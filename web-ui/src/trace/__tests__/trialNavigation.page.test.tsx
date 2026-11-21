@@ -75,6 +75,7 @@ test('non-evaluation trial uses picker/run ancestors and hides the baseline acti
   const page = mount(TraceViewerPage, {}); await advance(100);
   const crumbs = propsOf<CrumbProps>(page.output, Breadcrumb);
   assert.deepEqual(crumbs.items, [
+    { label: '評価一覧', href: '/evals' },
     { label: '試行を選ぶ', href: '/traces' },
     { label: 'current', href: '/traces?run=current' },
     { label: 'cube · seed 7' },
@@ -106,18 +107,20 @@ test('legacy trial uses the shared picker/run breadcrumb and does not invent an 
   resetBrowser(); setLocation('/traces?legacy_run=old&legacy_trial=cube/C/trial_7');
   const page = mount(TraceViewerPage, {}); await advance(100);
   const items = propsOf<CrumbProps>(page.output, Breadcrumb).items;
-  assert.deepEqual(items[0], { label: '試行を選ぶ', href: '/traces' });
-  assert.equal(items[1].label, 'old');
-  assert.equal(new URL(items[1].href!, 'http://localhost').searchParams.get('legacy_run'), 'old');
-  assert.match(items[2].label, /cube/);
-  assert.match(items[2].label, /trial_7/);
-  assert.ok(!items.some(item => item.href?.startsWith('/evals')));
+  assert.deepEqual(items[0], { label: '評価一覧', href: '/evals' });
+  assert.deepEqual(items[1], { label: '試行を選ぶ', href: '/traces' });
+  assert.equal(items[2].label, 'old');
+  assert.equal(new URL(items[2].href!, 'http://localhost').searchParams.get('legacy_run'), 'old');
+  assert.match(items[3].label, /cube/);
+  assert.match(items[3].label, /trial_7/);
+  assert.equal(items.filter(item => item.href?.startsWith('/evals')).length, 1);
   page.unmount();
 });
 
 test('picker screen has one shared current-page crumb', async () => {
   resetBrowser(); const page = mount(TraceViewerPage, {}); await advance(100);
-  assert.deepEqual(propsOf<CrumbProps>(page.output, Breadcrumb).items, [{ label: '試行を選ぶ' }]);
+  // The trial list always links back to the evaluation list.
+  assert.deepEqual(propsOf<CrumbProps>(page.output, Breadcrumb).items, [{ label: '評価一覧', href: '/evals' }, { label: '試行を選ぶ' }]);
   page.unmount();
 });
 
@@ -138,7 +141,8 @@ test('switching runs drops the previous evaluation title and baseline action whi
   assert.ok(!propsOf<BarProps>(page.output, TopBar).compareHref);
   await advance(500);
   const items = propsOf<CrumbProps>(page.output, Breadcrumb).items;
-  assert.equal(items[1].label, 'other');
-  assert.deepEqual(items[2], { label: 'drawer · seed 0' });
+  assert.deepEqual(items.slice(0, 2).map(item => item.label), ['評価一覧', '試行を選ぶ']);
+  assert.equal(items[2].label, 'other');
+  assert.deepEqual(items[3], { label: 'drawer · seed 0' });
   page.unmount();
 });
