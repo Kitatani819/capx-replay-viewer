@@ -1622,7 +1622,8 @@ def unscoped_summary_at(
             "liveness_source": "file_mtime" if mtime is not None else "none",
             "last_modified": mtime,
             "events_bytes": events_st.st_size if events_st else None,
-            "pid": int(log_id.split(".", 1)[1]),
+            # ``unscoped.<pid>`` (legacy) or ``unscoped.<pid>.<instance>`` (per process instance).
+            "pid": int(log_id.split(".")[1]),
             "episode": None,
             "episode_json_error": None,
             "files_dir": unscoped_files_dir(log_id),
