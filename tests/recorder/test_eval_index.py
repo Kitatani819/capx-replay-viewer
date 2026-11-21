@@ -87,6 +87,56 @@ def page(root, **kwargs):
     return out.read_text(encoding="utf-8")
 
 
+def test_runner_names_apply_to_trace_and_submission_rows(tmp_path):
+    root = tmp_path / "traces"
+    account = "user_00099_test"
+    save(root, record(by=account))
+    save(tmp_path / "submission_evals" / "_viewer", submission_record(by=account))
+    names = root / "names.json"
+    names.write_text(json.dumps({account: "山田太郎"}), encoding="utf-8")
+    html = page(root)
+    assert Markup(html).cells.count("山田太郎") == 2
+    assert html.count(f'<span title="{account}">山田太郎</span>') == 2
+    names.unlink()
+    assert Markup(page(root)).cells.count(account) == 2
+
+
+def test_runner_name_and_id_are_escaped(tmp_path):
+    account = 'user_00099_test"<&'
+    name = '<script>alert("fake")</script>&'
+    save(tmp_path, record(by=account))
+    (tmp_path / "names.json").write_text(json.dumps({account: name}), encoding="utf-8")
+    html = page(tmp_path)
+    assert '<span title="user_00099_test&quot;&lt;&amp;">&lt;script&gt;alert(&quot;fake&quot;)&lt;/script&gt;&amp;</span>' in html
+    assert name in Markup(html).cells
+    assert account in Markup(html).titles
+    assert "<script>" not in html
+
+
+@pytest.mark.parametrize("kind", ["missing", "invalid", "array", "oversize", "symlink", "directory", "fifo"])
+def test_names_file_failures_keep_the_html_listing_usable(tmp_path, kind):
+    account = "user_00099_test"
+    save(tmp_path, record(by=account))
+    path = tmp_path / "names.json"
+    if kind == "invalid":
+        path.write_text("{invalid", encoding="utf-8")
+    elif kind == "array":
+        path.write_text("[]", encoding="utf-8")
+    elif kind == "oversize":
+        path.write_text(json.dumps({account: "山田太郎"}) + " " * (64 * 1024), encoding="utf-8")
+    elif kind == "symlink":
+        target = tmp_path / "private.json"
+        target.write_text(json.dumps({account: "山田太郎"}), encoding="utf-8")
+        path.symlink_to(target)
+    elif kind == "directory":
+        path.mkdir()
+    elif kind == "fifo":
+        os.mkfifo(path)
+    html = page(tmp_path)
+    assert account in Markup(html).cells
+    assert "山田太郎" not in html
+
+
 def retried_record(root, *, stored="attempts", user=None):
     value = record("ev-retried")
     logical = stored != "attempts"

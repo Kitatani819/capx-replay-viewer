@@ -123,7 +123,7 @@ test('trace, evaluation, GMO, legacy, file, image and video requests use the sel
     traceApi.events('run', 'trial', 0), traceApi.legacyRuns(), traceApi.legacyRun('old', 0),
     traceApi.legacyTrial('old', 'task', 'condition', 'trial', 0), evalApi.list(), evalApi.detail('evaluation'),
     evalApi.codeChanges('evaluation'), gmoApi.config(), gmoApi.saveConfig({ host: 'test', port: null, identity_file: null, shared_root: '', submission_root: '', mine: [], team: [], interval_s: 0 }),
-    gmoApi.follow('run', 'trial')];
+    gmoApi.follow('run', 'trial'), gmoApi.names()];
   await advance(10); await Promise.all(calls);
   assert.ok(net.log.every(req => req.path.startsWith('/api/sites/rtx/')));
   assert.equal(episodeFileUrl({ runId: 'run', episodeId: 'trial', generation: 'g' }, 'video.mp4'),
