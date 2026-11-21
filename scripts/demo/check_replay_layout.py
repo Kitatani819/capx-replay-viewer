@@ -357,7 +357,7 @@ def check(base_url: str, root: Path, output: Path):
             expect(banner).to_be_visible()
             expect(panel.get_by_role('button', name=re.compile('イベントの生データを表示'))).to_have_count(1)
             colors = banner.evaluate("el => ({background:getComputedStyle(el).backgroundColor, text:getComputedStyle(el).color, icon:getComputedStyle(el.querySelector('svg')).stroke})")
-            assert colors == {'background': 'rgb(231, 241, 244)', 'text': 'rgb(35, 75, 90)', 'icon': 'rgb(35, 75, 90)'}, colors
+            assert colors == {'background': 'rgb(238, 245, 240)', 'text': 'rgb(40, 107, 70)', 'icon': 'rgb(40, 107, 70)'}, colors
 
             def luminance(rgb):
                 components = [channel / 255 for channel in rgb]
