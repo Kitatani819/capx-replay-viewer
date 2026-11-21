@@ -13,7 +13,7 @@ import math
 import re
 import time
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from capx_trace_recorder.evaluation_failure import evaluation_failure
 from capx_trace_viewer import reader
@@ -468,7 +468,8 @@ def trial_verdict(episode_summary: dict[str, Any], runner_records: Sequence[Any]
 
 
 def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Sequence[Any] = (), *,
-                       logical: bool = False) -> dict[str, Any]:
+                       logical: bool = False,
+                       classify: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Aggregate trials, retaining all-attempt counts when selecting logical trials."""
     attempts = episodes
     episodes = latest_logical_episodes(episodes) if logical else episodes
@@ -480,6 +481,10 @@ def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Seque
     models, flags = [], []
     for episode in episodes:
         verdict, source = _verdict_and_source(episode, runner_records)
+        classification = (classify(episode) if classify is not None else
+                          reader.trial_end_classification_at(None, episode, runner_records))
+        if verdict != classification["verdict"]:
+            verdict, source = classification["verdict"], classification["evidence"]["source"]
         summary[verdict if verdict in ("success", "failure") else "unknown"] += 1
         summary["verdict_sources"][source] = summary["verdict_sources"].get(source, 0) + 1
         if episode.get("trace_complete") is False or episode.get("status") not in ("ended", "ended_with_gaps"):
