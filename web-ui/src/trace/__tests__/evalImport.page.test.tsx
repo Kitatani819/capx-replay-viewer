@@ -32,7 +32,15 @@ function setup() {
   };
   net.handler = req => {
     if (req.path === '/api/gmo/config') return { status: state.configStatus, json: { enabled: state.enabled, configured: state.configured } };
-    if (req.path === '/api/gmo/episodes') { assert.equal(req.query.get('scope'), 'all'); return { json: state.rows }; }
+    if (req.path === '/api/gmo/episode') {
+      assert.equal(req.query.get('run_id'), run.runId);
+      assert.equal(req.query.get('episode_id'), 'target');
+      if (state.listingStatus.error) return { status: 502, json: { detail: state.listingStatus.error } };
+      const rows = state.rows.filter(item => item.run_id === run.runId && item.episode_id === 'target');
+      if (!rows.length) return { status: 404, json: { detail: 'Episode not found on GMO' } };
+      if (rows.length > 1 || rows.some(item => item.conflict)) return { status: 409, json: { detail: 'Run ID exists in more than one GMO location' } };
+      return { json: rows[0] };
+    }
     if (req.path === '/api/gmo/listing-status') return { json: state.listingStatus };
     if (req.path === '/api/gmo/fetch') return state.fetchStatus === 200 ? { json: { job_id: 'job_1' } } : { status: state.fetchStatus, json: { detail: state.fetchStatus === 409 ? 'This episode is already queued or running' : '1 GiB transfer limit' } };
     if (req.path === '/api/gmo/jobs') return { json: [...state.otherJobs, state.job] };
@@ -60,18 +68,13 @@ test('missing trial follows discovery, one fetch and jobs, then opens local trac
   page.unmount();
 });
 
-test('missing trial waits for a cold background listing before importing its single episode', async () => {
-  const { state, row, complete } = setup();
-  state.rows = [];
+test('missing trial discovers its run while an unrelated team listing stays cold', async () => {
+  const { state, complete } = setup();
   state.listingStatus = { fetched_at: null, refreshing: true, error: null };
   const page = mount(TraceViewerPage, {});
   await advance(100);
-  assert.match(text(page.output), /GMO の一覧を更新中/);
-  assert.equal(state.posts.length, 0);
-  state.rows = [row];
-  state.listingStatus = { fetched_at: new Date(Date.now()).toISOString(), refreshing: false, error: null };
-  await advance(1100);
   assert.deepEqual(state.posts, [{ path: '/api/gmo/fetch', body: { run_id: 'ev-demo', episode_id: 'target' } }]);
+  assert.equal(net.log.filter(req => ['/api/gmo/episodes', '/api/gmo/listing-status'].includes(req.path)).length, 0);
   complete(); await advance(1100);
   assert.equal(propsOf<Parameters<typeof TopBar>[0]>(page.output, TopBar).summary?.task, 'cube');
   page.unmount();
@@ -83,7 +86,7 @@ test('missing trial reports background discovery failures without declaring a re
   state.listingStatus = { fetched_at: null, refreshing: false, error: 'GMO listing failed' };
   const page = mount(TraceViewerPage, {});
   await advance(100);
-  assert.match(text(page.output), /GMOから取り込めません：GMO listing failed/);
+  assert.match(text(page.output), /GMOから取り込めません：HTTP 502: GMO listing failed/);
   assert.doesNotMatch(text(page.output), /GMO にも見つかりません/);
   assert.equal(state.posts.length, 0);
   page.unmount();
@@ -198,7 +201,7 @@ test('local trial never looks at GMO', async () => {
 test('navigation cancels pending discovery so it cannot import the previous trial', async () => {
   const { state, complete } = setup();
   const handler = net.handler;
-  net.handler = req => req.path === '/api/gmo/episodes' ? { json: state.rows, latency: 5000 } : handler(req);
+  net.handler = req => req.path === '/api/gmo/episode' ? { json: state.rows[0], latency: 5000 } : handler(req);
   const page = mount(TraceViewerPage, {}); await advance(100);
   complete();
   page.unmount(); await advance(6000);
@@ -251,6 +254,6 @@ test('an evicted import job reports failure when its episode is no longer pendin
     evicted = true;
     await advance(1100);
     assert.match(text(page.output), /取り込み状況が見つかりません/);
-    assert.equal(net.log.filter(req => req.path === '/api/gmo/episode').length, 1);
+    assert.equal(net.log.filter(req => req.path === '/api/gmo/episode').length, 2);
   } finally { page.unmount(); }
 });

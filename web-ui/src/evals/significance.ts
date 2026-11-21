@@ -1,6 +1,6 @@
 /** Exact two-sided sign test (the exact McNemar test on discordant pairs). */
 import type { EvalTrial } from './api';
-import { comparisonTable } from './model';
+import { comparisonTable, type ComparisonTable } from './model';
 
 export interface PairedResult {
   paired: number;
@@ -33,15 +33,19 @@ export function exactDiscordanceP(improved: number, worsened: number): number {
 function identified(trial: EvalTrial): boolean {
   return !!trial.task && typeof trial.seed === 'number' && Number.isSafeInteger(trial.seed);
 }
-export function pairedResult(current: EvalTrial[], baseline: EvalTrial[]): PairedResult {
-  const knownCurrent = current.filter(identified), knownBaseline = baseline.filter(identified);
-  const table = comparisonTable(knownCurrent, knownBaseline);
+export function pairedResult(current: EvalTrial[], baseline: EvalTrial[], table: ComparisonTable = comparisonTable(current, baseline)): PairedResult {
+  const knownCount = current.reduce((n, trial) => n + Number(identified(trial)), 0)
+    + baseline.reduce((n, trial) => n + Number(identified(trial)), 0);
   const result: PairedResult = { paired: 0, improved: 0, worsened: 0, bothSuccess: 0, bothFailure: 0,
-    unmatched: 0, unjudged: 0, unidentified: current.length + baseline.length - knownCurrent.length - knownBaseline.length,
-    omittedRetries: table.omittedRetries, p: null };
+    unmatched: 0, unjudged: 0, unidentified: current.length + baseline.length - knownCount,
+    omittedRetries: knownCount, p: null };
   for (const row of table.rows) {
     for (const seed of new Set([...row.current.keys(), ...row.baseline.keys()])) {
-      const now = row.current.get(seed)?.trial, before = row.baseline.get(seed)?.trial;
+      const currentTrial = row.current.get(seed)?.trial, baselineTrial = row.baseline.get(seed)?.trial;
+      const now = currentTrial && identified(currentTrial) ? currentTrial : undefined;
+      const before = baselineTrial && identified(baselineTrial) ? baselineTrial : undefined;
+      result.omittedRetries -= Number(!!now) + Number(!!before);
+      if (!now && !before) continue;
       if (!now || !before) { result.unmatched++; continue; }
       if (!['success', 'failure'].includes(now.verdict) || !['success', 'failure'].includes(before.verdict)) { result.unjudged++; continue; }
       result.paired++;

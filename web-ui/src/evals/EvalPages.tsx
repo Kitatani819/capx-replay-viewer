@@ -2,7 +2,7 @@ import { remoteName } from '../navigation/site';
 import { siteHref } from '../navigation/site';
 import { SiteTabs } from '../navigation/SiteTabs';
 /** Calm, read-only evaluation list and baseline comparison. */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { dateHeading, dateKey, listOptionValue } from '../listFilters';
 import { DEFAULT_EVAL_FILTERS, evalFilterSearch, evalFiltersActive, evaluationTasks, filterEvaluations, isRouteB, normalizeEvalFilters, readEvalFilters, type EvalFilters } from './filters';
 import { Breadcrumb, evaluationTitle } from '../navigation/Breadcrumb';
@@ -209,8 +209,8 @@ function Cell({ cell, evalId, regression, baselineCell, baselineId, compact }: {
 }
 export function EvalComparison({ detail }: { detail: EvalDetail }) {
   const { eval: record, baseline } = detail;
+  const table = useMemo(() => comparisonTable(detail.trials, detail.baseline_trials), [detail.trials, detail.baseline_trials]);
   if (!record) return <p role="alert" className="eval-error">評価の記録を読み取れません：{detail.error || '記録が不正です'}</p>;
-  const table = comparisonTable(detail.trials, detail.baseline_trials);
   const mismatch = summaryDiffers(detail.summary, table.currentTrials) || (baseline && summaryDiffers(detail.baseline_summary, table.baselineTrials));
   const differences = detail.differences.flatMap(differenceItems);
   const ruleDifferences = new Map<string, { text: string; source: string; sides: string[] }>();
@@ -244,7 +244,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
     {differences.length > 0 && <div className="eval-note"><p>条件の違い：</p><ul>{differences.map(diff => <li key={diff.key}>{diff.label}（基準 {valueText(diff.baseline)} / 今回 {valueText(diff.current)}）</li>)}</ul></div>}
     {officialNotes.length > 0 && <div role="note" className="eval-note eval-rule-note"><p>公式の評価と条件が違います：</p>{renderOfficialNotes(officialNotes.slice(0, 3))}
       {officialNotes.length > 3 && <details><summary>ほかの違い</summary>{renderOfficialNotes(officialNotes.slice(3))}</details>}</div>}
-    <PairedSignificance detail={detail} />
+    <PairedSignificance detail={detail} table={table} />
     <div className="eval-table-heading"><p>タスク・seed ごとの結果</p>{baseline && <p>悪化 {table.regressions}件</p>}</div>
     <EvalConditions detail={detail} />
     {table.rows.length > 0 ? <div className="eval-table-scroll"><table className="eval-comparison" aria-label="評価の比較">
@@ -256,7 +256,7 @@ export function EvalComparison({ detail }: { detail: EvalDetail }) {
       : WORD_LEGEND}</p>
     {mismatch && <p role="status" className="eval-note">eval.json の集計と試行の表の数が異なります。{remoteName()} の一覧には runner の記録が含まれないため、取り込み後に判定が変わる場合があります。</p>}
     <EvalCodeChanges record={record} />
-    <FailureBreakdown detail={detail} />
+    <FailureBreakdown detail={detail} table={table} />
   </>;
 }
 /** Conditions every trial of an evaluation shares, shown once instead of in every cell. */

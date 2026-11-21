@@ -200,7 +200,10 @@ export function GmoPicker({ initialConfig, configError, onConfigChange, onRetryC
     for (const job of jobs.data ?? []) if (!result.has(rowKey(job))) result.set(rowKey(job), job);
     return result;
   }, [jobs.data]);
-  const filterNow = Date.now();
+  // Relative date filters change only when the local calendar day changes.
+  const filterDate = new Date(Date.now());
+  filterDate.setHours(0, 0, 0, 0);
+  const filterNow = filterDate.getTime();
   const tasks = [...new Set((listing.data?.rows ?? []).map(row => row.task).filter((task): task is string => !!task))].sort();
   const runIds = [...new Set((listing.data?.rows ?? []).map(row => row.run_id))];
   const rows = useMemo(() => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { advance, clock, findAll, propsOf, resetBrowser } from './harness/browser';
 import { mount } from './harness/fakeReact';
 import { buildEpisodeModel } from '../model';
-import { LIVE_DELAY_S, LIVE_FRAME_CLASS, MAX_LAG_S, LiveCameras, PLAYBACK_TICK_MS } from '../components/LiveCameras';
+import { LIVE_DELAY_S, LIVE_FRAME_CLASS, MAX_LAG_S, LiveCameras, PLAYBACK_TICK_MS, frameIndexAt, indexLiveFrames } from '../components/LiveCameras';
 import { MediaPane } from '../components/MediaPane';
 import { SmallButton } from '../components/common';
 import { ImageModal, TraceImage } from '../components/TraceImage';
@@ -443,4 +443,19 @@ test('LiveCameras renders long saved frame histories without exceeding the argum
     assert.match(shownSources(cameras)[0], /frames\/front\/e0_199699.jpg$/);
     assert.equal(findAll(cameras.output, 'figure').length, 1);
   } finally { cameras.unmount(); }
+});
+
+test('indexed live frames preserve duplicate times, untimed fallbacks and playhead boundaries', () => {
+  const rec = new Rec(); rec.episodeStart();
+  for (let index = 0; index < 5; index++) {
+    const event = rec.add('frame', {camera: 'main', epoch: 0, buffer_index: index, sim_step: index});
+    event.wall_time = [10, 11, 11, NaN, Infinity][index];
+  }
+  const frames = buildEpisodeModel(rec.events).framesByCamera.get('main')!;
+  const history = indexLiveFrames(frames);
+  for (const [time, expected] of [[null, 4], [-Infinity, 0], [9, 0], [10, 0], [10.999, 2], [11, 2], [Infinity, 2], [NaN, 0]] as const) {
+    assert.equal(frameIndexAt(history, time), expected, `playhead ${time}`);
+  }
+  assert.equal(frameIndexAt(indexLiveFrames([]), 0), -1);
+  assert.equal(frameIndexAt(indexLiveFrames(frames.slice(3)), 0), 1);
 });

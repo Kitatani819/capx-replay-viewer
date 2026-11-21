@@ -145,8 +145,14 @@ export function playbackMap(model: EpisodeModel, name: string, duration: number)
     return fail('動画全体とフレーム記録の対応を確認できません。動画のみ再生できます。');
   }
   const seconds = (step: number): number => {
-    const hi = anchors.findIndex(f => f.simStep! >= step);
-    if (hi < 0) return duration;
+    // Lower bound preserves the first anchor for repeated simulator steps.
+    let loIndex = 0, hi = anchors.length;
+    while (loIndex < hi) {
+      const mid = loIndex + Math.floor((hi - loIndex) / 2);
+      if (anchors[mid].simStep! >= step) hi = mid;
+      else loIndex = mid + 1;
+    }
+    if (hi === anchors.length) return duration;
     if (hi === 0) return anchors[0].bufferIndex / RECORDED_VIDEO_FPS;
     const lo = anchors[hi-1], up = anchors[hi];
     const fraction = (step-lo.simStep!) / Math.max(1,up.simStep!-lo.simStep!);

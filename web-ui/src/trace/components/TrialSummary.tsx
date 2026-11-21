@@ -27,6 +27,7 @@ interface BaselineSummary {
   model?: EpisodeModel;
 }
 interface CardProps {
+  facts?: ReturnType<typeof trialSummaryFacts>;
   camera?: string | null;
   cameraOptions?: string[];
   onCameraChange?: (camera: string) => void;
@@ -41,8 +42,8 @@ interface CardProps {
   decisionText?: string | null;
   footer?: ReactNode;
 }
-export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOptions, onCameraChange, summary, verdict, baseline, onJump, firstErrorText, observationText, decisionText, footer }: CardProps) {
-  const facts = trialSummaryFacts(model, summary);
+export function TrialSummaryCard({ ep, model, camera: sharedCamera, cameraOptions, onCameraChange, summary, verdict, baseline, onJump, firstErrorText, observationText, decisionText, footer, facts: suppliedFacts }: CardProps) {
+  const facts = useMemo(() => suppliedFacts ?? trialSummaryFacts(model, summary), [suppliedFacts, model, summary]);
   const [localCamera, setLocalCamera] = useState<string | null>(null);
   const cameras = [...new Set([...camerasOf(model), ...(cameraOptions ?? []),
     ...episodeVideos(ep, model).map(video => cameraForVideo(model, video.name)).filter((name): name is string => name !== null)])];
@@ -166,7 +167,7 @@ export function TrialSummary({ ep, model, camera, cameraOptions, onCameraChange,
   const firstError = useFullText(ep, facts.firstError?.value);
   const observation = useFullText(ep, facts.observation?.value);
   const decision = useFullText(ep, facts.decision?.value);
-  return <TrialSummaryCard ep={ep} model={model} cameraOptions={cameraOptions} camera={camera} onCameraChange={onCameraChange} summary={summary} verdict={episodeVerdict(summary, runnerRecords)} baseline={baseline}
+  return <TrialSummaryCard ep={ep} model={model} facts={facts} cameraOptions={cameraOptions} camera={camera} onCameraChange={onCameraChange} summary={summary} verdict={episodeVerdict(summary, runnerRecords)} baseline={baseline}
     onJump={onJump} firstErrorText={firstError.text} observationText={observation.text} decisionText={decision.text}
     footer={importing && <p role={importing.busy ? 'status' : 'alert'}>基準の試行：{importing.message}
       {importing.retry && <button type="button" onClick={importing.retry}>もう一度読み込む</button>}</p>} />;

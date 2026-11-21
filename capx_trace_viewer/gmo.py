@@ -702,7 +702,9 @@ for scope, patterns in (('mine', mine), ('team', team)):
                        if os.path.isdir(p) and not os.path.islink(p))
         for root in roots:
             try:
-                run_names = sorted(os.listdir(root))
+                # Scoped discovery still checks every configured root for ID
+                # collisions, but never stats unrelated historical runs.
+                run_names = sorted(run_ids) if run_ids is not None else sorted(os.listdir(root))
             except OSError:
                 continue
             for name in run_names:

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { baselineTrialFor, comparisonTable } from '../../evals/model';
+import { baselineTrialFor, comparisonTable, indexBaselineTrials } from '../../evals/model';
 import type { EvalTrial } from '../../evals/api';
 
 const identity = { task: 'cube', seed: 7, condition: 'current_config' };
@@ -30,4 +30,18 @@ test('baseline pairing requires known task and seed and cannot join unrelated tr
   assert.equal(baselineTrialFor({ ...identity, seed: null }, baseline), null);
   assert.equal(baselineTrialFor({ ...identity, seed: 8 }, baseline), null);
   assert.equal(baselineTrialFor({ ...identity, task: 'different' }, baseline), null);
+});
+
+test('indexed baseline pairing preserves condition ambiguity, retry precedence and typed identities', () => {
+  const candidates = [trial('old', 'A', { eval_segment: 1, attempt: 9 }),
+    trial('new', 'A', { eval_segment: 2, attempt: 1 }), trial('other-condition', 'B'),
+    trial('unknown-seed', 'A', { seed: null }), trial('unknown-task', 'A', { task: null }),
+    trial('unique-condition', null, { seed: 8 }), trial('tie-first', 'C', { seed: 9 }), trial('tie-last', 'C', { seed: 9 })];
+  for (const ordered of [candidates, [...candidates].reverse()]) {
+    const index = indexBaselineTrials(ordered);
+    for (const key of [{ ...identity, condition: 'A' }, identity, { ...identity, condition: null },
+      { ...identity, seed: 8 }, { ...identity, seed: 9 }, { ...identity, seed: null }, { ...identity, task: null }]) {
+      assert.equal(baselineTrialFor(key, index), baselineTrialFor(key, ordered));
+    }
+  }
 });

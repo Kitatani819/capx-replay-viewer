@@ -494,16 +494,25 @@ def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, reco
         end = {"exit_code": returncode, "signal": -returncode if returncode < 0 else None}
         if child is not None and os.name == "posix" and not _wait_for_workers(child.pid, worker_wait_timeout):
             end["workers_left_running"] = True
+        details = None
         if not end.get("workers_left_running"):
             try:
                 finalize_trial_outcomes(trace_root, eval_id)
-                eval_resume.finalize_unobserved(trace_root, eval_id)
+                details = reader.run_detail(trace_root, eval_id) or {}
+                if eval_resume.finalize_unobserved(trace_root, eval_id, details=details):
+                    # Planned placeholders changed the population: score and
+                    # resume from a fresh snapshot that includes those writes.
+                    details = None
             except (OSError, ValueError):
+                details = None
                 print("eval: could not finalize interrupted trial outcomes", file=sys.stderr)
+        if details is None:
+            details = reader.run_detail(trace_root, eval_id) or {}
         record.update({"status": "completed" if returncode == 0 else "interrupted",
                        "end": end,
                        "ended_at": _now(), "heartbeat_at": _now(),
-                       "summary": evals.summarize_run(trace_root, eval_id, logical=True)})
+                       "summary": evals.aggregate_episodes(details.get("episodes", []),
+                                                           details.get("runner_records", []), logical=True)})
         if job := job_context():
             record["job"] = job
             segment["job"] = job
@@ -515,7 +524,6 @@ def _run_segment(command: Sequence[str], *, trace_root: Path, eval_id: str, reco
                 segment["budget"] = usage
         except (OSError, ValueError):
             print("eval: could not record segment budget usage; resume will require valid budget metadata", file=sys.stderr)
-        details = reader.run_detail(trace_root, eval_id) or {}
         completed_after = eval_resume.completed_trials(details.get("episodes", []))
         segment["completed_after"] = len(completed_after)
         try:

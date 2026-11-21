@@ -38,13 +38,25 @@ export function nextPlayhead(previous: number | null, elapsedS: number, newest: 
   return Math.min(next < target - MAX_LAG_S ? target : next, newest);
 }
 
+/** Built once for each saved, time-sorted camera history, including untimed frames. */
+export function indexLiveFrames(frames: FrameRec[]) {
+  return { frames, timed: frames.flatMap((frame, index) => {
+    const wall = wallOf(frame);
+    return wall === null ? [] : [{ wall, index }];
+  }) };
+}
 /** The frame on screen at `playhead`: the last one saved by then, else the first. */
-export function frameAt(frames: FrameRec[], playhead: number | null): FrameRec | undefined {
-  const timed = frames.filter(frame => wallOf(frame) !== null);
-  if (playhead === null || timed.length === 0) return frames.at(-1);
+export function frameIndexAt({ frames, timed }: ReturnType<typeof indexLiveFrames>, playhead: number | null): number {
+  if (playhead === null || timed.length === 0) return frames.length - 1;
   // The playhead adds many short steps to an epoch time (~1.7e9 s), whose rounding
   // grows to microseconds, so allow a millisecond (frames are >= ~33 ms apart).
-  return timed.findLast(frame => wallOf(frame)! <= playhead + PLAYHEAD_EPSILON_S) ?? timed[0];
+  let lo = 0, hi = timed.length;
+  while (lo < hi) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if (timed[mid].wall <= playhead + PLAYHEAD_EPSILON_S) lo = mid + 1;
+    else hi = mid;
+  }
+  return timed[Math.max(0, lo - 1)].index;
 }
 
 export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
@@ -58,15 +70,15 @@ export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
     const main = mainCameraOf(model);
     return Array.from(model.framesByCamera, ([camera, frames]) => ({
       camera,
-      frames: frames.filter(frame => frame.written && frame.path)
-        .sort((a, b) => (wallOf(a) ?? Infinity) - (wallOf(b) ?? Infinity)),
+      ...indexLiveFrames(frames.filter(frame => frame.written && frame.path)
+        .sort((a, b) => (wallOf(a) ?? Infinity) - (wallOf(b) ?? Infinity))),
     })).sort((a, b) => Number(b.camera === main) - Number(a.camera === main) || a.camera.localeCompare(b.camera));
   }, [model]);
   const newest = useMemo(() => {
     let latest: number | null = null;
-    for (const { frames } of cameras) for (const frame of frames) {
-      const wall = wallOf(frame);
-      if (wall !== null && (latest === null || wall > latest)) latest = wall;
+    for (const { timed } of cameras) {
+      const wall = timed.at(-1)?.wall;
+      if (wall !== undefined && (latest === null || wall > latest)) latest = wall;
     }
     return latest;
   }, [cameras]);
@@ -90,14 +102,15 @@ export function LiveCameras({ model, ep, ended = false, onCaughtUp }: {
   // The first frames of a trial start playback without waiting for a tick.
   const playhead = clock.playhead ?? (newest === null ? null : nextPlayhead(null, 0, newest));
 
-  const shown = cameras.map(({ camera, frames }) => {
-    const frame = frameAt(frames, playhead);
-    const index = frame ? frames.indexOf(frame) : -1;
+  const shown = cameras.map(history => {
+    const { camera, frames } = history;
+    const index = frameIndexAt(history, playhead);
+    const frame = frames[index];
     return { camera, frame, upcoming: index < 0 ? [] : frames.slice(index + 1, index + 1 + PREFETCH) };
   });
   // Compare the frames actually shown: a camera with only one frame is already
   // done, even when the delayed playhead is still before that frame's time.
-  const caughtUp = cameras.every(({ frames }, index) => shown[index].frame === frameAt(frames, Infinity));
+  const caughtUp = cameras.every((history, index) => shown[index].frame === history.frames[frameIndexAt(history, Infinity)]);
   useEffect(() => {
     if (ended && caughtUp) onCaughtUp?.();
   }, [ended, caughtUp, onCaughtUp]);

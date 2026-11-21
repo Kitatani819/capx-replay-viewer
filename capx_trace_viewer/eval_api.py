@@ -5,7 +5,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -139,9 +139,16 @@ class EvalService:
                     {"fetched_at": None, "refreshing": False, "error": self._remote_error()})
                 continue
             remote["episodes"].extend(listing["episodes"])
+            remote.get("_episode_snapshots", {}).pop((run_id, False), None)
 
-    def _episodes(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False
-                  ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    def _episodes(self, run_id: str, remote: dict[str, Any], *, conflict: bool = False
+                  ) -> tuple[list[dict[str, Any]], Sequence[Any], dict[str, Any]]:
+        # This dictionary belongs to one API response, never the service. Keep
+        # summary, repeat matching and trial rows on the same run observation.
+        snapshots = remote.setdefault("_episode_snapshots", {})
+        cache_key = (run_id, conflict)
+        if cache_key in snapshots:
+            return snapshots[cache_key]
         episodes = {}
         if not conflict:
             for row in remote["episodes"]:
@@ -177,10 +184,13 @@ class EvalService:
                              and remote_mtime > local_mtime and not remote_episode.get("episode_json_error"))):
                         continue
                 episodes[episode["episode_id"]] = {**episode, "local_state": "local"}
-        return (list(episodes.values()), detail["runner_records"] if detail else [],
-                detail.get("runner_records_info", {}) if detail else {})
+        snapshot = (list(episodes.values()),
+                    evals.index_runner_records(detail["runner_records"] if detail else []),
+                    detail.get("runner_records_info", {}) if detail else {})
+        snapshots[cache_key] = snapshot
+        return snapshot
 
-    def _classification(self, episode: dict[str, Any], records: list[dict[str, Any]],
+    def _classification(self, episode: dict[str, Any], records: Sequence[Any],
                         evaluation: dict[str, Any] | None = None) -> dict[str, Any]:
         if episode["local_state"] == "local":
             try:
@@ -192,7 +202,7 @@ class EvalService:
                     return reader.trial_end_classification_at(directory, episode, records, evaluation=evaluation)
         return reader.trial_end_classification_at(None, episode, records, evaluation=evaluation)
 
-    def _summary(self, entry: dict[str, Any], remote: dict[str, list[dict[str, Any]]]) -> Any:
+    def _summary(self, entry: dict[str, Any], remote: dict[str, Any]) -> Any:
         record = entry["eval"]
         if record is None:
             return None
@@ -245,7 +255,7 @@ class EvalService:
         return {"evals": [self._public(entry) for entry in ordered], "error": error,
                 "remote_status": status}
 
-    def _trials(self, run_id: str, remote: dict[str, list[dict[str, Any]]], *, conflict: bool = False,
+    def _trials(self, run_id: str, remote: dict[str, Any], *, conflict: bool = False,
                 evaluation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         episodes, records, _records_info = self._episodes(run_id, remote, conflict=conflict)
         trials = []

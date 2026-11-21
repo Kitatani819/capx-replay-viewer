@@ -393,9 +393,59 @@ def _strict_equal(left: Any, right: Any) -> bool:
     return type(left) is type(right) and left == right
 
 
+_RUNNER_MISSING = object()
+
+
+def _runner_key(value: Any) -> tuple[Any, ...]:
+    # Bucket with the same primitive types as _strict_equal. Final matching
+    # still checks equality (including NaN and unusual non-JSON values).
+    if isinstance(value, (dict, list)):
+        return (type(value), id(value))
+    if _number(value):
+        return (int, value)
+    try:
+        hash(value)
+    except TypeError:
+        return (type(value),)
+    return (type(value), value)
+
+
+class RunnerRecordIndex(Sequence[Any]):
+    """An immutable response/aggregation-scoped index into runner records."""
+
+    def __init__(self, records: Sequence[Any]) -> None:
+        self._records = tuple(records)
+        self._by_trial: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            prefix = (_runner_key(record.get("task", _RUNNER_MISSING)),
+                      _runner_key(record.get("condition", _RUNNER_MISSING)))
+            # A record matching both seed and trial is one candidate, while
+            # repeated rows in the source remain separate ambiguous candidates.
+            seeds = {_runner_key(record.get(field, _RUNNER_MISSING)) for field in ("seed", "trial")}
+            for seed in seeds:
+                self._by_trial.setdefault((*prefix, seed), []).append(record)
+
+    def __getitem__(self, index):
+        return self._records[index]
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def candidates(self, episode: dict[str, Any]) -> Sequence[Any]:
+        key = tuple(_runner_key(episode.get(field)) for field in ("task", "condition", "seed"))
+        return self._by_trial.get(key, ())
+
+
+def index_runner_records(records: Sequence[Any]) -> RunnerRecordIndex:
+    return records if isinstance(records, RunnerRecordIndex) else RunnerRecordIndex(records)
+
+
 def _runner_attempt(episode: dict[str, Any], records: Sequence[Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, bool]:
-    missing = object()  # A runner's absent key is JS undefined, not episodeKeyOf's null.
-    candidates = [record for record in records if isinstance(record, dict)
+    missing = _RUNNER_MISSING  # A runner's absent key is JS undefined, not episodeKeyOf's null.
+    source = records.candidates(episode) if isinstance(records, RunnerRecordIndex) else records
+    candidates = [record for record in source if isinstance(record, dict)
                   and _strict_equal(record.get("task", missing), episode.get("task"))
                   and _strict_equal(record.get("condition", missing), episode.get("condition"))
                   and (_strict_equal(record.get("seed", missing), episode.get("seed"))
@@ -471,6 +521,7 @@ def aggregate_episodes(episodes: Sequence[dict[str, Any]], runner_records: Seque
                        logical: bool = False,
                        classify: Callable[[dict[str, Any]], dict[str, Any]] | None = None) -> dict[str, Any]:
     """Aggregate trials, retaining all-attempt counts when selecting logical trials."""
+    runner_records = index_runner_records(runner_records)
     attempts = episodes
     episodes = latest_logical_episodes(episodes) if logical else episodes
     summary: dict[str, Any] = {"trials": len(episodes), "attempts": len(attempts), "success": 0, "failure": 0,

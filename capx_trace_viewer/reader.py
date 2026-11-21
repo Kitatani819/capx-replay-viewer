@@ -454,7 +454,8 @@ class EventsPage:
     ``event_lines`` holds the JSON text of each valid event as UTF-8 bytes, in file order.
     Lines that parse are passed through unchanged, except that NaN and Infinity (not
     valid JSON) are rewritten as the strings "nan", "inf" and "-inf". ``generation``
-    identifies the file (see ``events_generation``).
+    identifies the file (see ``events_generation``). Decoded classification pages
+    instead populate ``decoded_events`` and leave ``event_lines`` empty.
     """
 
     event_lines: tuple[bytes, ...]
@@ -466,10 +467,14 @@ class EventsPage:
     file_size: int
     stat_key: tuple[int, ...]
     generation: str = ""
+    # Classification scans retain decoded objects instead of raw lines. These
+    # pages are consumed immediately and never enter the HTTP page cache.
+    decoded_events: tuple[dict[str, Any], ...] | None = None
 
     def events(self) -> list[dict[str, Any]]:
         """The events of this page as dicts."""
-        return [json.loads(line) for line in self.event_lines]
+        return (list(self.decoded_events) if self.decoded_events is not None else
+                [json.loads(line) for line in self.event_lines])
 
     def to_json_bytes(self) -> bytes:
         """The ``/events`` response body: ``{events, next_offset, eof, torn_tail, corrupt_lines, ...}``."""
@@ -486,18 +491,18 @@ class EventsPage:
             ensure_ascii=True,
             separators=(",", ":"),
         ).encode("ascii")
-        return b'{"events":[' + b",".join(self.event_lines) + b"]," + meta[1:]
+        lines = (self.event_lines if self.decoded_events is None else
+                 tuple(json.dumps(event, ensure_ascii=True, separators=(",", ":"),
+                                  allow_nan=False).encode("ascii") for event in self.decoded_events))
+        return b'{"events":[' + b",".join(lines) + b"]," + meta[1:]
 
 
 def _replace_constant(name: str) -> str:
     return _NON_FINITE.get(name, name)
 
 
-def parse_event_line(line: bytes) -> bytes | None:
-    """JSON text to serve for one ``events.jsonl`` line, or None if the line is corrupt.
-
-    A line is valid when it is UTF-8 and parses to a JSON object.
-    """
+def _decode_event_line(line: bytes) -> tuple[dict[str, Any], bool] | None:
+    """Validate and decode once, reporting whether nonfinite values changed."""
     try:
         text = line.decode("utf-8")
     except UnicodeDecodeError:
@@ -521,7 +526,16 @@ def parse_event_line(line: bytes) -> bytes | None:
         return None
     if not isinstance(obj, dict):
         return None
-    if constants:
+    return obj, bool(constants)
+
+
+def parse_event_line(line: bytes) -> bytes | None:
+    """Validated UTF-8 JSON object text, normalizing nonfinite numbers."""
+    decoded = _decode_event_line(line)
+    if decoded is None:
+        return None
+    obj, changed = decoded
+    if changed:
         return json.dumps(obj, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
     return line
 
@@ -576,6 +590,8 @@ def read_events_page(
     after_offset: int = 0,
     max_bytes: int = DEFAULT_MAX_BYTES,
     max_events: int = DEFAULT_MAX_EVENTS,
+    *,
+    decode: bool = False,
 ) -> EventsPage:
     """Read complete event lines starting at byte ``after_offset``.
 
@@ -589,20 +605,24 @@ def read_events_page(
     reported as ``torn_tail``; ``eof`` is true when no complete line remains after
     ``next_offset``.
 
+    ``decode`` retains validated objects instead of JSON bytes for one-pass
+    classification; HTTP/cache callers keep the original byte representation.
+
     Raises EventsOffsetError when ``after_offset`` is negative, past the end of the
     file, or not preceded by a newline. EventsLineTooLongError rejects lines whose
     newline is beyond MAX_LINE_SCAN_BYTES. OSError propagates when the file cannot be read.
     """
     if isinstance(path, int):
-        return _read_events_page_fd(path, after_offset, max_bytes, max_events)
+        return _read_events_page_fd(path, after_offset, max_bytes, max_events, decode=decode)
     fd = _open_path(path)
     try:
-        return _read_events_page_fd(fd, after_offset, max_bytes, max_events)
+        return _read_events_page_fd(fd, after_offset, max_bytes, max_events, decode=decode)
     finally:
         close_quietly(fd)
 
 
-def _read_events_page_fd(fd: int, after_offset: int, max_bytes: int, max_events: int) -> EventsPage:
+def _read_events_page_fd(fd: int, after_offset: int, max_bytes: int, max_events: int, *,
+                         decode: bool = False) -> EventsPage:
     max_bytes = max(1, min(int(max_bytes), MAX_PAGE_BYTES))
     max_events = max(1, min(int(max_events), MAX_PAGE_EVENTS))
     after_offset = int(after_offset)
@@ -617,28 +637,35 @@ def _read_events_page_fd(fd: int, after_offset: int, max_bytes: int, max_events:
     generation = events_generation(fd, st)
     buf = pread_upto(fd, min(max_bytes, size - after_offset), after_offset)
     lines: list[bytes] = []
+    objects: list[dict[str, Any]] = []
+    event_count = 0
     corrupt_offsets: list[int] = []
     n_corrupt = 0
     pos = 0
     torn = False
 
     def consume(line: bytes, offset: int) -> None:
-        nonlocal n_corrupt
-        parsed = parse_event_line(line) if len(line) <= MAX_LINE_BYTES else None
+        nonlocal n_corrupt, event_count
+        parsed = ((_decode_event_line(line) if decode else parse_event_line(line))
+                  if len(line) <= MAX_LINE_BYTES else None)
         if parsed is None:
             n_corrupt += 1
             if len(corrupt_offsets) < MAX_CORRUPT_OFFSETS:
                 corrupt_offsets.append(offset)
         else:
-            lines.append(parsed)
+            event_count += 1
+            if decode:
+                objects.append(parsed[0])
+            else:
+                lines.append(parsed)
 
-    while len(lines) < max_events:
+    while event_count < max_events:
         nl = buf.find(b"\n", pos)
         if nl == -1:
             break
         consume(buf[pos:nl], after_offset + pos)
         pos = nl + 1
-    if len(lines) < max_events and pos < len(buf):
+    if event_count < max_events and pos < len(buf):
         # The buffer ends inside a line (the loop found no further newline).
         if after_offset + len(buf) >= size:
             torn = True
@@ -658,6 +685,7 @@ def _read_events_page_fd(fd: int, after_offset: int, max_bytes: int, max_events:
         file_size=size,
         stat_key=_stat_key(st),
         generation=generation,
+        decoded_events=tuple(objects) if decode else None,
     )
 
 
@@ -1262,7 +1290,7 @@ def trial_end_classification_at(directory: Dir | None, summary: dict[str, Any],
         def events() -> Iterator[dict[str, Any]]:
             offset = 0
             while True:
-                page = read_events_page(fd, offset, DEFAULT_MAX_BYTES, MAX_PAGE_EVENTS)
+                page = read_events_page(fd, offset, DEFAULT_MAX_BYTES, MAX_PAGE_EVENTS, decode=True)
                 yield from page.events()
                 if page.eof or page.next_offset == offset:
                     break

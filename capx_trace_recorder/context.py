@@ -98,12 +98,13 @@ class Ctx:
 
 class CodeBlockCtx(Ctx):
     kind = "code_block"
-    __slots__ = ("code", "exec_globals", "module_codes", "start_mono", "sim_step0", "buf_len0",
+    __slots__ = ("code", "_code_lines", "exec_globals", "module_codes", "start_mono", "sim_step0", "buf_len0",
                  "block_index", "exec_result", "exec_duration", "env")
 
     def __init__(self, event_id: str, episode: EpisodeRecorder, code: Any, env: Any) -> None:
         super().__init__(event_id, episode)
         self.code = code if isinstance(code, str) else None
+        self._code_lines: list[str] | None = None
         self.env = env
         self.exec_globals: Any = None
         self.module_codes: dict[int, set[int]] = {}
@@ -113,6 +114,14 @@ class CodeBlockCtx(Ctx):
         self.block_index = 0
         self.exec_result: Any = None
         self.exec_duration: float | None = None
+
+    @property
+    def code_lines(self) -> list[str]:
+        # Generated code is immutable for the lifetime of this block. Split it
+        # only when the first API call needs a source location.
+        if self._code_lines is None:
+            self._code_lines = self.code.splitlines() if self.code is not None else []
+        return self._code_lines
 
 
 class ApiCallCtx(Ctx):

@@ -466,8 +466,13 @@ class BuildContext:
 
     def write_file(self, relpath: str, content: bytes | Callable[[], bytes], *, label: str,
                    kind: str, mime: str, binary: bool, extra: dict[str, Any] | None = None,
-                   dedupe: bool = False, add: bool = True) -> dict[str, Any]:
-        """Write ``base_dir/relpath`` (tmp + rename); returns the artifact reference."""
+                   dedupe: bool = False, add: bool = True,
+                   content_sha256: str | None = None) -> dict[str, Any]:
+        """Write ``base_dir/relpath`` (tmp + rename); returns the artifact reference.
+
+        ``content_sha256`` carries an internal caller's digest of the same
+        immutable bytes; encoded callables normally leave it unset.
+        """
         art: dict[str, Any] = {
             "path": self.rel_prefix + relpath,
             "sha256": None,
@@ -514,7 +519,7 @@ class BuildContext:
             self.wep.add_gap("write_failed", 1, self.event.get("seq") if self.event else None)
             return self._add_artifact(art) if add else art
         art["bytes"] = len(data)
-        art["sha256"] = hashlib.sha256(data).hexdigest()
+        art["sha256"] = content_sha256 if content_sha256 is not None else hashlib.sha256(data).hexdigest()
         key = str(target)
         if dedupe and (key in self.wep.written_files or target.exists()):
             self.wep.written_files.add(key)
@@ -533,15 +538,15 @@ class BuildContext:
 
     def write_asset(self, content: bytes, ext: str, *, label: str, kind: str, mime: str,
                     binary: bool = True, extra: dict[str, Any] | None = None,
-                    add: bool = True) -> dict[str, Any]:
+                    add: bool = True, content_sha256: str | None = None) -> dict[str, Any]:
         """Content-addressed ``assets/<sha[:2]>/<sha>.<ext>``."""
         if binary and self.binary_dropped:
             return self.write_file("assets/unwritten." + ext, b"", label=label, kind=kind,
                                    mime=mime, binary=True, extra=extra, add=add)
-        sha = hashlib.sha256(content).hexdigest()
+        sha = content_sha256 if content_sha256 is not None else hashlib.sha256(content).hexdigest()
         rel = f"assets/{sha[:2]}/{sha}.{ext}"
         return self.write_file(rel, content, label=label, kind=kind, mime=mime, binary=binary,
-                               extra=extra, dedupe=True, add=add)
+                               extra=extra, dedupe=True, add=add, content_sha256=sha)
 
     def text_asset(self, text: str, label: str = "text", add: bool = True) -> dict[str, Any]:
         raw = text.encode("utf-8", "surrogatepass")

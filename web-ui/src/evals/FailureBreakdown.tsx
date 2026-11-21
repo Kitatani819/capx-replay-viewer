@@ -1,18 +1,20 @@
 import { siteHref } from '../navigation/site';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { EvalDetail } from './api';
-import { comparisonTable } from './model';
+import { comparisonTable, indexBaselineTrials, type ComparisonTable } from './model';
 import { baselineBreakdownTrials, breakdownTrials, CATEGORY_LABELS, BREAKDOWN_CATEGORIES, FAILURE_REASONS, causeCounts, causeGroupKey, causeTooltip, reasonCounts, reasonLabel, type BreakdownCategory } from './failureReasons';
 import './failureBreakdown.css';
 
-export function FailureBreakdown({ detail }: { detail: EvalDetail }) {
-  const { currentTrials, baselineTrials, omittedRetries } = comparisonTable(detail.trials, detail.baseline_trials);
+export function FailureBreakdown({ detail, table }: { detail: EvalDetail; table?: ComparisonTable }) {
+  const { currentTrials, baselineTrials, omittedRetries } = useMemo(
+    () => table ?? comparisonTable(detail.trials, detail.baseline_trials), [table, detail.trials, detail.baseline_trials]);
+  const baselineIndex = useMemo(() => indexBaselineTrials(baselineTrials), [baselineTrials]);
   const current = reasonCounts(currentTrials);
   const baseline = reasonCounts(baselineTrials);
   const hasBaseline = !!detail.baseline;
   const [selected, setSelected] = useState<BreakdownCategory>(() => BREAKDOWN_CATEGORIES.find(reason => current[reason] > 0)
     ?? (hasBaseline ? BREAKDOWN_CATEGORIES.find(reason => baseline[reason] > 0) : undefined) ?? 'error');
-  const trials = breakdownTrials(currentTrials, baselineTrials, selected);
+  const trials = breakdownTrials(currentTrials, baselineIndex, selected);
   const baseTrials = hasBaseline ? baselineBreakdownTrials(baselineTrials, selected) : [];
   const baselineRun = detail.baseline?.eval_id;
   const causes = causeCounts(currentTrials, baselineTrials, selected);

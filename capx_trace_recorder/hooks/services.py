@@ -29,6 +29,7 @@ Related: ``capx_trace_recorder/hooks/http.py``, ``capx_trace_recorder/hooks/molm
 from __future__ import annotations
 
 import functools
+import inspect
 import time
 from typing import Any
 
@@ -59,6 +60,7 @@ SERVICE_ATTRS = {
     "ik_solve_fn": "pyroki",
     "trajopt_plan_fn": "pyroki",
 }
+_SIGNATURE_UNSET = object()
 
 
 def _service_name(attr: str, fn: Any) -> str:
@@ -69,18 +71,27 @@ def _service_name(attr: str, fn: Any) -> str:
     return service
 
 
-def _bind(fn: Any, args: tuple, kwargs: dict) -> dict[str, Any]:
-    import inspect
-
+def _bind(fn: Any, args: tuple, kwargs: dict, signature_cache: list[Any] | None = None) -> dict[str, Any]:
     try:
-        return dict(inspect.signature(fn).bind_partial(*args, **kwargs).arguments)
+        signature = signature_cache[0] if signature_cache is not None else _SIGNATURE_UNSET
+        if signature is _SIGNATURE_UNSET:
+            try:
+                signature = inspect.signature(fn)
+            except (TypeError, ValueError):
+                signature = None
+            if signature_cache is not None:
+                signature_cache[0] = signature
+        if signature is not None:
+            return dict(signature.bind_partial(*args, **kwargs).arguments)
     except (TypeError, ValueError):
-        out = {f"arg{i}": v for i, v in enumerate(args)}
-        out.update(kwargs)
-        return out
+        pass
+    out = {f"arg{i}": v for i, v in enumerate(args)}
+    out.update(kwargs)
+    return out
 
 
-def _service_before(service: str, function: str, fn: Any, args: tuple, kwargs: dict) -> Any:
+def _service_before(service: str, function: str, fn: Any, args: tuple, kwargs: dict,
+                    signature_cache: list[Any] | None = None) -> Any:
     """Emit ``service_call_start`` and return the call's context (the wrapper pushes it)."""
     parent_ctx = C.innermost()
     if parent_ctx is not None:
@@ -94,7 +105,7 @@ def _service_before(service: str, function: str, fn: Any, args: tuple, kwargs: d
     event_id = new_event_id()
     pending: list[Any] = []
     budget = ArrayBudget(ep.config.array_call_bytes, ep)
-    request = summarize_arguments(_bind(fn, args, kwargs), pending, budget,
+    request = summarize_arguments(_bind(fn, args, kwargs, signature_cache), pending, budget,
                                   label="perception_input", image_args=True)
     data = {"service": service, "function": function, "request_summary": request, "endpoint": None}
     if budget.exceeded:
@@ -231,10 +242,14 @@ def _service_end(rec: Any, result: Any, exc: BaseException | None) -> None:
 
 
 def make_service_wrapper(fn: Any, service: str, function: str) -> Any:
+    # Cache on the wrapper so discarded API instances release their closures.
+    # Populate lazily inside guard(), preserving trial-alarm propagation.
+    signature_cache = [_SIGNATURE_UNSET]
+
     @functools.wraps(fn)
     def service_call(*args: Any, **kwargs: Any) -> Any:
         t0 = time.perf_counter()
-        rec = guard(_service_before, service, function, fn, args, kwargs)
+        rec = guard(_service_before, service, function, fn, args, kwargs, signature_cache)
         if rec is None:
             return fn(*args, **kwargs)
         add_overhead(rec.episode, t0)
