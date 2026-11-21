@@ -64,7 +64,7 @@ def check(base_url: str, fixture: Path, output: Path) -> None:
             expect(panel.get_by_text("はっきり改善", exact=True)).to_be_visible()
             expect(panel.get_by_text("判定済み 7組", exact=False)).to_be_visible()
             expect(panel.get_by_text("7組中 1組（14.3%）", exact=False)).to_be_visible()
-            expect(panel.get_by_role("link", name="ev-sign-repeat")).to_have_attribute("href", "/evals/ev-sign-repeat")
+            expect(panel.get_by_role("link", name="ev-sign-repeat")).to_have_attribute("href", "/evals/ev-sign-repeat?site=b300")
             panel.get_by_text("検定の見方（p値 0.0313）", exact=True).click()
             expect(panel.get_by_text("p値は「改善が偶然である確率」ではありません。", exact=False)).to_be_visible()
             page.screenshot(path=str(output / "paired-improvement.png"), full_page=True, animations="disabled")

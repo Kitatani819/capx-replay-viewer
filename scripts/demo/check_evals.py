@@ -74,7 +74,7 @@ def check(base_url: str, fixture: Path, output: Path) -> None:
             # The collapsed trial details repeat the status; check the visible notice.
             missing = page.get_by_role("region", name="手元にない試行", exact=True)
             expect(missing.get_by_text("GMOから取り込み中（2.0 KB）", exact=True)).to_be_visible()
-            expect(page.get_by_role("link", name="比較ページへ戻る", exact=True)).to_have_attribute("href", f"/evals/{run_id}")
+            expect(page.get_by_role("link", name="比較ページへ戻る", exact=True)).to_have_attribute("href", f"/evals/{run_id}?site=b300")
             page.wait_for_function("document.querySelector('video')?.readyState >= 2")
             assert posts == [{"run_id": run_id, "episode_id": episode_id}]
             passed.append("未取得の試行1件だけを模擬GMOから取り込み、完了後に録画を表示")
