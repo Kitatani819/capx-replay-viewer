@@ -39,7 +39,7 @@ def check_api_python(page, url, events, output):
     expect(api_panel.locator('[data-code-line]')).to_have_count(4)
     expect(api_panel.locator('[data-code-line="4"]')).to_contain_text('Success!')
     # Unhighlighted names inherited the dark theme's pale text before this mode.
-    assert api_panel.locator('[data-code-line="3"] > .text-sand-200').evaluate('el => getComputedStyle(el).color') == 'rgb(36, 51, 43)'
+    assert api_panel.locator('[data-code-line="3"] > .text-sand-200').evaluate('el => getComputedStyle(el).color') == 'rgb(28, 36, 30)'
     expect(details.get_by_role('heading', name='このPythonを生成したモデル')).to_be_visible()
     block = by_id[goto0['data']['call_site']['code_block_id']]
     source_id = block['data']['source_model_event_id']
