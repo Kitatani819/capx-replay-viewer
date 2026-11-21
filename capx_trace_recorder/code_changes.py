@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import itertools
 import json
 import os
 import re
 import stat
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,20 @@ from capx_trace_viewer import evals, reader
 _SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".yaml", ".yml", ".toml",
              ".md", ".rst", ".txt", ".sh", ".css", ".html", ".patch", ".ini", ".cfg"}
 _SENSITIVE = re.compile(r"(?:^|[./_\-])(?:secrets?|credentials?|passwords?|tokens?|private[._\-]?key|api[._\-]?key|access[._\-]?key|id_rsa|id_ed25519)(?:[./_\-]|$)", re.I)
+
+
+@contextlib.contextmanager
+def trusted_git_environment(repo: Path, trust_repo: bool, env: dict[str, str]):
+    """Use the same short-lived global safe.directory config on supported Git."""
+    if not trust_repo:
+        yield env.copy()
+        return
+    with tempfile.TemporaryDirectory(prefix="capx-eval-git-") as temporary:
+        config = Path(temporary) / "config"
+        value = (str(repo.resolve()).replace("\\", "\\\\").replace('"', '\\"')
+                 .replace("\n", "\\n").replace("\t", "\\t").replace("\b", "\\b"))
+        config.write_text(f'[safe]\n\tdirectory = "{value}"\n', encoding="utf-8")
+        yield {**env, "GIT_CONFIG_GLOBAL": str(config)}
 
 
 def without_git_filters(env: dict[str, str], config_names: bytes) -> dict[str, str]:
@@ -149,58 +165,55 @@ def capture_code_changes(repo: Path, trace_root: Path, baseline: str | None,
         return metadata
     env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", **(git_env or {})}
     try:
-        if trust_repo:
-            count = int(env.get("GIT_CONFIG_COUNT", "0"))
-            env.update(GIT_CONFIG_COUNT=str(count + 1), **{f"GIT_CONFIG_KEY_{count}": "safe.directory",
-                                                        f"GIT_CONFIG_VALUE_{count}": str(repo.resolve())})
-        env = without_git_filters(env, _git(repo, ["config", "--null", "--name-only", "--list"], 64 * 1024, env))
-        untracked = _git(repo, ["ls-files", "--others", "--exclude-standard", "-z"], 64 * 1024, env)
-        metadata["untracked_files"] = len([name for name in untracked.split(b"\0") if name])
-        commit = base_git["commit"]
-        raw = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--no-renames", "--numstat", "-z", commit, "--"], 64 * 1024, env)
-        files, total = [], 0
-        for row in raw.split(b"\0"):
-            if not row:
-                continue
-            added, removed, encoded_path = row.split(b"\t", 2)
-            path = encoded_path.decode("utf-8")
-            if added == b"-" or removed == b"-" or len(files) >= 100 or not _allowed_path(repo, path):
-                metadata["excluded_files"] += 1
-                continue
-            # A deleted symlink must not be recorded as code either.
-            tree = _git(repo, ["ls-tree", commit, "--", path], 2048, env)
-            if tree and not tree.startswith((b"100644 ", b"100755 ")):
-                metadata["excluded_files"] += 1
-                continue
-            try:
-                patch = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color",
-                                    "--ignore-submodules=all", "--src-prefix=a/", "--dst-prefix=b/", "--unified=3", commit, "--", path],
-                             min(32 * 1024, evals.MAX_CODE_DIFF_BYTES - total), env).decode("utf-8")
-            except (OSError, UnicodeError) as exc:
-                if is_trial_alarm(exc):
-                    raise
-                metadata["excluded_files"] += 1
-                continue
-            sanitized = redact(patch, None)
-            if sanitized.cut:
-                metadata["excluded_files"] += 1
-                continue
-            metadata["redacted"] = metadata["redacted"] or sanitized.redacted
-            size = len(sanitized.text.encode("utf-8"))
-            if total + size > evals.MAX_CODE_DIFF_BYTES:
-                metadata["excluded_files"] += 1
-                continue
-            total += size
-            files.append({"path": path, "diff": sanitized.text})
-        artifact = {"schema": "capx-code-changes/1", "baseline_commit": commit,
-                    "current_commit": revision["commit"], "files": files}
-        data = (json.dumps(artifact, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
-        if len(data) > evals.MAX_CODE_CHANGES_BYTES:
-            raise OSError("artifact limit exceeded")
-        metadata.update(status="recorded", artifact=evals.CODE_CHANGES_FILE, files=len(files),
-                        sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data))
-        evals.validate_code_change_metadata(metadata)
-        evals.validate_code_change_artifact(artifact, metadata)
+        with trusted_git_environment(repo, trust_repo, env) as env:
+            env = without_git_filters(env, _git(repo, ["config", "--null", "--name-only", "--list"], 64 * 1024, env))
+            untracked = _git(repo, ["ls-files", "--others", "--exclude-standard", "-z"], 64 * 1024, env)
+            metadata["untracked_files"] = len([name for name in untracked.split(b"\0") if name])
+            commit = base_git["commit"]
+            raw = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--no-renames", "--numstat", "-z", commit, "--"], 64 * 1024, env)
+            files, total = [], 0
+            for row in raw.split(b"\0"):
+                if not row:
+                    continue
+                added, removed, encoded_path = row.split(b"\t", 2)
+                path = encoded_path.decode("utf-8")
+                if added == b"-" or removed == b"-" or len(files) >= 100 or not _allowed_path(repo, path):
+                    metadata["excluded_files"] += 1
+                    continue
+                # A deleted symlink must not be recorded as code either.
+                tree = _git(repo, ["ls-tree", commit, "--", path], 2048, env)
+                if tree and not tree.startswith((b"100644 ", b"100755 ")):
+                    metadata["excluded_files"] += 1
+                    continue
+                try:
+                    patch = _git(repo, ["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--no-color",
+                                        "--ignore-submodules=all", "--src-prefix=a/", "--dst-prefix=b/", "--unified=3", commit, "--", path],
+                                 min(32 * 1024, evals.MAX_CODE_DIFF_BYTES - total), env).decode("utf-8")
+                except (OSError, UnicodeError) as exc:
+                    if is_trial_alarm(exc):
+                        raise
+                    metadata["excluded_files"] += 1
+                    continue
+                sanitized = redact(patch, None)
+                if sanitized.cut:
+                    metadata["excluded_files"] += 1
+                    continue
+                metadata["redacted"] = metadata["redacted"] or sanitized.redacted
+                size = len(sanitized.text.encode("utf-8"))
+                if total + size > evals.MAX_CODE_DIFF_BYTES:
+                    metadata["excluded_files"] += 1
+                    continue
+                total += size
+                files.append({"path": path, "diff": sanitized.text})
+            artifact = {"schema": "capx-code-changes/1", "baseline_commit": commit,
+                        "current_commit": revision["commit"], "files": files}
+            data = (json.dumps(artifact, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            if len(data) > evals.MAX_CODE_CHANGES_BYTES:
+                raise OSError("artifact limit exceeded")
+            metadata.update(status="recorded", artifact=evals.CODE_CHANGES_FILE, files=len(files),
+                            sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data))
+            evals.validate_code_change_metadata(metadata)
+            evals.validate_code_change_artifact(artifact, metadata)
     except (OSError, UnicodeError, ValueError) as exc:
         if is_trial_alarm(exc):
             raise

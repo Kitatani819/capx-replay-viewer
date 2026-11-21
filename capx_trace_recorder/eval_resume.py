@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import socket
 import stat
 from pathlib import Path
@@ -173,8 +174,22 @@ def finalize_unobserved(trace_root: Path, run_id: str) -> int:
             try:
                 os.mkdir(episode_id, 0o770, dir_fd=run.fd)
             except FileExistsError:
-                continue
+                pass
             with run.subdir(episode_id) as episode:
+                existing, error, _st = reader.read_json_at(episode, "episode.json", 2 * 1024 * 1024)
+                if error != "missing":
+                    if (error or not isinstance(existing, dict) or existing.get("episode_id") != episode_id
+                            or existing.get("run_id") != run_id or existing.get("source") != "evaluation_plan"
+                            or trial_key(existing) != key):
+                        raise ValueError("existing planned trial placeholder has a different identity")
+                    observed.add(key)
+                    continue
+                # A killed atomic writer may leave its private temporary file.
+                # Keep those remnants, but never claim an unrelated directory.
+                for name in episode.names():
+                    if (not re.fullmatch(r"\.resume-[0-9a-f]{16}\.tmp", name)
+                            or not stat.S_ISREG(os.stat(name, dir_fd=episode.fd, follow_symlinks=False).st_mode)):
+                        raise ValueError("existing planned trial placeholder has unrelated files")
                 raw = {"episode_id": episode_id, "run_id": run_id, "task": key[0], "condition": key[1], "seed": key[2],
                        "source": "evaluation_plan", "status": "ended", "trace_complete": False,
                        "episode_end_written": False, "started_wall_time": 0, "attempt_index": 0, "eval_segment": 0,

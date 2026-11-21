@@ -28,6 +28,7 @@ import functools
 import gc
 import json
 import os
+from pathlib import Path
 import sys
 import threading
 import tracemalloc
@@ -570,7 +571,7 @@ def test_run_json_short_writes_are_completed(rec, monkeypatch):
     real = S._os_write
 
     def twelve_bytes(fd, data):
-        if _fd_path(fd).endswith("/run.json"):
+        if Path(_fd_path(fd)).name.startswith(".run.json.tmp."):
             return real(fd, bytes(data[:12]))
         return real(fd, data)
 
@@ -587,7 +588,7 @@ def test_a_failed_run_json_write_is_recorded_and_retried(rec, monkeypatch):
     state = {"fail": 1}
 
     def no_progress(fd, data):
-        if state["fail"] and _fd_path(fd).endswith("/run.json"):
+        if state["fail"] and Path(_fd_path(fd)).name.startswith(".run.json.tmp."):
             state["fail"] -= 1
             return 0
         return real(fd, data)
@@ -605,9 +606,9 @@ def test_a_failed_run_json_write_is_recorded_and_retried(rec, monkeypatch):
 def test_a_failed_unscoped_log_is_recorded_outside_it(rec):
     """An unscoped log open failure reaches a status file beside that log."""
     run_dir = rec.root / "run"
-    name = f"unscoped.{os.getpid()}"
-    (run_dir / f"{name}.jsonl").mkdir(parents=True)
     log = C.unscoped_log(rec.store, "run")
+    name = log.events_path.stem
+    (run_dir / f"{name}.jsonl").mkdir(parents=True)
     log.emit("model_request", data={"role": "preflight"})
     log.emit("trace_warning", data={"code": "hook_install_failed", "run_level": True})
     rec.flush()
@@ -620,7 +621,8 @@ def test_a_failed_unscoped_log_is_recorded_outside_it(rec):
 def test_an_unscoped_log_that_recovers_says_how_many_lines_it_lost(rec, monkeypatch):
     real = S._os_write
     state = {"fail": 2}
-    unscoped_path = rec.root / "run" / f"unscoped.{os.getpid()}.jsonl"
+    log = C.unscoped_log(rec.store, "run")
+    unscoped_path = log.events_path
 
     def no_space(fd, data):
         # Identify the target by its open file identity, without Linux /proc.
@@ -643,7 +645,7 @@ def test_an_unscoped_log_that_recovers_says_how_many_lines_it_lost(rec, monkeypa
     assert [e["data"].get("i") for e in events if e["event_type"] == "model_request"] == [2]
     reports = [e["data"] for e in events if e["data"].get("code") == "write_failed"]
     assert [r["count"] for r in reports] == [2] and reports[0]["file"].startswith("unscoped.")
-    status = json.loads((rec.root / "run" / f"unscoped.{os.getpid()}.status.json").read_text())
+    status = json.loads(unscoped_path.with_suffix(".status.json").read_text())
     assert status["lines_not_written"] == 2
 
 

@@ -3,6 +3,8 @@
 import json
 import sys
 import types
+import threading
+import time
 
 import pytest
 
@@ -14,7 +16,7 @@ from capx_trace_recorder import eval as wrapper
 def index_calls(monkeypatch):
     calls = []
 
-    def build_index(root):
+    def build_index(root, **kwargs):
         paths = list(root.glob("*/*/eval.json"))
         assert len(paths) == 1
         calls.append((root, json.loads(paths[0].read_text(encoding="utf-8"))))
@@ -52,12 +54,44 @@ def test_index_rebuilt_after_child_cannot_start(tmp_path, index_calls):
     assert index_calls[-1][1]["end"]["exit_code"] == 127
 
 
+def test_stalled_index_scan_has_deadline_and_coalesces_rebuilds(tmp_path, monkeypatch):
+    from capx_trace_recorder import eval_index
+
+    calls = []
+    release = threading.Event()
+    finished = threading.Event()
+
+    def stalled(root, **kwargs):
+        calls.append(root)
+        try:
+            release.wait(0.5)
+        finally:
+            finished.set()
+
+    monkeypatch.delenv("CAPX_EVAL_INDEX", raising=False)
+    monkeypatch.setattr(wrapper, "INDEX_REBUILD_TIMEOUT_S", 0.02, raising=False)
+    monkeypatch.setattr(eval_index, "build_index", stalled)
+    started = time.monotonic()
+    try:
+        wrapper._rebuild_index(tmp_path / "test-user", enabled=True)
+        wrapper._rebuild_index(tmp_path / "test-user", enabled=True)
+        assert time.monotonic() - started < 0.2
+        assert len(calls) == 1
+    finally:
+        release.set()
+        assert finished.wait(1)
+        guard = getattr(wrapper, "_INDEX_REBUILD_LOCK", None)
+        if guard is not None:
+            assert guard.acquire(timeout=1)
+            guard.release()
+
+
 @pytest.mark.parametrize("exit_code", [0, 9])
 @pytest.mark.parametrize("failure", [OSError, RuntimeError])
 def test_index_failure_only_warns_and_preserves_exit(tmp_path, index_calls, monkeypatch, capsys, exit_code, failure):
     attempts = []
 
-    def fail(root):
+    def fail(root, **kwargs):
         attempts.append(root)
         raise failure("index unavailable")
 

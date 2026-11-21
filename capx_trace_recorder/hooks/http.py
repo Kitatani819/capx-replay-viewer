@@ -52,6 +52,7 @@ from capx_trace_recorder.payload import (
     pixel_sha256,
     put_redacted,
     reconstruct,
+    response_fields,
     sanitize_url,
 )
 from capx_trace_recorder.segments import compute_input_summary, text_parts
@@ -422,7 +423,7 @@ def _build_response(ctx: Any, *, content: bytes | None, event_id: str) -> None:
         return
     data["body_bytes"] = len(content)
     data["body_sha256"] = hashlib.sha256(content).hexdigest()
-    obj, fields = parse_response_body(content)
+    obj, _fields = parse_response_body(content)
     if obj is None:
         ctx.warn("payload_unparsed", "response body is not JSON", event_id)
         data["content"] = None
@@ -430,6 +431,7 @@ def _build_response(ctx: Any, *, content: bytes | None, event_id: str) -> None:
         return
     masked, masked_paths = mask_secrets(obj)
     stored = json_safe(masked) if has_nonfinite(masked) else masked
+    fields = response_fields(stored)
     art = ctx.write_file(f"payloads/{event_id}.response.json",
                          json.dumps(stored, ensure_ascii=True, separators=(",", ":"),
                                     allow_nan=False).encode("ascii"),

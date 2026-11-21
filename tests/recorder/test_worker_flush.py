@@ -61,7 +61,7 @@ hooks._copy_trial_videos = blocked_copy
 flush = store.flush
 drains = []
 def drain(timeout=10.0):
-    assert timeout is None, 'worker drain still has a deadline'
+    assert timeout == hooks.WORKER_DRAIN_TIMEOUT_S, 'worker drain is not bounded'
     assert signal.getitimer(signal.ITIMER_REAL)[0] == 0, 'draining inside the trial alarm'
     drains.append(timeout)
     return flush(timeout)
@@ -95,7 +95,7 @@ bootstrap.run_patch(runner.__name__, runner)
 assert runner._run_single_trial is wrapped_trial
 assert runner._run_single_trial_worker(SimpleNamespace(), 1, config={'record_video': True}) is answer
 assert calls == [1]
-assert drains == [None]
+assert drains == [hooks.WORKER_DRAIN_TIMEOUT_S]
 # Simulate the collector terminating the process immediately after its result:
 # atexit cannot rescue an undrained video or the final event.
 os._exit(0)

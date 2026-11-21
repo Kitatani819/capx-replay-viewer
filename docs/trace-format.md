@@ -97,9 +97,9 @@ To trace a single process, use `python -m capx_trace_recorder run -m module [arg
   <run_id>/
     run.json                                # created once with O_EXCL, never replaced
     runner_records.jsonl                    # redacted copies of the runner's trial records (runner parent process)
-    unscoped.<pid>.jsonl                    # events with no episode (preflight, unattributed events, run-level warnings)
-    unscoped.<pid>.files/                   # payloads and assets of those events
-    unscoped.<pid>.status.json              # only when lines of that log could not be written
+    unscoped.<pid>.<instance>.jsonl                    # events with no episode (preflight, unattributed events, run-level warnings)
+    unscoped.<pid>.<instance>.files/                   # payloads and assets of those events
+    unscoped.<pid>.<instance>.status.json              # only when lines of that log could not be written
     <episode_id>/
       episode.json                          # summary; tmp file + rename on every update
       events.jsonl                          # append-only; one ASCII JSON event per line; file order == seq order
@@ -135,8 +135,10 @@ start fields (`source`, `task`, `condition`, `seed`, `attempt_index`,
 `tracer_overhead_s`, `harness_summary` and `exception`; and, where they apply,
 `hooks_installed_during_episode`, `hooks_skipped_during_episode` and `apis_wrapped` (the hook metadata).
 
-Events that belong to no episode go to the unscoped log of their run. Their files are in
-`unscoped.<pid>.files/`, and their artifact paths are relative to the run directory.
+Events that belong to no episode go to the unscoped log of their run. New logs add a
+random 16-hex process-instance suffix to avoid PID reuse and cross-host collisions;
+the reader also accepts legacy `unscoped.<pid>` names. Their files are in
+`unscoped.<pid>.<instance>.files/`, and their artifact paths are relative to the run directory.
 
 ### 4.1.1 Stopping-condition evidence (optional, backward compatible)
 
@@ -333,10 +335,12 @@ the segments and the web session. A late event after that point carries `sim_ste
 `sim_time` null and has no key frames or state.
 
 Worker results. At `capx.envs.runner._run_single_trial_worker`, the recorder waits
-without a deadline for queued writes, including video copies and the final events,
+at most 30 s for queued writes, including video copies and the final events,
 before returning the result or propagating the trial's error. This runs after the
 runner disables the trial alarm and before `parallel_eval.py` receives the result,
-so its later 5 s worker shutdown wait does not limit these writes.
+so its later 5 s worker shutdown wait does not limit these writes. If the recorder
+cannot drain in time, it reports incomplete recording on stderr and preserves the
+worker's original result or error.
 If queue insertion fails with `MemoryError`, the store rolls back the pending-item
 count and any queued-byte reservation before propagating the error. A rejected
 item or flush barrier therefore does not keep a later worker drain waiting after
@@ -357,7 +361,7 @@ start or end events and appears incomplete.
 Write failures. A write that fails for an episode's files counts a `write_failed` gap in
 that episode; one that fails for `run.json` or `runner_records.jsonl` leaves a
 `write_failed` warning in the run's unscoped log. Lines that the unscoped log itself cannot
-take are counted in `unscoped.<pid>.status.json` next to it, and the viewer lists that
+take are counted in `unscoped.<pid>.<instance>.status.json` next to it, and the viewer lists that
 count with the log.
 
 A failure to read a source video counts as a `read_failed` gap in the episode. This
@@ -887,6 +891,13 @@ descriptions, user feedback) produced earlier in the episode that this input doe
 contain, for example the first VDM scene description, which the later decision prompts no
 longer carry.
 
+The episode's dynamic attribution history deduplicates equal kind/text pairs and
+retains their source event IDs within a 4 MiB byte budget, including source metadata.
+Once that budget is exhausted, subsequent input summaries include the optional
+`attribution_truncated: {"omitted_segments": N, "byte_limit": 4194304}` field.
+Those missing attributions do not establish that earlier output was absent from
+the model input; the request payload itself is still recorded normally.
+
 Videos are counted separately from images. The viewer marks a request with neither as
 「この呼び出しは画像入力なし」 (no image input in this call), and only when zero images and
 zero videos were measured; a request whose body was not parsed shows 画像: 未記録 (images:
@@ -1378,7 +1389,7 @@ empty, damaged or unreadable is still answered, with `run: null` and `run_json_e
 Episodes are ordered by `start_wall_time` when it is a finite number, else by the newest
 file time, then by `episode_id`. `unscoped_files` lists `{file, bytes, log_id,
 write_status}` per unscoped log; `write_status` is the recorder's
-`unscoped.<pid>.status.json` or null, a log that exists only as that status file is listed
+`unscoped.<pid>.<instance>.status.json` or null, a log that exists only as that status file is listed
 with `bytes` and `log_id` null, and a status file that cannot be read gives
 `write_status_error`.
 
@@ -1412,9 +1423,9 @@ generation gets HTTP 409 `{"error": "generation_changed", "generation": "<new>"}
 `after_offset` past the end of the file or not at a line start also gets 409.
 
 Unscoped logs. The episode endpoints also serve a run's unscoped log, under the episode id
-`unscoped.<pid>`: its summary has `kind: "unscoped"` and `status: "unscoped"`,
+`unscoped.<pid>.<instance>`: its summary has `kind: "unscoped"` and `status: "unscoped"`,
 `/events` pages the log, and `/file`, `/array` and `/array-image` serve only paths below
-`unscoped.<pid>.files/`. A real episode directory of that name would take precedence.
+`unscoped.<pid>.<instance>.files/`. A real episode directory of that name would take precedence.
 
 Viser. `/viser` probes ports 8080 and 8081 on 127.0.0.1 for a running Viser server,
 never the server's own port. With `--viewer-only` it always answers

@@ -110,8 +110,10 @@ def test_copy_refreshes_other_open_episode_heartbeat(tmp_path, monkeypatch):
     original = os.utime
 
     def track(path, *args, **kwargs):
-        if path == b.base_dir / "heartbeat" and any((a.base_dir / "videos").glob(".video_*.tmp.*")):
-            touched.append(path)
+        heartbeat = b.base_dir / "heartbeat"
+        matches = isinstance(path, int) and os.fstat(path).st_ino == heartbeat.stat().st_ino
+        if matches and any((a.base_dir / "videos").glob(".video_*.tmp.*")):
+            touched.append(heartbeat)
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(TRIAL.os, "utime", track)
@@ -420,10 +422,10 @@ def test_h4_returns_original_summary_after_video_io_failure(tmp_path, monkeypatc
             patch.setattr(os, "read", lambda fd, n: (_ for _ in ()).throw(OSError("read failed")))
         else:
             real = os.replace
-            def fail_video_replace(src, dst):
+            def fail_video_replace(src, dst, **kwargs):
                 if str(dst).endswith("video_combined.mp4"):
                     raise OSError("write failed")
-                return real(src, dst)
+                return real(src, dst, **kwargs)
             patch.setattr(os, "replace", fail_video_replace)
         wrapped = TRIAL.make_run_single_trial_wrapper(fake)
         assert wrapped(types.SimpleNamespace(low_level_env=None), 1,

@@ -46,6 +46,7 @@ The read-only reader is ``capx_trace_viewer.reader``.
 from __future__ import annotations
 
 import atexit
+import errno
 import gzip
 import hashlib
 import io
@@ -53,6 +54,7 @@ import json
 import os
 import queue
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -66,7 +68,7 @@ from capx_trace_recorder.config import (
     MAX_EVENT_LINE_BYTES,
     TraceConfig,
 )
-from capx_trace_recorder.ids import hostname, new_event_id, utc_iso
+from capx_trace_recorder.ids import hostname, new_event_id, random_hex, utc_iso
 from capx_trace_recorder.timeout import is_trial_alarm
 
 PID = os.getpid()
@@ -249,8 +251,9 @@ class UnscopedLog(EventSink):
     is_unscoped = True
 
     def __init__(self, store: "TraceStore", run_id: str, run_dir: Path) -> None:
-        super().__init__(store, run_id, run_dir, run_dir / f"unscoped.{os.getpid()}.files")
-        self.events_path = run_dir / f"unscoped.{os.getpid()}.jsonl"
+        name = f"unscoped.{os.getpid()}.{store.instance_id}"
+        super().__init__(store, run_id, run_dir, run_dir / f"{name}.files")
+        self.events_path = run_dir / f"{name}.jsonl"
 
 
 class EpisodeRecorder(EventSink):
@@ -358,6 +361,7 @@ class EpisodeRecorder(EventSink):
         self.multi_turn_prompt = None
         self.pending_user_feedback = []
         self.web_session = None
+        self.store.remove_empty_episode_directory(self.base_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +780,10 @@ class TraceStore:
     def __init__(self, config: TraceConfig) -> None:
         self.config = config
         self.pid = os.getpid()
+        self.instance_id = random_hex(16)
+        self._trace_path = Path(os.path.abspath(config.trace_dir))
+        # The explicitly configured root may itself be shared-storage's symlink.
+        self._destination_root = self._trace_path.resolve()
         self._queue: queue.SimpleQueue = queue.SimpleQueue()
         self._start_lock = threading.Lock()
         self._bytes_lock = threading.Lock()
@@ -891,8 +899,9 @@ class TraceStore:
         """Wait until the queue is empty, including items the writer queued
         while processing (its own warnings).
 
-        ``None`` drains without a deadline at the runner's worker boundary, after
-        its trial alarm has been disabled. Never wait inside that alarm window.
+        ``None`` allows an explicit unbounded drain. The runner worker boundary
+        uses a finite timeout after its trial alarm has been disabled. Never
+        wait inside that alarm window.
         """
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
@@ -1212,10 +1221,6 @@ class TraceStore:
         wep.opened = True
         if not wep.end_processed:
             self._open_weps[id(wep.sink)] = wep
-        try:
-            os.makedirs(wep.events_path.parent, exist_ok=True)
-        except OSError:  # timeout-ok: writer thread
-            pass
         self._ensure_run_json(wep.sink.run_dir, wep.sink.run_id)
 
     def _release(self, wep: WriterEpisode) -> None:
@@ -1245,13 +1250,71 @@ class TraceStore:
         except Exception:  # noqa: BLE001 - timeout-ok: writer thread
             pass
 
-    def _ensure_run_json(self, run_dir: Path, run_id: str) -> None:
-        """Create ``run.json`` once (``O_EXCL``, never replaced).
+    def open_directory(self, path: Path) -> int:
+        """Create and pin a destination directory without following symlinks.
 
-        Every byte is written (a short write is continued); a write that makes no
-        progress or fails removes the partial file, records ``write_failed`` in the
-        run's unscoped log and is tried again for the run's next item, at most
-        ``RUN_JSON_ATTEMPTS`` times.
+        The configured root is resolved once as the operator's trust boundary;
+        symlink components below it are rejected. Search-only ancestors need no
+        read permission. The caller owns the returned descriptor.
+        """
+        relative = Path(os.path.abspath(path)).relative_to(self._trace_path)
+        absolute = self._destination_root / relative
+        flags = getattr(os, "O_PATH", getattr(os, "O_SEARCH", os.O_RDONLY)) | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory = os.open(absolute.anchor, flags)
+        try:
+            for name in absolute.parts[1:]:
+                try:
+                    os.mkdir(name, dir_fd=directory)
+                except FileExistsError:
+                    pass
+                child = os.open(name, flags, dir_fd=directory)
+                os.close(directory)
+                directory = child
+            return directory
+        except BaseException:  # close descriptors and preserve the trial alarm
+            os.close(directory)
+            raise
+
+    def remove_empty_episode_directory(self, path: Path) -> None:
+        """Release an unused reservation after an abandoned or dropped episode."""
+        directory = None
+        try:
+            directory = self.open_directory(path.parent)
+            os.rmdir(path.name, dir_fd=directory)
+        except OSError as exc:
+            if is_trial_alarm(exc):
+                raise
+        finally:
+            if directory is not None:
+                os.close(directory)
+
+    def _temporary_file(self, directory: int, name: str) -> tuple[str, int]:
+        self._tmp_counter += 1
+        temporary = f".{name}.tmp.{os.getpid()}.{self.instance_id}.{self._tmp_counter}"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o644, dir_fd=directory)
+        return temporary, fd
+
+    def _open_append(self, path: Path) -> int:
+        directory = self.open_directory(path.parent)
+        try:
+            fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_APPEND |
+                         os.O_NOFOLLOW | os.O_NONBLOCK, 0o644, dir_fd=directory)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                os.close(fd)
+                raise OSError(errno.EINVAL, "append target is not an independent regular file")
+            return fd
+        finally:
+            os.close(directory)
+
+    def _ensure_run_json(self, run_dir: Path, run_id: str) -> None:
+        """Publish complete metadata once; repair an interrupted legacy write.
+
+        A nonblocking per-run lock serializes validation and recovery. The final
+        name is linked only after the temporary file is fully written, so a
+        killed writer leaves no partial published record. Existing valid
+        metadata is preserved.
         """
         key = str(run_dir)
         if key in self._run_json_done:
@@ -1260,11 +1323,51 @@ class TraceStore:
         if failures >= RUN_JSON_ATTEMPTS:
             return
         path = run_dir / "run.json"
+        directory = lock = None
+        temporary = None
         try:
-            os.makedirs(run_dir, exist_ok=True)
-            if path.exists():
-                self._run_json_done.add(key)
+            import fcntl
+
+            directory = self.open_directory(run_dir)
+            lock = os.open(".run.json.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW |
+                           os.O_NONBLOCK, 0o644, dir_fd=directory)
+            info = os.fstat(lock)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError(errno.EINVAL, "invalid run metadata lock")
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:  # timeout-ok: writer thread; another writer will publish it
                 return
+            try:
+                existing = os.open("run.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                   dir_fd=directory)
+            except FileNotFoundError:
+                existing = None
+            if existing is not None:
+                try:
+                    info = os.fstat(existing)
+                    if not stat.S_ISREG(info.st_mode):
+                        raise OSError(errno.EINVAL, "invalid run metadata file")
+                    raw = os.read(existing, 1024 * 1024 + 1)
+                finally:
+                    os.close(existing)
+                try:
+                    previous = json.loads(raw)
+                except (ValueError, UnicodeError):  # timeout-ok: writer thread
+                    previous = None
+                valid = (isinstance(previous, dict)
+                         and previous.get("schema_version") == SCHEMA_VERSION
+                         and previous.get("run_id") == run_id
+                         and isinstance(previous.get("tracer_version"), str)
+                         and isinstance(previous.get("created_wall_time"), (int, float))
+                         and isinstance(previous.get("created_at"), str)
+                         and isinstance(previous.get("created_by"), dict))
+                if valid:
+                    self._run_json_done.add(key)
+                    return
+                if isinstance(previous, dict) and previous.get("run_id") not in (None, run_id):
+                    raise OSError(errno.EINVAL, "run metadata identity mismatch")
+                os.unlink("run.json", dir_fd=directory)
             info = process_info()
             doc = {
                 "schema_version": SCHEMA_VERSION,
@@ -1278,51 +1381,52 @@ class TraceStore:
                 "runner_run_dir": os.environ.get("CAPX_TRACE_RUNNER_RUN_DIR") or None,
             }
             raw = json.dumps(doc, ensure_ascii=True, indent=1).encode()
-            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            temporary, fd = self._temporary_file(directory, "run.json")
             try:
                 _write_all(fd, raw)
-            except BaseException:  # timeout-ok: writer thread (re-raised below)
-                os.close(fd)
-                fd = -1
-                _unlink_quietly(path)  # this process created it: a partial run.json is removed
-                raise
             finally:
-                if fd >= 0:
-                    os.close(fd)
-            self._run_json_done.add(key)
-        except FileExistsError:
+                os.close(fd)
+            os.link(temporary, "run.json", src_dir_fd=directory, dst_dir_fd=directory,
+                    follow_symlinks=False)
             self._run_json_done.add(key)
         except OSError as exc:  # timeout-ok: writer thread
             self._run_json_failures[key] = failures + 1
             self._run_write_failed(path, f"{type(exc).__name__}: {exc}")
+        finally:
+            if temporary is not None and directory is not None:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except OSError:  # timeout-ok: writer thread
+                    pass
+            if lock is not None:
+                os.close(lock)
+            if directory is not None:
+                os.close(directory)
 
     def atomic_write(self, target: Path, data: bytes, wep: WriterEpisode | None = None,
                      count_disk: bool = True) -> tuple[bool, str | None]:
-        """Write ``target`` via a tmp file in the same directory and ``os.replace``."""
-        parent = target.parent
-        tmp: Path | None = None
+        """Write through an exclusive temporary file in a pinned destination."""
+        directory = None
+        temporary = None
         try:
-            key = str(parent)
-            if wep is None or key not in wep.made_dirs:
-                os.makedirs(parent, exist_ok=True)
-                if wep is not None and not wep.end_processed:
-                    wep.made_dirs.add(key)
-            self._tmp_counter += 1
-            tmp = parent / f".{target.name}.tmp.{os.getpid()}.{self._tmp_counter}"
-            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            directory = self.open_directory(target.parent)
+            temporary, fd = self._temporary_file(directory, target.name)
             try:
                 _write_all(fd, data)
             finally:
                 os.close(fd)
-            os.replace(tmp, target)
+            os.replace(temporary, target.name, src_dir_fd=directory, dst_dir_fd=directory)
             return True, None
         except Exception as exc:  # noqa: BLE001 - timeout-ok: writer thread
-            try:
-                if tmp is not None and os.path.exists(tmp):
-                    os.unlink(tmp)
-            except Exception:  # noqa: BLE001 - timeout-ok: writer thread
-                pass
             return False, f"{type(exc).__name__}: {exc}"[:200]
+        finally:
+            if temporary is not None and directory is not None:
+                try:
+                    os.unlink(temporary, dir_fd=directory)
+                except OSError:  # timeout-ok: writer thread
+                    pass
+            if directory is not None:
+                os.close(directory)
 
     def _encode_line(self, ctx: BuildContext, event: dict[str, Any]) -> bytes:
         from capx_trace_recorder.serialize import json_safe
@@ -1362,8 +1466,7 @@ class TraceStore:
             return False  # after the disk-low marker nothing is appended
         try:
             if wep.fd is None:
-                os.makedirs(wep.events_path.parent, exist_ok=True)
-                wep.fd = os.open(str(wep.events_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+                wep.fd = self._open_append(wep.events_path)
                 wep.size = os.fstat(wep.fd).st_size
         except OSError as exc:  # timeout-ok: writer thread
             reason = f"cannot open {wep.events_path.name}: {exc}"[:200]
@@ -1481,8 +1584,7 @@ class TraceStore:
         line = line or b""
         self._ensure_run_json(path.parent, path.parent.name)
         try:
-            os.makedirs(path.parent, exist_ok=True)
-            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+            fd = self._open_append(path)
             try:
                 before = os.fstat(fd).st_size
                 n = _os_write(fd, line)
@@ -1653,10 +1755,10 @@ class TraceStore:
         wep.last_heartbeat = now
         path = wep.base_dir / "heartbeat"
         try:
-            if path.exists():
-                os.utime(path, None)
-            else:
-                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o644)
+            fd = self._open_append(path)
+            try:
+                os.utime(fd, None)
+            finally:
                 os.close(fd)
         except OSError:  # timeout-ok: writer thread
             pass

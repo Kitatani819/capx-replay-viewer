@@ -89,7 +89,7 @@ STATUSES = ("ended", "ended_with_gaps", "running", "incomplete")
 # relative to the run dir). The viewer opens it like an episode under the id
 # ``unscoped.<pid>``; its summary has status "unscoped".
 UNSCOPED_STATUS = "unscoped"
-_UNSCOPED_ID_RE = re.compile(r"unscoped\.[0-9]{1,12}")
+_UNSCOPED_ID_RE = re.compile(r"unscoped\.[0-9]{1,12}(?:\.[0-9a-f]{16})?")
 # ``unscoped.<pid>.status.json``: written by the recorder next to a log whose lines could
 # not be written (see _unscoped_logs); read up to this size.
 UNSCOPED_STATUS_SUFFIX = ".status.json"
