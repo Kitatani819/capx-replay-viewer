@@ -2,7 +2,7 @@ import { remoteName } from '../navigation/site';
 import { runnerLabel, runnerName, type RunnerNames } from '../runnerNames';
 import { siteHref } from '../navigation/site';
 import { SiteTabs } from '../navigation/SiteTabs';
-/** Calm, read-only evaluation list and baseline comparison. */
+/** Evaluation list, local copies and baseline comparison. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { dateHeading, dateKey, listOptionValue } from '../listFilters';
 import { DEFAULT_EVAL_FILTERS, evalFilterSearch, evalFiltersActive, evaluationTasks, filterEvaluations, isRouteB, normalizeEvalFilters, readEvalFilters, type EvalFilters } from './filters';
@@ -16,6 +16,7 @@ import { EvalSegments } from './EvalSegments';
 import { evaluationConditions, sharedStepLimit, stepLimitText, stepsText } from './TrialConditions';
 import { PairedSignificance } from './PairedSignificance';
 import { EvalCodeChanges } from './EvalCodeChanges';
+import { useLocalCopies } from './LocalCopies';
 import { CATEGORY_CELL_WORDS, CELL_LEGEND, END_LABELS, UNJUDGED_LABEL, causeTooltip, evidenceValue, reasonLabel, ruleSourceHref, trialCategory, trialCellWord } from './failureReasons';
 import './evals.css';
 
@@ -151,6 +152,7 @@ export function EvalListPage() {
   const people = [...new Set(entries?.flatMap(entry => entry.eval?.by ? [entry.eval.by] : []) ?? [])].sort((a, b) => runnerName(a, listing.data?.names).localeCompare(runnerName(b, listing.data?.names), 'ja'));
   const tasks = [...new Set(entries?.flatMap(evaluationTasks) ?? [])].sort((a, b) => a.localeCompare(b, 'ja'));
   const status = listing.data?.remote_status;
+  const localCopies = useLocalCopies(Boolean(status), listing.reload);
   return <main className="eval-page"><div className="eval-content">
     <Breadcrumb items={[{ label: '評価一覧' }]} />
     <header className="eval-header"><h1>評価一覧</h1><SiteTabs /><a href={siteHref('/traces')}>試行を見る</a></header>
@@ -158,7 +160,8 @@ export function EvalListPage() {
     {listing.loading && !listing.data && <p role="status">評価を読み込み中…</p>}
     {listing.error && <p role="alert" className="eval-error">評価を読み込めません：{listing.error}</p>}
     {listing.data?.error && <p role="status" className="eval-note">{listing.data.error}</p>}
-    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>{remoteName()} の一覧を更新</button></div>}
+    {status && <div className="eval-remote-status"><p role="status">{remoteListingText(status)}</p><button type="button" disabled={listing.loading || status.refreshing} onClick={() => { refreshNext.current = true; listing.reload(); }}>{remoteName()} の一覧を更新</button>{localCopies.control}</div>}
+    {localCopies.panel}
     {listing.data && <>
       {(listing.data.evals.length > 0 || active) && <div className="eval-filters" role="search" aria-label="評価の絞り込み">
         <label>期間<select aria-label="期間" value={filters.period} onChange={event => changeFilters({ period: event.target.value as EvalFilters['period'] })}>

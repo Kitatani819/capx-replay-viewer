@@ -237,3 +237,30 @@
   .eval-header { flex-wrap: wrap; gap: 12px; }
   .eval-page, .eval-content, .eval-table-scroll { max-width: 100%; min-width: 0; }
 }
+
+.eval-local-copies { margin: 18px 0 24px; padding: 20px; min-width: 0; border: 1px solid var(--ce-border); border-radius: 10px; background: var(--ce-surface); box-shadow: var(--ce-shadow); }
+.eval-local-heading, .eval-local-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.eval-local-heading { justify-content: space-between; }
+.eval-local-heading h2 { margin: 0; font-size: 17px; font-weight: 600; }
+.eval-local-copies button { min-height: 36px; padding: 5px 12px; border: 1px solid var(--ce-accent-border); border-radius: 6px; background: var(--ce-accent-soft); color: var(--ce-accent); font: inherit; font-size: 13px; cursor: pointer; }
+.eval-local-copies button:disabled { opacity: .6; cursor: default; }
+.eval-local-copies button:focus-visible, .eval-remote-status button:focus-visible { outline: 2px solid var(--ce-accent); outline-offset: 3px; }
+.eval-local-note { margin: 10px 0 16px; color: var(--ce-text-secondary); font-size: 13px; }
+.eval-local-runs { margin: 0; padding: 0; list-style: none; }
+.eval-local-runs > li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(160px, 1fr); align-items: center; gap: 12px 20px; padding: 16px 0; border-top: 1px solid var(--ce-border-subtle); font-size: 13px; }
+.eval-local-run { min-width: 0; overflow-wrap: anywhere; }
+.eval-local-run strong { font-weight: 600; }
+.eval-local-run time { display: block; margin-top: 4px; color: var(--ce-text-secondary); font-size: 12px; }
+.eval-local-count, .eval-local-size { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.eval-local-action { color: var(--ce-text-secondary); overflow-wrap: anywhere; }
+.eval-local-copies .eval-local-delete { border-color: var(--ce-danger-border); color: var(--ce-danger-text); background: var(--ce-danger-bg); }
+.eval-local-confirm { margin: 16px 0; padding: 16px; border: 1px solid var(--ce-warning-border); border-radius: 8px; background: var(--ce-warning-bg); overflow-wrap: anywhere; }
+.eval-local-confirm h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.eval-local-confirm p { margin: 10px 0 16px; }
+.eval-local-success { margin: 12px 0; color: var(--ce-success-text); }
+@media (max-width: 700px) {
+  .eval-local-copies { padding: 16px; }
+  .eval-local-runs > li { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; }
+  .eval-local-run, .eval-local-action { grid-column: 1 / -1; }
+  .eval-local-size { text-align: right; }
+}
