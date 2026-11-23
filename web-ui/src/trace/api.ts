@@ -236,6 +236,21 @@ export interface GmoEpisodeSummary extends EpisodeSummary {
   conflict: boolean;
 }
 
+export interface GmoLocalCopy {
+  run_id: string;
+  size_bytes: number;
+  episode_count: number;
+  is_eval: boolean;
+  started_at: string | null;
+  deletable: boolean;
+  reason?: string | null;
+}
+
+export interface GmoLocalCopies {
+  runs: GmoLocalCopy[];
+  total_bytes: number;
+}
+
 export interface GmoJob {
   job_id: string;
   run_id: string;
@@ -353,6 +368,14 @@ export const gmoApi = {
 
   fetch(runId: string, episodeId: string, signal?: AbortSignal): Promise<{ job_id: string }> {
     return gmoJson('/fetch', signal, 'POST', { run_id: runId, episode_id: episodeId });
+  },
+
+  localCopies(signal?: AbortSignal): Promise<GmoLocalCopies> {
+    return gmoJson('/local-copies', signal);
+  },
+
+  deleteLocalCopy(runId: string, signal?: AbortSignal): Promise<{ run_id: string; freed_bytes: number }> {
+    return gmoJson('/local-copies/delete', signal, 'POST', { run_id: runId });
   },
 
   jobs(signal?: AbortSignal): Promise<GmoJob[]> {

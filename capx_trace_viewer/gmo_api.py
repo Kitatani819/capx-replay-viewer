@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
+import inspect
 import json
+import os
 import queue
+import shutil
+import stat
 import threading
 import time
 import uuid
@@ -33,6 +36,64 @@ def _timestamp(value: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if value is None else value, timezone.utc).isoformat()
 
 
+def _local_copy_error(reason: str, message: str, status: int = 409) -> HTTPException:
+    return HTTPException(status, {"reason": reason, "message": message})
+
+
+def _open_local_root(dest: Path) -> reader.Dir:
+    # Unlike the read-only reader root, a deletion root must never be a symlink.
+    return reader.Dir(os.open(dest, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+
+
+def _tree_bytes(directory: reader.Dir) -> int:
+    """Sum lstat sizes of files and links; directory metadata is not copied data."""
+    total = 0
+    with os.scandir(directory.fd) as entries:
+        for entry in entries:
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                fd = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory.fd)
+                with reader.Dir(fd) as child:
+                    total += _tree_bytes(child)
+            else:
+                total += info.st_size
+    return total
+
+
+def _scan_local_run(run_id: str, run: reader.Dir) -> dict[str, Any]:
+    size = _tree_bytes(run)
+    episodes = []
+    for episode_id, directory in reader._iter_episodes(run):
+        metadata, _error, _info = reader.read_json_at(directory, "episode.json")
+        heartbeat = directory.file_stat("heartbeat")
+        episodes.append((episode_id, metadata, heartbeat.st_mtime if heartbeat is not None else None))
+    evaluation, _error, _info = reader.read_json_at(run, "eval.json")
+    return {
+        "run_id": run_id, "size_bytes": size, "episode_count": len(episodes),
+        "is_eval": run.lstat("eval.json") is not None,
+        "started_at": evaluation.get("started_at") if isinstance(evaluation, dict)
+        and isinstance(evaluation.get("started_at"), str) else None,
+        "_episodes": episodes,
+    }
+
+
+def _remove_tree_at(parent: reader.Dir, name: str) -> None:
+    if shutil.rmtree.avoids_symlink_attacks and "dir_fd" in inspect.signature(shutil.rmtree).parameters:
+        shutil.rmtree(name, dir_fd=parent.fd)
+        return
+    # Platforms without the hardened rmtree must keep every traversal relative
+    # to an open descriptor. A replaced directory can never redirect a walk.
+    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
+    with reader.Dir(fd) as directory:
+        with os.scandir(directory.fd) as entries:
+            for entry in entries:
+                if entry.is_dir(follow_symlinks=False):
+                    _remove_tree_at(directory, entry.name)
+                else:
+                    os.unlink(entry.name, dir_fd=directory.fd)
+    os.rmdir(name, dir_fd=parent.fd)
+
+
 class LiveLeaseConflict(Exception):
     def __init__(self, status: dict[str, Any]) -> None:
         super().__init__("Live lease was replaced")
@@ -53,11 +114,14 @@ class GmoService:
         self._cache_until = 0.0
         # Config files normally live side by side. Namespace by the full path,
         # not only the parent, so identical settings never share persisted data.
-        cache_namespace = hashlib.sha256(str(self.config_path).encode("utf-8")).hexdigest()[:16]
         self._listings = RemoteListingCache(
-            self.config_path.parent / "cache" / "remote-listings" / cache_namespace, ttl=CACHE_SECONDS,
+            gmo.listing_cache_dir(self.config_path), ttl=CACHE_SECONDS,
             validate=lambda value: gmo.validate_remote_listing(value),
         )
+        self._skipped = gmo.load_skip_list(self.config_path)
+        self._deleting: set[str] = set()
+        self._local_revision = 0
+        self._local_copies_cache: tuple[float, list[dict[str, Any]]] | None = None
         self._generation = 0
         self._jobs: list[dict[str, Any]] = []
         self._pending: set[tuple[str, str]] = set()
@@ -115,7 +179,174 @@ class GmoService:
         self._cache_settings = None
         self._cache_until = 0
         self._listings.invalidate()
+        self._invalidate_local_copies_locked()
         self._reset_auto_listing_locked()
+
+    def _invalidate_local_copies_locked(self) -> None:
+        self._local_revision += 1
+        self._local_copies_cache = None
+
+    def _clear_skip_locked(self, key: tuple[str, str]) -> None:
+        if key in self._skipped:
+            keys = self._skipped - {key}
+            gmo.save_skip_list(keys, self.config_path)
+            self._skipped = keys
+
+    def _check_deleting_locked(self, run_id: str) -> None:
+        if run_id in self._deleting:
+            raise _local_copy_error("busy", "手元の写しを削除中です。しばらくしてから開いてください。")
+
+    def _run_busy_locked(self, run_id: str) -> bool:
+        return (run_id in self._deleting or any(key[0] == run_id for key in self._pending)
+                or self._live is not None and self._live["key"][0] == run_id)
+
+    @staticmethod
+    def _copy_reason(local: dict[str, Any], rows: list[dict[str, Any]] | None,
+                     busy: bool) -> str | None:
+        now = time.time()
+        if busy or any(reader.derive_status(metadata, now - heartbeat if heartbeat is not None else None)[0]
+                       == "running" for _episode, metadata, heartbeat in local["_episodes"]):
+            return "busy"
+        if rows is None:
+            return "unknown"
+        if any(reader.derive_status(row.get("episode_json"),
+                                   row.get("remote_now", now) - row["heartbeat_mtime"]
+                                   if row.get("heartbeat_mtime") is not None else None)[0] == "running"
+               for row in rows):
+            return "busy"
+        remote_keys = {row["episode_id"] for row in rows if not row.get("conflict")}
+        remote_keys.difference_update(row["episode_id"] for row in rows if row.get("conflict"))
+        if any(episode not in remote_keys for episode, _metadata, _heartbeat in local["_episodes"]):
+            return "not_on_remote"
+        return None
+
+    def _cached_run_rows(self, settings: gmo.GmoSettings, run_id: str) -> list[dict[str, Any]] | None:
+        # A scoped comparison lookup is as useful as the full picker snapshot.
+        candidates = []
+        for kind, run_ids in (("episodes", ()), ("run", (run_id,))):
+            key = self._listing_key(settings, kind, run_ids)
+            listing, failed = self._listings.peek(key)
+            status = self._listings.status(key)
+            if failed:
+                return None
+            if status["fetched_at"] is not None and listing is not None:
+                candidates.append((status["fetched_at"], [row for row in listing["episodes"]
+                                                        if row["run_id"] == run_id]))
+        if (self._auto_listing is not None and self._auto_listing_generation == self._generation
+                and not self._auto_last_error):
+            rows = [row for row in self._auto_listing["episodes"] if row["run_id"] == run_id]
+            if rows:
+                candidates.append((self._auto_last_run_at or "", rows))
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[0])[1]
+
+    def local_copies(self) -> dict[str, Any]:
+        with self._lock:
+            cached = self._local_copies_cache
+            revision = self._local_revision
+        if cached is not None and time.monotonic() < cached[0]:
+            local = cached[1]
+        else:
+            local = []
+            try:
+                with _open_local_root(self.dest) as root:
+                    for name in root.names():
+                        info = root.lstat(name)
+                        if info is None or not stat.S_ISDIR(info.st_mode):
+                            continue
+                        with root.subdir(name) as run:
+                            local.append(_scan_local_run(name, run))
+            except FileNotFoundError:
+                pass
+            with self._lock:
+                if revision == self._local_revision:
+                    self._local_copies_cache = (time.monotonic() + CACHE_SECONDS, local)
+        with self._lock:
+            settings = self.load_settings()
+            result = []
+            for row in local:
+                reason = self._copy_reason(row, self._cached_run_rows(settings, row["run_id"]),
+                                           self._run_busy_locked(row["run_id"]))
+                result.append({key: value for key, value in row.items() if key != "_episodes"})
+                result[-1].update(deletable=reason is None)
+                if reason is not None:
+                    result[-1]["reason"] = reason
+        result.sort(key=lambda row: (-row["size_bytes"], row["run_id"]))
+        return {"runs": result, "total_bytes": sum(row["size_bytes"] for row in result)}
+
+    def delete_local_copy(self, run_id: str) -> dict[str, Any]:
+        if not reader.is_valid_id(run_id):
+            raise _local_copy_error("invalid_id", "記録のIDが正しくありません。")
+        with self._lock:
+            if self._run_busy_locked(run_id):
+                raise _local_copy_error("busy", "実行中か取り込み中のため消せません。")
+            settings = self.load_settings()
+            generation = self._generation
+            self._deleting.add(run_id)
+        try:
+            with self._transfer_lock, self._refresh_lock:
+                try:
+                    root = _open_local_root(self.dest)
+                except FileNotFoundError as exc:
+                    raise _local_copy_error("missing", "手元の写しが見つかりません。") from exc
+                except OSError as exc:
+                    raise _local_copy_error("unsafe_path", "保存先が安全なフォルダーではないため消せません。") from exc
+                with root:
+                    info = root.lstat(run_id)
+                    if info is None:
+                        raise _local_copy_error("missing", "手元の写しが見つかりません。")
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise _local_copy_error("unsafe_path", "記録が安全なフォルダーではないため消せません。")
+                    with root.subdir(run_id) as run:
+                        try:
+                            listing, _settings, _generation = self._remote_snapshot(
+                                kind="run", run_ids=(run_id,), refresh=True)
+                        except (gmo.FetchError, OSError) as exc:
+                            raise _local_copy_error("unknown", "接続先の一覧を確認できないため、今は消せません。", 502) from exc
+                        # A remote lookup may be slow. Re-read local episodes and
+                        # heartbeats afterwards, rather than trusting preflight.
+                        local = _scan_local_run(run_id, run)
+                        rows = [row for row in listing["episodes"] if row["run_id"] == run_id]
+                        with self._lock:
+                            if self._closed or generation != self._generation or settings != self.load_settings():
+                                raise _local_copy_error("changed", "設定が変わりました。一覧を更新してやり直してください。")
+                            reason = self._copy_reason(local, rows, False)
+                            if reason:
+                                message = ("実行中か取り込み中のため消せません。" if reason == "busy" else
+                                           "接続先に元の記録がないため消せません（消すと戻せません）。")
+                                raise _local_copy_error(reason, message)
+                            current = root.lstat(run_id)
+                            if current is None or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                                raise _local_copy_error("unsafe_path", "記録のフォルダーが変わったため消せません。")
+                            dest_info = self.dest.lstat()
+                            root_info = os.fstat(root.fd)
+                            if (not stat.S_ISDIR(dest_info.st_mode)
+                                    or (dest_info.st_dev, dest_info.st_ino) != (root_info.st_dev, root_info.st_ino)):
+                                raise _local_copy_error("unsafe_path", "保存先のフォルダーが変わったため消せません。")
+                            keys = self._skipped | {(run_id, episode) for episode, _metadata, _heartbeat in local["_episodes"]}
+                            # Persist before removing anything, even if removal later fails.
+                            gmo.save_skip_list(keys, self.config_path)
+                            self._skipped = keys
+                        _remove_tree_at(root, run_id)
+                with self._lock:
+                    self._invalidate_locked()
+                    if self._live_status["run_id"] == run_id:
+                        self._live_lease = None
+                        self._live_status.update(stopped_reason="local_copy_deleted", lease_token=None)
+                    else:
+                        # Deleting one run is not a settings change for a follower
+                        # (or an expired, resumable lease) of a different run.
+                        for lease in (self._live, self._live_lease):
+                            if lease is not None:
+                                lease["settings_generation"] = self._generation
+                return {"run_id": run_id, "freed_bytes": local["size_bytes"]}
+        except OSError as exc:
+            raise _local_copy_error("io_error", "手元の写しを削除できませんでした。一覧を更新してください。") from exc
+        finally:
+            with self._lock:
+                self._deleting.discard(run_id)
+                self._invalidate_local_copies_locked()
 
     def update_settings(self, settings: gmo.GmoSettings) -> None:
         # Publication of settings and invalidation must be atomic with respect to
@@ -148,8 +379,10 @@ class GmoService:
         with self._lock:
             if self._closed:
                 raise gmo.FetchError("GMO service is shutting down")
+            self._check_deleting_locked(run_id)
             settings = self.load_settings()
             if self._live and self._live["key"] == key and self._live["settings"] == settings:
+                self._clear_skip_locked(key)
                 self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
                 self._live["settings_generation"] = self._generation
                 self._live["lease_token"] = self._live_status["lease_token"] = uuid.uuid4().hex
@@ -158,13 +391,16 @@ class GmoService:
             if (self._live_status["stopped_reason"] == "episode_ended"
                     and (self._live_status["run_id"], self._live_status["episode_id"]) == key
                     and self._live_settings == settings):
+                self._clear_skip_locked(key)
                 return dict(self._live_status)
         row, settings, generation = self._episode_row(run_id, episode_id)
         with self._lock:
             if self._closed:
                 raise gmo.FetchError("GMO service is shutting down")
+            self._check_deleting_locked(run_id)
             if generation != self._generation or settings != self.load_settings():
                 raise gmo.FetchError("GMO settings changed during listing; please retry")
+            self._clear_skip_locked(key)
             if self._live and self._live["key"] == key and self._live["settings"] == settings:
                 self._live["lease_until"] = time.monotonic() + LIVE_LEASE_S
                 self._live["settings_generation"] = self._generation
@@ -199,6 +435,7 @@ class GmoService:
         with self._lock:
             lease = self._live_lease
             if (self._closed or lease is None or lease["lease_token"] != lease_token
+                    or run_id in self._deleting
                     or lease["key"] != (run_id, episode_id)
                     or lease["settings_generation"] != self._generation
                     or lease["settings"] != self.load_settings()):
@@ -277,6 +514,7 @@ class GmoService:
                 with self._lock:
                     if self._closed or self._live is not live:
                         return
+                    self._invalidate_local_copies_locked()
                 changes: list[str] = []
                 end_seen = live["end_seen"]
                 size = gmo.fetch_episode(live["runner"], live["settings"], live["row"], self.dest,
@@ -299,6 +537,8 @@ class GmoService:
                     live["next"] = time.monotonic() + delay
                     self._live_status.update(last_error=str(exc)[-300:], interval_s=delay)
         finally:
+            with self._lock:
+                self._invalidate_local_copies_locked()
             if stopped is not None:
                 stopped.close()
             self._live_wake.set()
@@ -400,6 +640,7 @@ class GmoService:
                 self._reset_auto_listing_locked()
             previous = self._auto_listing
             confirmed = set(self._auto_confirmed)
+            skipped = set(self._skipped)
             started = time.monotonic()
             full_check = (self._auto_last_full_check is None
                           or started - self._auto_last_full_check >= AUTO_FULL_CHECK_S)
@@ -429,6 +670,7 @@ class GmoService:
             confirmed.intersection_update(unchanged)
             run_ids = tuple(sorted({row["run_id"] for row in listing["episodes"]
                                     if row["mine"] and not row["conflict"]
+                                    and (row["run_id"], row["episode_id"]) not in skipped
                                     and (row["path"], row["episode_id"]) not in confirmed}))
             rows = []
             if full_check or run_ids:
@@ -448,7 +690,7 @@ class GmoService:
             plans = []
             for row in sorted(rows, key=lambda r: (r["max_mtime"] or 0, r["run_id"], r["episode_id"]),
                               reverse=True):
-                if not row["mine"] or row["conflict"]:
+                if not row["mine"] or row["conflict"] or (row["run_id"], row["episode_id"]) in skipped:
                     continue
                 run = gmo.episode_manifest(row, row)
                 files = gmo._episode_changes(run, row["episode_id"], self.dest)
@@ -469,7 +711,7 @@ class GmoService:
                 budget = 0
                 for row, run, files in plans:
                     key = (row["run_id"], row["episode_id"])
-                    if key in self._pending:
+                    if key in self._pending or key in self._skipped or key[0] in self._deleting:
                         continue
                     files = [f for f in files if (run.path, f[0]) not in reserved]
                     if not files:
@@ -664,16 +906,19 @@ class GmoService:
         with self._lock:
             if self._closed:
                 raise gmo.FetchError("GMO service is shutting down")
+            self._check_deleting_locked(run_id)
             if key in self._pending:
                 raise HTTPException(409, "This episode is already queued or running")
         row, settings, generation = self._episode_row(run_id, episode_id)
         with self._lock:
             if self._closed:
                 raise gmo.FetchError("GMO service is shutting down")
+            self._check_deleting_locked(run_id)
             if generation != self._generation or settings != self.load_settings():
                 raise gmo.FetchError("GMO settings changed during listing; please retry")
             if key in self._pending:
                 raise HTTPException(409, "This episode is already queued or running")
+            self._clear_skip_locked(key)
             return self._enqueue_locked(row, settings)
 
     def _episode_row(self, run_id: str, episode_id: str, *, refresh: bool = False
@@ -697,6 +942,8 @@ class GmoService:
                         manifest: gmo.RemoteRun | None = None,
                         batch: dict[str, Any] | None = None) -> str:
         run_id, episode_id = row["run_id"], row["episode_id"]
+        self._check_deleting_locked(run_id)
+        self._invalidate_local_copies_locked()
         job = {
             "job_id": uuid.uuid4().hex, "run_id": run_id, "episode_id": episode_id,
             "state": "queued", "bytes": 0, "error": None, "note": None,
@@ -760,6 +1007,7 @@ class GmoService:
                     job["note"] = "; ".join(notes) or None
             finally:
                 with self._lock:
+                    self._invalidate_local_copies_locked()
                     job["finished_at"] = _timestamp()
                     self._pending.discard(key)
                     if batch is not None:
@@ -818,6 +1066,23 @@ def create_gmo_router(service: GmoService, *, unix_socket: bool = False,
                 raise HTTPException(415, "Content-Type: application/json is required")
 
     router = APIRouter(prefix=prefix, dependencies=[Depends(gate)])
+
+    @router.get("/local-copies")
+    async def local_copies():
+        try:
+            return json_response(await run_in_threadpool(service.local_copies))
+        except (gmo.FetchError, OSError) as exc:
+            raise _local_copy_error("unknown", "手元の写しの一覧を確認できません。", 502) from exc
+
+    @router.post("/local-copies/delete")
+    async def delete_local_copy(request: Request):
+        try:
+            data = await request.json()
+        except ValueError as exc:
+            raise _local_copy_error("invalid_id", "記録のIDが正しくありません。") from exc
+        if not isinstance(data, dict) or set(data) != {"run_id"} or not reader.is_valid_id(data.get("run_id")):
+            raise _local_copy_error("invalid_id", "記録のIDが正しくありません。")
+        return json_response(await run_in_threadpool(service.delete_local_copy, data["run_id"]))
 
     @router.get("/config")
     def get_config():

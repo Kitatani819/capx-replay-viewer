@@ -341,6 +341,62 @@ def config_path() -> Path:
     return base / "capx-geniac-replay" / "gmo.json"
 
 
+def listing_cache_dir(path: Path | None = None) -> Path:
+    path = (config_path() if path is None else Path(path)).expanduser().absolute()
+    namespace = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    return path.parent / "cache" / "remote-listings" / namespace
+
+
+def skip_list_path(path: Path | None = None) -> Path:
+    return listing_cache_dir(path) / "auto-skip.json"
+
+
+def load_skip_list(path: Path | None = None) -> set[tuple[str, str]]:
+    """An absent or damaged optional skip list must not prevent startup."""
+    try:
+        fd = os.open(skip_list_path(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 16 * 1024 * 1024:
+                return set()
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                value = json.load(stream)
+        finally:
+            os.close(fd)
+        if not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("episodes"), list):
+            return set()
+        keys = value["episodes"]
+        if any(not isinstance(key, list) or len(key) != 2
+               or any(not isinstance(part, str) or RUN_ID.fullmatch(part) is None for part in key)
+               for key in keys):
+            return set()
+        return {tuple(key) for key in keys}
+    except (OSError, ValueError, TypeError, RecursionError):
+        return set()
+
+
+def save_skip_list(keys: set[tuple[str, str]], path: Path | None = None) -> None:
+    target = skip_list_path(path)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = target.parent.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise OSError("Skip list directory must not be a symlink")
+    os.chmod(target.parent, 0o700)
+    fd, name = tempfile.mkstemp(prefix=".auto-skip-", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"version": 1, "episodes": sorted(keys)}, stream, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, 0o600)
+        os.replace(name, target)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def load_settings(path: Path | None = None) -> GmoSettings:
     """File values > built-ins; only without a file, legacy env values > built-ins."""
     path = config_path() if path is None else path
@@ -1251,6 +1307,8 @@ def prefetch_mine(dest: Path, config_path: Path | None = None) -> int:
         runner = ProcessRunner()
         try:
             rows = list_remote_episodes(runner, settings, mine_only=True)["episodes"]
+            skipped_keys = load_skip_list(config_path)
+            rows = [row for row in rows if (row["run_id"], row["episode_id"]) not in skipped_keys]
             if any(row["conflict"] for row in rows):
                 raise FetchError("A run ID exists in more than one GMO location")
             # Plan every episode first. Reuse these manifests so only the files

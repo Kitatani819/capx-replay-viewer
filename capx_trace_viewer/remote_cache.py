@@ -194,6 +194,16 @@ class RemoteListingCache:
         with self._condition:
             return self._entry_status(self._entry(key))
 
+    def peek(self, key: str) -> tuple[Listing | None, bool]:
+        """Read a cached listing without scheduling any remote work.
+
+        A failed refresh makes a stale listing unsuitable for deletion advice.
+        Failure to persist an otherwise successful refresh does not.
+        """
+        with self._condition:
+            entry = self._entry(key)
+            return entry.data, entry.fetch_error is not None
+
     def snapshot_with_status(self, key: str, fetch: Callable[[Listing | None], Listing], *,
                              refresh: bool = False, wait: bool = False,
                              interactive: bool = False) -> tuple[Listing, dict[str, Any]]:

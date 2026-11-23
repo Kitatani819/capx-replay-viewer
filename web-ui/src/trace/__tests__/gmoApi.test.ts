@@ -31,6 +31,8 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
     await gmoApi.follow('run_a', 'ep_1', controller.signal);
     await gmoApi.listingStatus(controller.signal);
     await gmoApi.names(controller.signal);
+    await gmoApi.localCopies(controller.signal);
+    await gmoApi.deleteLocalCopy('run_a', controller.signal);
     assert.deepEqual(calls.map(call => [call.init.method, call.url]), [
       ['GET', '/api/gmo/config'],
       ['PUT', '/api/gmo/config'],
@@ -45,6 +47,8 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
       ['POST', '/api/gmo/live'],
       ['GET', '/api/gmo/listing-status'],
       ['GET', '/api/gmo/names'],
+      ['GET', '/api/gmo/local-copies'],
+      ['POST', '/api/gmo/local-copies/delete'],
     ]);
     for (const { init } of calls) {
       const headers = new Headers(init.headers);
@@ -62,6 +66,7 @@ test('every GMO endpoint sends the request header; writes send JSON and scopes a
     assert.deepEqual(JSON.parse(String(calls[5].init.body)), { run_id: 'run_a', episode_id: 'ep_1' });
     assert.deepEqual(JSON.parse(String(calls[8].init.body)), { paused: true });
     assert.deepEqual(JSON.parse(String(calls[10].init.body)), { run_id: 'run_a', episode_id: 'ep_1' });
+    assert.deepEqual(JSON.parse(String(calls[14].init.body)), { run_id: 'run_a' });
     assert.ok(calls.filter((_, i) => i !== 4).every(({ init }) => init.signal === controller.signal));
   } finally {
     globalThis.fetch = savedFetch;
@@ -80,6 +85,7 @@ test('GMO route-not-found answers identify a disabled integration on every endpo
       () => gmoApi.auto(), () => gmoApi.setAutoPaused(false),
       () => gmoApi.live(), () => gmoApi.follow('r', 'e'),
       () => gmoApi.listingStatus(), () => gmoApi.names(),
+      () => gmoApi.localCopies(), () => gmoApi.deleteLocalCopy('r'),
     ];
     for (const call of calls) {
       await assert.rejects(call, (error: unknown) => {
